@@ -1,0 +1,5 @@
+# Build output (make, make test, make emulator)
+/build/
+
+# Notes for Claude Code
+/CLAUDE.md
