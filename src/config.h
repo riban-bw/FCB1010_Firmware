@@ -28,6 +28,10 @@
 #define CHANNEL_DIGIT_FLASH_MS    250
 #define CHANNEL_DIGIT_TIMEOUT_MS  5000
 
+// Configuration mode: once any setting has been changed, the CONFIG LED flashes
+// (this long on, then the same off) until the changes are saved or cancelled.
+#define CONFIG_CHANGED_FLASH_MS   250
+
 // Run mode: the MIDI CHAN LED lights for this long after each received MIDI byte.
 // Real-time bytes (clock, active sensing...) do not light it.
 #define MIDI_RX_FLASH_MS          60

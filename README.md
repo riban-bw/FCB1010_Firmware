@@ -25,7 +25,7 @@ Each footswitch has one of four modes, set in configuration mode (default: stomp
 | Stomp | 1 | Simple toggle between 127 and 0 |
 | Stomp with momentary | 2 | Toggle, but a hold of more than 1 s undoes it on release (see below) |
 | Momentary | 3 | 127 while pressed, 0 on release |
-| Inverted momentary | 4 | 0 while pressed, 127 on release. The LED follows the value sent, so it is lit at rest once the switch has been used, or straight after saving it in this mode |
+| Inverted momentary | 4 | 0 while pressed, 127 on release. The LED follows the value sent, so it is lit at rest: from power-on, and straight after saving it in this mode |
 
 ## Momentary behaviour on a long press (stomp with momentary mode)
 
@@ -49,36 +49,37 @@ Each relay can follow any of footswitches 1 to 10, the CC 20 toggle (UP + DOWN),
 
 The relay outputs are driven from bits 0 and 1 of the key column latch, as in jspyve's library. This is unverified on a real unit, including whether a set bit closes or opens the relay.
 
-## Remote control over MIDI IN
+## Setting state with MIDI
 
 In run mode the MIDI CHAN LED flashes briefly (`MIDI_RX_FLASH_MS`) for each received MIDI byte, real-time bytes such as clock and active sensing excepted.
 
-Send a control change on the same channel (default 1) to set a stomp from another device or a DAW. For example, CC 21 value 127 turns switch 1 on and lights its LED, and CC 21 value 0 turns it off. CC 20 (the UP + DOWN toggle) works the same way and sets the DIRECT SELECT LED; the next UP + DOWN tap toggles from that state.
+Send a control change on the same channel (default 1) to set a stomp state, e.g. to sync with a DAW. For example, CC 21 value 127 sets stomp 1 on and lights its LED, and CC 21 value 0 turns it off. CC 20 (the UP + DOWN toggle) works the same way and sets the DIRECT SELECT LED; the next UP + DOWN tap toggles from that state.
 
 - The pedal only updates its own state and LED. It sends nothing back, so joining MIDI OUT to MIDI IN cannot cause a feedback loop.
-- The next footswitch press toggles from the remote state. If CC 21 turned switch 1 on, pressing switch 1 sends CC 21 value 0.
+- The next footswitch press toggles from this state. If CC 21 turned switch 1 on, pressing switch 1 sends CC 21 value 0.
 - It handles running status, ignores MIDI clock and other real-time bytes, ignores SysEx, and ignores other channels and other controller numbers.
 - Pedal positions and program number are not set by MIDI IN.
-- The remote state is not remembered at power-off. All stomps start off.
+- States are not remembered at power-off. Stomps start off, except inverted momentary switches, which start on (their resting state).
 
 ## Important: this replaces the stock firmware completely
 
-The stock presets, banks, direct-select modes and the Behringer SysEx editor do not work with this firmware. Put the original chip back to restore stock behaviour.
+The stock presets, banks, direct-select modes and the Behringer SysEx editor do not work with this firmware. Put the original chip back to restore stock behaviour. Although effort is made to avoid overwriting the stock firmware's configuration, presets and configuration may be corrupted and need reasserting.
 
 ## Build
 
-Needs SDCC 4.x (`apt install sdcc`), `make`, and `gcc` for the host tests.
+Requires SDCC 4.x, `make` (and `gcc` for the host tests) (`apt install sdcc make gcc`).
 
 ```
 make              # build/fcb1010_32k.bin and build/fcb1010_64k_mirrored.bin, and the emulator page
-make test         # 1049 logic checks on this computer
+make test         # 1090 logic checks on this computer
+make check        # every test suite, without bumping the build number
 make emulator     # update emulator/index.html and run its checks (needs clang and Node)
 test/sim_smoke.sh # runs the real image in the uCsim 8051 simulator (apt install sdcc-ucsim)
 ```
 
-Each `make` that rebuilds the firmware image adds one to the build number in `src/version_build.inc`. If clang (with the wasm32 target) is installed, `make` also rebuilds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
+Each `make` that rebuilds the firmware image increments the build number in `src/version_build.inc`; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone. If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 8.4 KB (8595 bytes at the last build), so it needs a 16 KB or larger chip; the 32 KB image suits a 27C256 / 28C256. Unused space is filled with 0xFF.
+The code is about 8.6 KB (8779 bytes at the last build), so it needs a 16 KB or larger chip; the 32 KB image suits a 27C256 / 28C256. Unused space is filled with 0xFF. Each build checks the size against the 32 KB ROM (the build fails if it does not fit) and updates the figure in this paragraph.
 
 ## Flashing to an EEPROM
 
@@ -100,9 +101,9 @@ The EPROM used in the FCB1010 is HT27C512-70 (at least it is in my device).
 
 ## Configuration mode
 
-Hold UP and DOWN together for 1 second. The CONFIG LED lights. Footswitches and pedals send no MIDI while you are in configuration mode, and incoming MIDI is ignored.
+Hold UP and DOWN together for 1 second. The CONFIG LED lights, and flashes once you have changed any setting, until you save or cancel. (It flashes after any edit, even one you then put back.) Footswitches and pedals send no MIDI while you are in configuration mode, and incoming MIDI is ignored.
 
-UP and DOWN on their own move to the next or previous page: UP stops at page 7 and DOWN at page 1 (no wrapping). Hold UP (ENTER), or UP + DOWN together, for 1 second to save and leave, or hold DOWN (ESCAPE) for 1 second to cancel every change and leave. Either way the display goes back to the program number. Configuration mode opens on page 1. Tapping UP + DOWN does nothing in configuration mode, except on pages 5 and 6 (see below). The UP + DOWN hold that opened configuration mode does not also leave it: let go of both first.
+UP and DOWN on their own move to the next or previous page. Hold UP (ENTER), or UP + DOWN together, for 1 second to save and leave, or hold DOWN (ESCAPE) for 1 second to cancel every change and leave. Either way the display goes back to the program number. Configuration mode opens on page 1. Tapping UP + DOWN does nothing in configuration mode, except on pages 5 and 6 (see below).
 
 | Page | Panel LED | Display | Controls |
 |---|---|---|---|
@@ -123,7 +124,7 @@ Settings are stored in the 24C16 EEPROM: relay triggers at 0x7E0 and 0x7E8, cali
 ## What has and has not been tested
 
 Tested:
-- The controller logic: stomp toggling, all four pedal modes, program change on release with auto-repeat, the UP + DOWN chord, every configuration page and its saved bytes, pedal scaling, hysteresis, calibration flow, a full MIDI buffer, bad input, and MIDI IN parsing including running status, split messages, real-time bytes, SysEx, other channels and the 63/64 threshold, plus the momentary long-press behaviour: your three cases, every switch, two switches at once, duplicate or unmatched hold and release events, a full MIDI queue at press and at release, calibration, and remote changes during a hold (`make test`).
+- The controller logic: stomp toggling, all four pedal modes, program change on release with auto-repeat, the UP + DOWN chord, every configuration page and its saved bytes, pedal scaling, hysteresis, calibration flow, a full MIDI buffer, bad input, and MIDI IN parsing including running status, split messages, real-time bytes, SysEx, other channels and the 63/64 threshold, plus the momentary long-press behaviour: your three cases, every switch, two switches at once, duplicate or unmatched hold and release events, a full MIDI queue at press and at release, calibration, and incoming MIDI CC changes during a hold (`make test`).
 - The real 8051 image in a simulator: key scan and debounce, toggle on and off, program change, MIDI UART output with the correct bytes, the UP + DOWN chord opening and closing configuration mode (read back from RAM, including the stack depth of the save path), and the long-press behaviour at 0.84 s (stays latched) and 1.2 s (reverts) of simulated time, both with DOWN auto-repeating (`test/sim_smoke.sh`).
 
 Not tested, because it needs real hardware:

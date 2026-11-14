@@ -335,14 +335,15 @@ print("%02x %02x ff" % (units, tens))')
     echo "step 30000"
     echo "dump xram 0x1ff9 0x1ff9 1"
     echo "step 1150000"
-    echo "dump iram $LED_MAP $((LED_MAP + 2)) 3"
+    # One byte per dump, so a row boundary between them cannot split the output.
+    for a in 0 1 2; do echo "dump iram $((LED_MAP + a)) $((LED_MAP + a)) 1"; done
     echo "quit"
 } > "$TMP/s10.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s10.out" "$IHX" < "$TMP/s10.txt" > "$TMP/s10.console" 2>&1
 check "during the lamp test the segment latch is 0x00 (everything lit)" \
       "$(grep -E '^0x1ff9 ' "$TMP/s10.console" | awk '{print $2}')" "00"
 check "after the blinks the display shows the major version (units, tens, left: $VER_EXPECT)" \
-      "$(grep -E "^0x$(printf '%02x' "$LED_MAP") " "$TMP/s10.console" | awk '{print $2, $3, $4}')" "$VER_EXPECT"
+      "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | tail -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$VER_EXPECT"
 # The entry chord taps all ten stomps in run mode (their CCs); page changes send no program.
 check "no program change was sent" "$(messages "$TMP/s10.out" | tr ' ' '\n' | grep -c '^c')" "0"
 

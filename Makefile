@@ -4,6 +4,8 @@
 #   make test      compile and run the logic tests on this computer
 #   make emulator  compile ctl.c and keys.c to WebAssembly, embed it in emulator/index.html and
 #                  run the emulator smoke test
+#   make check     every test suite (host, emulator, simulator) without bumping the build
+#   make BUILD_BUMP=0  build without bumping the build number (for test runs)
 #   make clean
 
 SDCC     ?= sdcc
@@ -19,7 +21,16 @@ SDCCFLAGS := -mmcs51 --model-small --std-sdcc99 --iram-size 256 --code-size $(RO
 
 OBJS := $(OUT)/main.rel $(OUT)/hw.rel $(OUT)/ctl.rel
 
-.PHONY: all test emulator clean
+.PHONY: all test emulator check clean FORCE
+
+# BUILD_BUMP=0 (test runs) links without bumping the build number and leaves a flag, so
+# the next normal make relinks and bumps even if nothing else changed: an image built
+# for testing never keeps the previous build's number.
+BUILD_BUMP ?= 1
+UNBUMPED   := $(OUT)/unbumped.flag
+ifeq ($(BUILD_BUMP),1)
+RELINK := $(if $(wildcard $(UNBUMPED)),FORCE)
+endif
 
 # The emulator page embeds its own compiled copy of ctl.c and config.h, so a plain make
 # updates it too (after the firmware, so it shows the same build number). Without clang
@@ -47,8 +58,14 @@ $(OUT)/%.rel: src/%.c src/*.h | $(OUT)
 # number in src/version_build.inc, then version.c is compiled with it and linked last.
 # No other rule depends on that file, so a make with nothing changed does not relink
 # or bump it.
-$(OUT)/fcb1010.ihx: $(OBJS) src/version.c src/version.h src/platform.h
+$(OUT)/fcb1010.ihx: $(OBJS) src/version.c src/version.h src/platform.h $(RELINK)
+ifeq ($(BUILD_BUMP),1)
 	python3 -I tools/bump_build.py src/version_build.inc
+	rm -f $(UNBUMPED)
+else
+	@echo "test build: build number not bumped"
+	touch $(UNBUMPED)
+endif
 	$(SDCC) $(SDCCFLAGS) -c src/version.c -o $(OUT)/version.rel
 	$(SDCC) $(SDCCFLAGS) $(OBJS) $(OUT)/version.rel -o $@
 
@@ -56,6 +73,7 @@ $(OUT)/fcb1010.ihx: $(OBJS) src/version.c src/version.h src/platform.h
 # makebin only emits the used bytes, so pad explicitly.
 $(OUT)/fcb1010_32k.bin: $(OUT)/fcb1010.ihx
 	$(MAKEBIN) -p $< $(OUT)/fcb1010_raw.bin
+	python3 -I tools/check_size.py $(OUT)/fcb1010_raw.bin $(ROM_SIZE) README.md
 	head -c $(ROM_SIZE) /dev/zero | tr '\000' '\377' > $@
 	dd if=$(OUT)/fcb1010_raw.bin of=$@ conv=notrunc 2>/dev/null
 
@@ -89,6 +107,15 @@ $(OUT)/emulator.stamp: $(OUT)/fcb1010_emu.wasm
 
 emulator: $(OUT)/emulator.stamp
 	node test/emu_smoke.mjs emulator/index.html
+
+# All test suites, building without bumping the build number. The simulator scenarios
+# need s51 (sdcc-ucsim) on PATH; without it they are skipped with a note.
+check:
+	$(MAKE) BUILD_BUMP=0 all
+	$(MAKE) test
+	$(MAKE) BUILD_BUMP=0 emulator
+	@if command -v s51 >/dev/null 2>&1; then test/sim_smoke.sh; \
+	 else echo "note: s51 not found, simulator scenarios skipped (install sdcc-ucsim)"; fi
 
 clean:
 	rm -rf $(OUT)

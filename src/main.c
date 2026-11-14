@@ -46,7 +46,7 @@ void main(void)
             }
         }
 
-        // Handle any MIDI that arrived (remote stomp switch control).
+        // Handle any MIDI that arrived
         while (hal_midi_rx(&rx))
         {
             ctl_midi_in(rx);

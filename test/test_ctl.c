@@ -39,6 +39,7 @@ static uint8_t  blank;
 #define SHOWN_HI (-3)
 // hal_display_hex(v) is recorded as display = SHOWN_HEX(v); dots and the lamp test too.
 #define SHOWN_HEX(v) (0x1000 + (v))
+#define BOOT_LED (DEFAULT_PEDAL_MODE == 3)
 static uint8_t  dots;
 static uint8_t  lamp;
 static uint8_t  saved_heel[2], saved_toe[2];
@@ -285,9 +286,24 @@ static void chord_short(void)
     chord_up();
 }
 
+// Pin a switch's mode as if it had been saved and the unit then started: inverted
+// momentary starts on (LED lit), every other mode off. Used right after reset_world().
 static void set_mode(uint8_t sw, uint8_t m)
 {
+    uint16_t bit = (uint16_t)((uint16_t)1 << sw);
+
     pedal_mode_set(sw, m);
+
+    if (m == PM_MOM_INV)
+    {
+        stomp_state |= bit;
+    }
+    else
+    {
+        stomp_state &= (uint16_t)~bit;
+    }
+
+    hal_stomp_led(sw, m == PM_MOM_INV);
 }
 
 // Configuration mode: a long UP saves and leaves, a long DOWN cancels and leaves.
@@ -608,7 +624,7 @@ static void test_stomp_modes(void)
     midi_space = 2;
     ctl_key_press(0);
     ctl_key_release(0);
-    CHECK(midi_len == 0 && leds[0] == 0);
+    CHECK(midi_len == 0 && leds[0] == BOOT_LED);
 
     // A revert that cannot be sent at release is sent from the tick once there is room.
     reset_world();
@@ -972,7 +988,7 @@ static void test_config_channel(void)
     ctl_midi_in((uint8_t)(0xB0 | (MIDI_CHANNEL - 1)));
     ctl_midi_in(stomp_cc[2]);
     ctl_midi_in(127);
-    CHECK(leds[2] == 0);
+    CHECK(leds[2] == BOOT_LED);
 
     // Saved settings are picked up at the next start-up.
     memcpy(stored_cfg, saved_cfg, 4);
@@ -1742,8 +1758,9 @@ static void test_relays(void)
     cancel_exit();
     CHECK(aux[HAL_LED_SWITCH_1] == 1 && aux[HAL_LED_SWITCH_2] == 1);
     // Cancel reloaded the default pedal modes (nothing saved them): toggles again.
-    set_mode(2, PM_STOMP);
-    set_mode(9, PM_STOMP);
+    // Only the mode changes here; the states stay as they are.
+    pedal_mode_set(2, PM_STOMP);
+    pedal_mode_set(9, PM_STOMP);
     // Right after leaving the pedals have no value yet; their triggers keep the relays.
     tap(2);
     ticks(1);
@@ -2029,7 +2046,7 @@ static void test_midi_in(void)
     ctl_midi_in((uint8_t)(0x90 | (MIDI_CHANNEL - 1))); ctl_midi_in(cc[0]); ctl_midi_in(127);
     ctl_midi_in(CC_STATUS); ctl_midi_in(99); ctl_midi_in(127);
     ctl_midi_in(0xF0); ctl_midi_in(cc[0]); ctl_midi_in(127); ctl_midi_in(0xF7);
-    CHECK(leds[0] == 0);
+    CHECK(leds[0] == BOOT_LED);
 
     // Real-time bytes in the middle of a message do not break it.
     ctl_midi_in(CC_STATUS); ctl_midi_in(cc[1]); ctl_midi_in(0xF8); ctl_midi_in(127);
@@ -2041,7 +2058,7 @@ static void test_midi_in(void)
     ctl_midi_in(CC_STATUS); ctl_midi_in(cc[5]); ctl_midi_in(127);
     chord_up();
     save_exit();
-    CHECK(leds[5] == 0 && mode == MODE_RUN);
+    CHECK(leds[5] == BOOT_LED && mode == MODE_RUN);
 }
 
 static void test_exit_restores_leds(void)
@@ -2056,8 +2073,128 @@ static void test_exit_restores_leds(void)
     chord_long();
     tap(CTL_KEY_UP);
     save_exit();
-    CHECK(leds[0] == 1 && leds[3] == 1 && leds[1] == 0);
+    CHECK(leds[0] == 1 && leds[3] == 1 && leds[1] == BOOT_LED);
     CHECK(status_led == 0);
+}
+
+// The CONFIG LED stays lit in config mode until a setting changes, then flashes at
+// CFG_FLASH_TICKS per half-period until save or cancel.
+static int status_toggles(int n)
+{
+    int k, flips = 0;
+    uint8_t was = status_led;
+
+    for (k = 0; k < n; k++)
+    {
+        ctl_tick();
+
+        if (status_led != was)
+        {
+            flips++;
+            was = status_led;
+        }
+    }
+
+    return flips;
+}
+
+static void test_config_led_flash(void)
+{
+    printf("config: CONFIG LED flashes after a change\n");
+    reset_world();
+    chord_long();
+    CHECK(mode == MODE_CONFIG && status_led == 1);
+    // Selecting a switch (not the selected one) and changing pages are not changes.
+    tap(1);
+    tap(CTL_KEY_UP);
+    tap(CTL_KEY_DOWN);
+    CHECK(status_toggles(CFG_FLASH_TICKS * 4) == 0 && status_led == 1);
+    // Cycling switch 2's mode is a change: dark at once, then toggling.
+    tap(1);
+    CHECK(status_led == 0);
+    CHECK(status_toggles(CFG_FLASH_TICKS * 4) == 4);
+    // Exact timing: the half-period is CFG_FLASH_TICKS ticks.
+    while (status_led != 0) ctl_tick();
+    CHECK(status_toggles(CFG_FLASH_TICKS - 1) == 0);
+    CHECK(status_toggles(1) == 1 && status_led == 1);
+    // Cancel stops it; the LED is off in run mode and stays off.
+    cancel_exit();
+    CHECK(mode == MODE_RUN && status_led == 0 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
+    // Next entry is steady again.
+    chord_long();
+    CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
+    // Channel page: pressing the channel already set is not a change, a new one is.
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_CHANNEL);
+    tap((uint8_t)(MIDI_CHANNEL - 1 < 5 ? MIDI_CHANNEL - 1 : MIDI_CHANNEL));
+    CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 2) == 0);
+    tap(MIDI_CHANNEL == 3 ? 3 : 2);
+    CHECK(status_led == 0 && status_toggles(CFG_FLASH_TICKS * 2) == 2);
+    // Saving stops it too.
+    save_exit();
+    CHECK(mode == MODE_RUN && status_led == 0 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
+    // A SWITCH page footswitch toggle is a change.
+    reset_world();
+    goto_switch_page(1);
+    CHECK(status_led == 1);
+    tap(0);
+    CHECK(status_led == 0 && status_toggles(CFG_FLASH_TICKS * 2) == 2);
+    cancel_exit();
+    // MIDI IN in run mode still flashes MIDI CHAN and leaves CONFIG dark.
+    ctl_midi_in(0xFE);
+    ctl_midi_in(0x90);
+    CHECK(aux[HAL_LED_MIDI_CHAN] == 1 && status_led == 0);
+    ticks(RX_FLASH_TICKS);
+    CHECK(aux[HAL_LED_MIDI_CHAN] == 0 && status_led == 0);
+}
+
+// At start-up, switches saved as inverted momentary are on with their LEDs lit (their
+// resting state), and nothing is sent; other modes start off.
+static void test_boot_inverted(void)
+{
+    int i;
+
+    printf("start-up: inverted momentary switches lit\n");
+    reset_world();
+    cfg_stored_valid = 1;
+    stored_cfg[0] = MIDI_CHANNEL;
+    // Two bits per switch, switch 1 lowest: switch 2 inverted (3), switch 3 momentary
+    // (2), switch 1 stomp; switches 5-8 inverted; switches 9 and 10 stomp.
+    stored_cfg[1] = (uint8_t)((PM_MOM_INV << 2) | (PM_MOMENTARY << 4));
+    stored_cfg[2] = 0xFF;
+    stored_cfg[3] = 0x00;
+    memset(leds, 0xEE, sizeof(leds));
+    clear_log();
+    ctl_init();
+    CHECK(midi_len == 0);
+
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        CHECK(leds[i] == (pedal_mode_get(i) == PM_MOM_INV));
+        CHECK(((stomp_state >> i) & 1) == (pedal_mode_get(i) == PM_MOM_INV));
+    }
+
+    CHECK(leds[1] == 1 && leds[4] == 1 && leds[7] == 1 && leds[0] == 0 && leds[2] == 0 && leds[8] == 0);
+    // A press then works as usual: 0 while pressed, 127 (and lit) again on release.
+    ctl_key_press(1);
+    CHECK(midi_len == 3 && cc_number(0) == stomp_cc[1] && cc_value(0) == 0 && leds[1] == 0);
+    ctl_key_release(1);
+    CHECK(midi_len == 6 && cc_value(1) == 127 && leds[1] == 1);
+    // A relay following an inverted switch closes on the first tick.
+    reset_world();
+    sw_stored_valid[0] = 1;
+    stored_sw[0][0] = 0x02;
+    stored_sw[0][1] = 0;
+    stored_sw[0][2] = 0;
+    stored_sw[0][3] = 0;
+    cfg_stored_valid = 1;
+    stored_cfg[0] = MIDI_CHANNEL;
+    stored_cfg[1] = (uint8_t)(PM_MOM_INV << 2);
+    stored_cfg[2] = 0;
+    stored_cfg[3] = 0;
+    ctl_init();
+    ticks(1);
+    CHECK(relays == 1 && aux[HAL_LED_SWITCH_1] == 1 && midi_len == 0);
 }
 
 int main(void)
@@ -2077,6 +2214,8 @@ int main(void)
     test_midi_flash();
     test_midi_in();
     test_exit_restores_leds();
+    test_boot_inverted();
+    test_config_led_flash();
     test_scaling();
     test_pedal_cc();
     test_pedal_noise();

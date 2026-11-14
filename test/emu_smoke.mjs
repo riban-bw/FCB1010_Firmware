@@ -149,9 +149,13 @@ check("DIRECT SELECT is dark while editing", fcb.hw.aux[4], 0);
 check("page 1 shows switch 1's mode digit", fcb.hw.display, fcb.state().pedalModes[0] + 1);
 press(2, 100);
 check("a footswitch selects itself and shows its mode", [fcb.state().cfgSel, fcb.hw.display], [2, fcb.state().pedalModes[2] + 1]);
+const CFG_FLASH_MS = Number(cfgText.match(/#define CONFIG_CHANGED_FLASH_MS\s+(\d+)/)[1]);
+const statusOver = (ms) => { const seen = new Set(); for (let t = 0; t < ms; t += 10) { wait(10); seen.add(fcb.hw.status); } return [...seen].sort(); };
+check("CONFIG LED steady before any change", statusOver(CFG_FLASH_MS * 3), [1]);
 const mode3 = fcb.state().pedalModes[2];
 press(2, 100);
 check("pressing it again changes its mode", fcb.state().pedalModes[2], (mode3 + 1) % 4);
+check("after a change the CONFIG LED flashes", statusOver(CFG_FLASH_MS * 3), [0, 1]);
 press(2, 100); press(2, 100); press(2, 100);
 check("four presses cycle back (four modes)", fcb.state().pedalModes[2], mode3);
 press(UP, 100);
@@ -231,6 +235,7 @@ check("DOWN on page 1 stays on page 1 (no wrap)", fcb.state().cfgPage, 0);
 fcb.setRaw(0, 0); wait(100);
 longKey(UP);
 check("a long UP saves and leaves", [fcb.state().mode, fcb.hw.status], [0, 0]);
+check("and the CONFIG LED stays dark in run mode", statusOver(CFG_FLASH_MS * 3), [0]);
 // Switch 3 was cycled back to its mode; if that is inverted momentary (default 3), saving
 // asserts it (state on, LED lit) without sending a CC. No program change either way.
 check("with nothing sent and no program change", [sent(), fcb.state().program], [[], p]);
@@ -254,12 +259,17 @@ longChord(); press(UP, 100); press(1, 100); longChord();
 check("and back to channel 2", [fcb.state().mode, fcb.state().midiChannel], [0, 2]);
 fcb.reset(); wait(400);
 check("after a power cycle the channel is still 2", fcb.state().midiChannel, 2);
+// Start-up lights the inverted momentary switches (their resting state), sending nothing.
+check("after a power cycle only inverted momentary switches are lit, nothing sent",
+      [fcb.hw.leds.slice(), sent()], [fcb.state().pedalModes.map((m) => (m === 3 ? 1 : 0)), []]);
 press(0, 100);
 check("and switch 1 now sends on channel 2", sent(), MOM ? [cc(1, 0, ON), cc(1, 0, OFF)] : [cc(1, 0, 127)]);
 
 console.log("emulator: relays and MIDI IN flash");
 fcb.setRaw(0, 0); wait(100);
-check("relay 1 off with its triggers off", [fcb.state().relays, fcb.hw.relays, fcb.hw.aux[5]], [0, 0, 0]);
+// Relay 1 follows footswitch 4 (and pedal A, at the heel): it matches switch 4's LED, which
+// is lit from start-up when the default mode is inverted momentary.
+check("relay 1 matches its only trigger that is on (footswitch 4)", [fcb.state().relays & 1, fcb.hw.relays & 1, fcb.hw.aux[5]], [fcb.hw.leds[3], fcb.hw.leds[3], fcb.hw.leds[3]]);
 // Relay 1 follows footswitch 4 whatever its mode: compare with the switch LED.
 fcb.down(3); wait(60);
 check("relay 1 and SWITCH 1 follow footswitch 4 while pressed", [fcb.hw.relays & 1, fcb.hw.aux[5]], [fcb.hw.leds[3], fcb.hw.leds[3]]);

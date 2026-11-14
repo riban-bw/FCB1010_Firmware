@@ -99,6 +99,13 @@ static const CODE uint8_t fw_version_dots[3]    = { 0x01, 0x05, 0x04 };
 #error MIDI_RX_FLASH_MS is out of range
 #endif
 
+// Scan ticks per CONFIG LED flash half-period once a setting has changed.
+#define CFG_FLASH_TICKS      (CONFIG_CHANGED_FLASH_MS / TICK_MS)
+
+#if CFG_FLASH_TICKS < 1 || CFG_FLASH_TICKS > 255
+#error CONFIG_CHANGED_FLASH_MS is out of range
+#endif
+
 // Page 7 runs in steps of LAMP_TEST_BLINK_MS: LAMP_TEST_BLINKS on / off pairs, then
 // VER_ITEM_STEPS steps for each of major, minor, build and a blank display, then major again.
 #define VER_STEP_TICKS       (LAMP_TEST_BLINK_MS / TICK_MS)
@@ -194,6 +201,24 @@ static IDATA uint8_t  sw_thr[4];
 static IDATA uint8_t  relay_out;
 // Scan ticks left of the MIDI CHAN flash for received MIDI (run mode only).
 static IDATA uint8_t  rx_flash;
+// Config mode: a setting has been changed since entry (the CONFIG LED flashes), and
+// the LED is in its dark half. The flash timer reuses rx_flash, which is run mode only.
+static BIT_T          cfg_changed;
+static BIT_T          cfg_led_dark;
+#define cfg_flash_ticks rx_flash
+
+// A setting was changed in config mode: start flashing the CONFIG LED (dark first, so
+// the change shows at once).
+static void config_changed(void)
+{
+    if (!cfg_changed)
+    {
+        cfg_changed     = 1;
+        cfg_led_dark    = 1;
+        cfg_flash_ticks = 0;
+        hal_status_led(0);
+    }
+}
 
 static void send_cc(uint8_t cc, uint8_t value)
 {
@@ -542,6 +567,7 @@ static void calibration_take(void)
             toe[1]  = last_raw[1];
             cal_heel_taken = 0;
             cal_step = CAL_DONE;
+            config_changed();
         }
     }
 
@@ -587,6 +613,7 @@ static void sw_pedal(uint8_t ch)
 
     sent[ch] = v;
     sw_thr[(uint8_t)((cfg_page - PAGE_SW1) * 2 + ch)] = v;
+    config_changed();
     hal_display(v);
     hal_aux_led((uint8_t)(HAL_LED_EXP_1 + ch), v != 0);
 }
@@ -602,6 +629,7 @@ static void mode_press(uint8_t index)
         m = (uint8_t)((pedal_mode_get(index) + 1) & (PM_COUNT - 1));
         pedal_mode_set(index, m);
         cfg_dirty |= (uint16_t)((uint16_t)1 << index);
+        config_changed();
     }
     else
     {
@@ -628,12 +656,20 @@ static void channel_digit(uint8_t index)
 
     if (chan_digit_pending)
     {
-        midi_channel = (d == 10) ? 10 : (d <= 6) ? (uint8_t)(10 + d) : d;
+        d = (d == 10) ? 10 : (d <= 6) ? (uint8_t)(10 + d) : d;
+    }
+
+    if (d != midi_channel)
+    {
+        midi_channel = d;
+        config_changed();
+    }
+
+    if (chan_digit_pending)
+    {
         channel_entry_end();
         return;
     }
-
-    midi_channel = d;
 
     if (d == 10)
     {
@@ -685,6 +721,8 @@ static void enter_config(void)
     cfg_sel   = 0;
     cal_heel_taken = 0;
     rx_flash  = 0;
+    cfg_changed  = 0;
+    cfg_led_dark = 0;
 
     hal_status_led(1);
     hal_aux_led(HAL_LED_DIRECT_SELECT, 0);
@@ -806,6 +844,10 @@ static void exit_config(uint8_t save)
     }
 
     mode = MODE_RUN;
+    // Stop the CONFIG LED flash; its timer goes back to the MIDI IN flash.
+    cfg_changed  = 0;
+    cfg_led_dark = 0;
+    cfg_flash_ticks = 0;
     hal_status_led(0);
     hal_aux_led(HAL_LED_MIDI_CHAN, 0);
     hal_aux_led(HAL_LED_MIDI_FUNC, 0);
@@ -940,6 +982,7 @@ static void nav_key_release(uint8_t code)
             else if (IS_SW_PAGE(cfg_page))
             {
                 sw_mask[cfg_page - PAGE_SW1] ^= SW_CC_BIT;
+                config_changed();
                 hal_aux_led(HAL_LED_DIRECT_SELECT, (sw_mask[cfg_page - PAGE_SW1] & SW_CC_BIT) != 0);
             }
         }
@@ -1036,13 +1079,23 @@ void ctl_init(void)
     cal_heel_taken = 0;
     relay_out     = 0;
     rx_flash      = 0;
+    cfg_changed   = 0;
+    cfg_led_dark  = 0;
     last_raw[0]   = 0;
     last_raw[1]   = 0;
     resync_pedals();
 
     for (i = 0; i < STOMP_COUNT; i++)
     {
-        hal_stomp_led(i, 0);
+        if (pedal_mode_get(i) == PM_MOM_INV)
+        {
+            stomp_state |= (uint16_t)((uint16_t)1 << i);
+            hal_stomp_led(i, 1);
+        }
+        else
+        {
+            hal_stomp_led(i, 0);
+        }
     }
 
     hal_status_led(0);
@@ -1236,6 +1289,7 @@ void ctl_key_press(uint8_t code)
             index = stomp_index(code);
             bit   = (uint16_t)((uint16_t)1 << index);
             sw_mask[cfg_page - PAGE_SW1] ^= bit;
+            config_changed();
             hal_stomp_led(index, (sw_mask[cfg_page - PAGE_SW1] & bit) ? 1 : 0);
         }
         // Page 7: any footswitch runs the lamp test and version again.
@@ -1304,7 +1358,7 @@ void ctl_key_press(uint8_t code)
     }
 }
 
-// Apply a remote controller value to every stomp switch assigned to that CC.
+// Apply an incoming MIDI CC value to every stomp switch assigned to that CC.
 static void remote_cc(uint8_t cc, uint8_t value)
 {
     uint8_t  i;
@@ -1509,9 +1563,19 @@ void ctl_tick(void)
         relays_update();
     }
 
-    if (rx_flash && --rx_flash == 0)
+    if (mode == MODE_RUN)
     {
-        hal_aux_led(HAL_LED_MIDI_CHAN, 0);
+        if (rx_flash && --rx_flash == 0)
+        {
+            hal_aux_led(HAL_LED_MIDI_CHAN, 0);
+        }
+    }
+    // Config mode with changes: flash the CONFIG LED.
+    else if (cfg_changed && ++cfg_flash_ticks >= CFG_FLASH_TICKS)
+    {
+        cfg_flash_ticks = 0;
+        cfg_led_dark    = !cfg_led_dark;
+        hal_status_led(cfg_led_dark ? 0 : 1);
     }
 
     // Only set on the channel page in configuration mode.
