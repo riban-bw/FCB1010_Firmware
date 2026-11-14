@@ -206,12 +206,65 @@ static IDATA uint8_t  rx_flash;
 static BIT_T          cfg_changed;
 static BIT_T          cfg_led_dark;
 #define cfg_flash_ticks rx_flash
+// Two 8-bit check sums (Fletcher style) of every setting, taken at config entry, so an
+// edit that is put back stops the flashing without a copy of the settings in RAM. The
+// first reuses nav_steps (run-mode auto-repeat only; config mode never repeats).
+#define cfg_sum_a nav_steps
+static IDATA uint8_t  cfg_sum_b;
 
-// A setting was changed in config mode: start flashing the CONFIG LED (dark first, so
-// the change shows at once).
+#define SETTINGS_SUM_ADD(x) do { a = (uint8_t)(a + (x)); b = (uint8_t)(b + a); } while (0)
+
+// Sum every saved setting: store the sums (store = 1, at config entry) or return 1 if
+// they match the stored ones (the settings are as they were at entry). A leaf, so its
+// locals are overlaid; 8-bit arithmetic only.
+static uint8_t settings_sum_check(uint8_t store)
+{
+    uint8_t a = 0;
+    uint8_t b = 0;
+    uint8_t i;
+
+    SETTINGS_SUM_ADD(midi_channel);
+
+    for (i = 0; i < 3; i++)
+    {
+        SETTINGS_SUM_ADD(pedal_modes[i]);
+    }
+
+    for (i = 0; i < 2; i++)
+    {
+        SETTINGS_SUM_ADD(heel[i]);
+        SETTINGS_SUM_ADD(toe[i]);
+        SETTINGS_SUM_ADD((uint8_t)sw_mask[i]);
+        SETTINGS_SUM_ADD((uint8_t)(sw_mask[i] >> 8));
+    }
+
+    for (i = 0; i < 4; i++)
+    {
+        SETTINGS_SUM_ADD(sw_thr[i]);
+    }
+
+    if (store)
+    {
+        cfg_sum_a = a;
+        cfg_sum_b = b;
+        return 1;
+    }
+
+    return (uint8_t)(a == cfg_sum_a && b == cfg_sum_b);
+}
+
+// A setting was edited in config mode. If the settings now differ from those at entry,
+// flash the CONFIG LED (dark first, so the change shows at once); if the edit put them
+// back, stop and light it steadily again.
 static void config_changed(void)
 {
-    if (!cfg_changed)
+    if (settings_sum_check(0))
+    {
+        cfg_changed  = 0;
+        cfg_led_dark = 0;
+        hal_status_led(1);
+    }
+    else if (!cfg_changed)
     {
         cfg_changed     = 1;
         cfg_led_dark    = 1;
@@ -659,11 +712,8 @@ static void channel_digit(uint8_t index)
         d = (d == 10) ? 10 : (d <= 6) ? (uint8_t)(10 + d) : d;
     }
 
-    if (d != midi_channel)
-    {
-        midi_channel = d;
-        config_changed();
-    }
+    midi_channel = d;
+    config_changed();
 
     if (chan_digit_pending)
     {
@@ -723,6 +773,7 @@ static void enter_config(void)
     rx_flash  = 0;
     cfg_changed  = 0;
     cfg_led_dark = 0;
+    settings_sum_check(1);
 
     hal_status_led(1);
     hal_aux_led(HAL_LED_DIRECT_SELECT, 0);

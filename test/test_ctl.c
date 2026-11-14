@@ -2117,6 +2117,20 @@ static void test_config_led_flash(void)
     while (status_led != 0) ctl_tick();
     CHECK(status_toggles(CFG_FLASH_TICKS - 1) == 0);
     CHECK(status_toggles(1) == 1 && status_led == 1);
+    // Cycling the mode back to where it was (four modes) stops the flash, steady lit,
+    // even from the dark half; another change starts it again.
+    tap(1);
+    tap(1);
+    while (status_led != 0) ctl_tick();
+    tap(1);
+    CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 4) == 0 && cfg_changed == 0);
+    tap(1);
+    CHECK(status_led == 0 && status_toggles(CFG_FLASH_TICKS * 2) == 2);
+    tap(1);
+    tap(1);
+    tap(1);
+    CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 2) == 0);
+    tap(1);
     // Cancel stops it; the LED is off in run mode and stays off.
     cancel_exit();
     CHECK(mode == MODE_RUN && status_led == 0 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
@@ -2130,6 +2144,11 @@ static void test_config_led_flash(void)
     CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 2) == 0);
     tap(MIDI_CHANNEL == 3 ? 3 : 2);
     CHECK(status_led == 0 && status_toggles(CFG_FLASH_TICKS * 2) == 2);
+    // Back to the entry channel: steady again; then a new channel flashes once more.
+    tap((uint8_t)(MIDI_CHANNEL - 1 < 5 ? MIDI_CHANNEL - 1 : MIDI_CHANNEL));
+    CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 2) == 0);
+    tap(MIDI_CHANNEL == 3 ? 3 : 2);
+    CHECK(status_led == 0);
     // Saving stops it too.
     save_exit();
     CHECK(mode == MODE_RUN && status_led == 0 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
@@ -2139,6 +2158,15 @@ static void test_config_led_flash(void)
     CHECK(status_led == 1);
     tap(0);
     CHECK(status_led == 0 && status_toggles(CFG_FLASH_TICKS * 2) == 2);
+    // Toggling the same switch back is no change; so is a relay trigger set and reset.
+    tap(0);
+    CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 2) == 0);
+    pedal(0, 0);
+    CHECK(status_led == 1);
+    pedal(0, 255);
+    CHECK(sw_thr[0] == 127 && status_led == 0);
+    pedal(0, 0);
+    CHECK(sw_thr[0] == 0 && status_led == 1 && status_toggles(CFG_FLASH_TICKS * 2) == 0);
     cancel_exit();
     // MIDI IN in run mode still flashes MIDI CHAN and leaves CONFIG dark.
     ctl_midi_in(0xFE);
@@ -2146,6 +2174,39 @@ static void test_config_led_flash(void)
     CHECK(aux[HAL_LED_MIDI_CHAN] == 1 && status_led == 0);
     ticks(RX_FLASH_TICKS);
     CHECK(aux[HAL_LED_MIDI_CHAN] == 0 && status_led == 0);
+
+    // Page 7 with an unsaved change: the CONFIG LED flashes through the version display
+    // (the HAL keeps it out of the lamp test's LEDs-on mode); with none it stays lit.
+    {
+    int k;
+
+    reset_world();
+    chord_long();
+    tap(1);
+    tap(1);
+    for (k = 0; k < 6; k++)
+    {
+        tap(CTL_KEY_UP);
+    }
+    CHECK(cfg_page == PAGE_VERSION && cfg_changed == 1);
+    ticks(VER_STEP_TICKS * VER_BLINK_STEPS);
+    CHECK(lamp == HAL_LAMP_LEDS_ON && status_toggles(CFG_FLASH_TICKS * 4) == 4);
+    // Putting the change back elsewhere and returning: steady.
+    for (k = 0; k < 6; k++)
+    {
+        tap(CTL_KEY_DOWN);
+    }
+    tap(1);
+    tap(1);
+    tap(1);
+    for (k = 0; k < 6; k++)
+    {
+        tap(CTL_KEY_UP);
+    }
+    ticks(VER_STEP_TICKS * VER_BLINK_STEPS);
+    CHECK(cfg_page == PAGE_VERSION && lamp == HAL_LAMP_LEDS_ON && status_led == 1 && status_toggles(CFG_FLASH_TICKS * 4) == 0);
+    cancel_exit();
+    }
 }
 
 // At start-up, switches saved as inverted momentary are on with their LEDs lit (their

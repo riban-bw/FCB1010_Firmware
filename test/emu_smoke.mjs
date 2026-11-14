@@ -10,9 +10,17 @@ import vm from "node:vm";
 const html = readFileSync(process.argv[2] || "emulator/index.html", "utf8");
 const script = html.slice(html.indexOf("<script>") + 8, html.lastIndexOf("</script>"));
 
+// classList records its classes, so checks can read what the page drew.
+function fakeClassList() {
+  const set = new Set();
+  return {
+    toggle(c, on) { if (on === undefined) on = !set.has(c); if (on) set.add(c); else set.delete(c); return on; },
+    add(c) { set.add(c); }, remove(c) { set.delete(c); }, contains(c) { return set.has(c); }
+  };
+}
 function fakeElement() {
   return {
-    classList: { toggle() {} }, style: {}, dataset: {}, textContent: "", innerHTML: "", value: "0",
+    classList: fakeClassList(), style: {}, dataset: {}, textContent: "", innerHTML: "", value: "0",
     setAttribute() {}, addEventListener() {}, setPointerCapture() {}
   };
 }
@@ -158,6 +166,7 @@ check("pressing it again changes its mode", fcb.state().pedalModes[2], (mode3 + 
 check("after a change the CONFIG LED flashes", statusOver(CFG_FLASH_MS * 3), [0, 1]);
 press(2, 100); press(2, 100); press(2, 100);
 check("four presses cycle back (four modes)", fcb.state().pedalModes[2], mode3);
+check("with the mode back as it was, the CONFIG LED is steady again", statusOver(CFG_FLASH_MS * 3), [1]);
 press(UP, 100);
 check("UP goes to page 2, which lights MIDI CHANNEL only", [fcb.state().cfgPage, pageLeds()], [1, [1, 0, 0, 0]]);
 press(0, 100); press(6, 100);
@@ -224,6 +233,11 @@ wait(1000);
 check("then the display is blank (no dots), LEDs still lit", [fcb.hw.hex, fcb.hw.blank, fcb.hw.dots, fcb.hw.lamp, litNow()], [-1, 7, 0, 3, 0]);
 wait(1000);
 check("then major again", [fcb.hw.hex, fcb.hw.dots], [VER[0], 1]);
+// Settings were changed on the earlier pages, so the drawn CONFIG LED flashes on page 7
+// while the other LEDs stay lit.
+const drawnOver = (id, ms) => { const seen = new Set(); for (let t = 0; t < ms; t += 10) { wait(10); seen.add(sandbox.document.getElementById(id).classList.contains("on")); } return [...seen].sort(); };
+check("with unsaved changes the CONFIG LED flashes on page 7", [fcb.hw.lamp, drawnOver("ledCfg", CFG_FLASH_MS * 3)], [3, [false, true]]);
+check("while the other LEDs stay lit", drawnOver("ledChan", CFG_FLASH_MS * 3), [true]);
 press(UP, 100);
 check("UP on page 7 stays on page 7 (no wrap)", fcb.state().cfgPage, 6);
 press(DOWN, 100);

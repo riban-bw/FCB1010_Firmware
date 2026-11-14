@@ -344,6 +344,34 @@ check "during the lamp test the segment latch is 0x00 (everything lit)" \
       "$(grep -E '^0x1ff9 ' "$TMP/s10.console" | awk '{print $2}')" "00"
 check "after the blinks the display shows the major version (units, tens, left: $VER_EXPECT)" \
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | tail -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$VER_EXPECT"
+# The channel page taps changed the channel, so a change is unsaved: on page 7 LED rows 3
+# and 4 (commons 0x08, 0x10) stay fully lit (0x00), and in row 5 (0x20) everything is lit
+# except the CONFIG bit (0x40), which flashes, so both levels are seen.
+# A second run to the same point, then about 1 s of latch samples (commons at 0x1FF8,
+# segments at 0x1FF9). s51 echoes queued input into its output, so the dump lines are
+# picked out by pattern, and kept apart from the checks above.
+{
+    sed '/^dump\|^quit/d' "$TMP/s10.txt"
+    for i in $(seq 300); do echo "step 2000"; echo "dump xram 0x1ff8 0x1ff9 2"; done
+    echo "quit"
+} > "$TMP/s10b.txt"
+s51 -t 80C32 -X 12M -S out="$TMP/s10b.out" "$IHX" < "$TMP/s10b.txt" > "$TMP/s10b.console" 2>&1
+# s51 prints a dump either as one line (0x1ff8, both bytes) or one line per byte; both
+# are paired up here. Too few samples fails rather than passing on nothing.
+LAMP10=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s10b.console" | awk '
+    # 0xff is the ISR blanking the row before driving it (sampled mid-ISR): skipped.
+    function sample(c, v) {
+        if (v == "ff") return
+        total++
+        if (c == "08" || c == "10") { if (v != "00") bad = 1 }
+        if (c == "20") { n++; if (v == "40") off = 1; else if (v == "00") on = 1; else bad = 1 }
+    }
+    $1 == "0x1ff8" && NF == 3 { sample($2, $3); com = ""; next }
+    $1 == "0x1ff8" { com = $2; next }
+    $1 == "0x1ff9" && com != "" { sample(com, $2); com = "" }
+    END { print (bad ? "bad" : "ok"), (total >= 200 ? "enough" : "few:" total + 0), (n >= 20 ? "many" : n + 0), on + 0, off + 0 }')
+check "page 7 with an unsaved change: LEDs lit, CONFIG flashing (state, samples, row-5 samples, seen lit, seen dark)" \
+      "$LAMP10" "ok enough many 1 1"
 # The entry chord taps all ten stomps in run mode (their CCs); page changes send no program.
 check "no program change was sent" "$(messages "$TMP/s10.out" | tr ' ' '\n' | grep -c '^c')" "0"
 

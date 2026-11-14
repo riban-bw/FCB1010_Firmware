@@ -259,7 +259,11 @@ void timer0_isr(void) __interrupt(1)
     PERIPHERALS[P_LATCH_COMMONS]  = scan_common;
     // A cleared bit lights, so 0x00 lights the whole row and 0xFF darkens it
     PERIPHERALS[P_LATCH_SEGMENTS] = lamp_all_on ? 0x00 : (lamp_all_off ? 0xFF :
-                                    ((lamp_leds_on && scan_row >= 3) ? 0x00 : led_map[scan_row]));
+                                    ((lamp_leds_on && scan_row >= 3) ?
+                                     // Every LED lit except CONFIG, which keeps its
+                                     // own state (it flashes for unsaved changes).
+                                     ((scan_row == STATUS_LED_ROW) ? (led_map[STATUS_LED_ROW] & STATUS_LED_MASK) : 0x00) :
+                                     led_map[scan_row]));
     PERIPHERALS[P_DUMMY_MUX]      = 0;
 
     scan_row++;
