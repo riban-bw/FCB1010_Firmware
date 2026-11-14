@@ -2,12 +2,14 @@
 
 The Behringer FCB1010 MIDI foot controller's stock firmware does not work well as a simple stomp-box. This is firmware implements behaviour that one may expect from a stomp-box.
 
+[Try the emulator in your browser](https://riban-bw.github.io/FCB1010_Firmware/emulator/). It runs this firmware's own control code, so you can try the footswitches, pedals and configuration pages before flashing a chip.
+
 | Control | Behaviour |
 |---|---|
 | Footswitches 1 to 10 | Stomp switches. Each has a mode (see below): stomp, stomp with momentary, momentary, or inverted momentary. The LED follows the state |
 | Expression pedal A | Continuous CC 7 (volume), 0 to 127 |
 | Expression pedal B | Continuous CC 11 (expression), 0 to 127 |
-| UP / DOWN | Program change +1 / -1, stopping at 0 and 127 (no wrap; `PROGRAM_WRAP` in `src/config.h`), sent when the key is released. At 0 or 127 a press that cannot change the number sends nothing. Held: after 400 ms the number auto-repeats at 4 Hz on the display only, speeding up to about 20 Hz once the key has been held for `PROGRAM_REPEAT_FAST_AFTER_MS` (3 s), and one program change is sent on release |
+| UP / DOWN | Program change +1 / -1, stopping at 0 and 127 (no wrap; `PROGRAM_WRAP` in `src/config.h`), sent when the key is released. At 0 or 127 a press that cannot change the number sends nothing. Held: after 400 ms the number auto-repeats at 4 Hz on the display only, speeding up to about 25 Hz once the key has been held for `PROGRAM_REPEAT_FAST_AFTER_MS` (2.7 s), and one program change is sent on release |
 | MIDI IN | A CC on channel 1 with a stomp's controller number sets that stomp: value 64 to 127 is on (LED lit), 0 to 63 is off. CC 20 sets the UP + DOWN toggle and DIRECT SELECT LED the same way |
 | UP + DOWN tapped together | Toggles CC 20 (127 / 0). The DIRECT SELECT LED shows its state. Set by `CHORD_CC` in `src/config.h`; keep it different from the stomp CCs |
 | UP + DOWN held 1 s | Configuration mode: pedal modes, MIDI channel, expression pedal calibration, relay triggers (see below). Held 1 s again in configuration mode: save and leave |
@@ -34,9 +36,9 @@ A footswitch press always acts immediately: it toggles the stomp and sends the n
 - **Released within 0.6 seconds:** the new state stays latched, like a normal stomp switch.
 - **Released after more than 0.6 seconds:** the stomp goes back to the state it had before the press, and the matching CC value is sent again.
 
-For example, with a stomp ON, pressing it sends OFF. If you let go within a second it stays OFF. If you hold it longer and then let go, it sends ON again.
+For example, with a stomp ON, pressing it sends OFF. If you let go within 0.6 seconds it stays OFF. If you hold it longer and then let go, it sends ON again.
 
-- The time is `MOMENTARY_HOLD_MS` in `src/config.h` (default 1000). The key scanner checks each switch every 12 ms and starts timing once the press has been debounced, so the real threshold is about 1.03 s.
+- The time is `MOMENTARY_HOLD_MS` in `src/config.h` (currently 600). The key scanner checks each switch every 12 ms and starts timing once the press has been debounced, so the real threshold is about 0.64 s.
 - UP and DOWN are not affected.
 - Plain stomp mode ignores the hold. Momentary mode always goes off on release, and inverted momentary always goes back on.
 - If a CC arrives over MIDI IN while the switch is held, release still goes back to the state before the press.
@@ -113,7 +115,7 @@ UP and DOWN on their own move to the next or previous page. Hold UP (ENTER) for 
 | 4. Toe calibration | EXP 1 and EXP 2 | `Hi`, then `0` once the reading is taken, or `Er` | Put both pedals at the toe and press any footswitch. `Er` indicates there was insufficient difference between low and high readings. You may set low and high opposite to give an inverted control value. |
 | 5. SWITCH 1 relay | SWITCH 1 | Blank or the trigger value of the pedal last moved | Press footswitches 1 to 10 to choose which ones the relay follows (their LEDs light). Tap UP + DOWN to follow CC 20 (DIRECT SELECT lights). Move a pedal to set the CC value at which the relay turns on; move it to the heel (0) to turn that trigger off (EXP 1 / EXP 2 light while a pedal trigger is set). Multiple triggers may be selected. |
 | 6. SWITCH 2 relay | SWITCH 2 | As page 5 | As page 5, for the SWITCH 2 relay. |
-| 7. Lamp test and version | All | All segments then firmware version | Every LED blinks 3 times, then every LED stays lit (the CONFIG LED keeps flashing if there are unsaved changes) while the firmware version shows in hex, one part per second, repeating: major with a trailing dot (`00.`), minor with leading and trailing dots (`.01.`), and build with a leading dot (`.06`). The display blanks briefly before repeating. Press any footswitch to run it again. Major and minor are set in `src/version.h`; the build number (`src/version_build.inc`) goes up by one each time `make` rebuilds the firmware image, and the build fills the version shown here with the one it built. The blink and display times are in `src/config.h` |
+| 7. Lamp test and version | All | All segments then firmware version | Every LED blinks 3 times, then every LED stays lit (the CONFIG LED keeps flashing if there are unsaved changes) while the firmware version shows in hex, one part per second, repeating: major with a trailing dot (`00.`), minor with leading and trailing dots (`.01.`), and build with a leading dot (`.07`). The display blanks briefly before repeating. Press any footswitch to run it again. Major and minor are set in `src/version.h`; the build number (`src/version_build.inc`) goes up by one each time `make` rebuilds the firmware image, and the build fills the version shown here with the one it built. The blink and display times are in `src/config.h` |
 
 If a pedal moved less than 40 counts between the heel and toe readings, page 4 shows `Er` and nothing changes; press a footswitch again to retake the toe reading. Page 4 on its own checks the toe against the current heel. A heel reading with no toe reading is discarded.
 
@@ -125,7 +127,7 @@ Settings are stored in the 24C16 EEPROM: relay triggers at 0x7E0 and 0x7E8, cali
 
 Tested:
 - The controller logic: stomp toggling, all four pedal modes, program change on release with auto-repeat, the UP + DOWN chord, every configuration page and its saved bytes, pedal scaling, hysteresis, calibration flow, a full MIDI buffer, bad input, and MIDI IN parsing including running status, split messages, real-time bytes, SysEx, other channels and the 63/64 threshold, plus the momentary long-press behaviour: your three cases, every switch, two switches at once, duplicate or unmatched hold and release events, a full MIDI queue at press and at release, calibration, and incoming MIDI CC changes during a hold (`make test`).
-- The real 8051 image in a simulator: key scan and debounce, toggle on and off, program change, MIDI UART output with the correct bytes, the UP + DOWN chord opening and closing configuration mode (read back from RAM, including the stack depth of the save path), and the long-press behaviour at 0.84 s (stays latched) and 1.2 s (reverts) of simulated time, both with DOWN auto-repeating (`test/sim_smoke.sh`).
+- The real 8051 image in a simulator: key scan and debounce, toggle on and off, program change, MIDI UART output with the correct bytes, the UP + DOWN chord opening and closing configuration mode (read back from RAM, including the stack depth of the save path), and the long-press behaviour just under (stays latched) and just over (reverts) the long-press time, both with DOWN auto-repeating (`test/sim_smoke.sh`).
 
 Not tested, because it needs real hardware:
 - **Everything on an actual FCB1010.** The hardware map (latch addresses, LED and key wiring, ADC and EEPROM pins) comes from jspyve's public-domain reverse-engineering library at github.com/jspyve/FCB1010-lib, not from Behringer documents or from my own measurements. If the key polarity or an LED is wrong on your unit, the switch `KEY_ACTIVE_LEVEL` in `src/config.h` or the LED tables in `src/hw.c` are where to look.
