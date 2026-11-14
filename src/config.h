@@ -92,7 +92,7 @@
 // toggled to is undone when the switch is released. Released sooner, it stays latched.
 // Each key is checked every 12ms, so the time is rounded down to a multiple of 12ms.
 #ifndef MOMENTARY_HOLD_MS
-#define MOMENTARY_HOLD_MS 1000
+#define MOMENTARY_HOLD_MS 600
 #endif
 
 // Length of one scan tick in milliseconds. This is set by the timer 0 reload in hw.c

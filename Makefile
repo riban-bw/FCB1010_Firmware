@@ -74,6 +74,7 @@ endif
 $(OUT)/fcb1010_32k.bin: $(OUT)/fcb1010.ihx
 	$(MAKEBIN) -p $< $(OUT)/fcb1010_raw.bin
 	python3 -I tools/check_size.py $(OUT)/fcb1010_raw.bin $(ROM_SIZE) README.md
+	python3 -I tools/readme_version.py src/version.h src/version_build.inc README.md
 	head -c $(ROM_SIZE) /dev/zero | tr '\000' '\377' > $@
 	dd if=$(OUT)/fcb1010_raw.bin of=$@ conv=notrunc 2>/dev/null
 
