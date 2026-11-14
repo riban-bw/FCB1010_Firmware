@@ -84,13 +84,16 @@ console.log("emulator: stomp switches (default mode " + DEF_MODE + ")");
 press(0, 300);
 const MOM = DEF_MODE >= 2, ON = DEF_MODE === 3 ? 0 : 127, OFF = 127 - ON;
 check("switch 1 tap sends CC " + STOMP_CC[0], sent(), MOM ? [cc(0, 0, ON), cc(0, 0, OFF)] : [cc(0, 0, 127)]);
-fcb.down(0); wait(500);
+// Holds over and under the long-press time (MOMENTARY_HOLD_MS, checked every 12 ms).
+const HOLD_MS = Number(cfgText.match(/#define MOMENTARY_HOLD_MS (\d+)/)[1]);
+const OVER_MS = HOLD_MS + 300, UNDER_MS = Math.max(60, HOLD_MS - 150);
+fcb.down(0); wait(Math.min(500, OVER_MS - 100));
 check("second press acts at once", sent(), MOM ? [cc(0, 0, ON)] : [cc(0, 0, 0)]);
-wait(800); fcb.up(0); wait(200);
-check("release after a 1.3s hold (reverts only in stomp with momentary)", sent(),
+wait(OVER_MS - Math.min(500, OVER_MS - 100)); fcb.up(0); wait(200);
+check("release after a " + OVER_MS + " ms hold (reverts only in stomp with momentary)", sent(),
       DEF_MODE === 1 ? [cc(0, 0, 127)] : MOM ? [cc(0, 0, OFF)] : []);
-press(6, 840);
-check("switch 6 held 0.84s", sent(), MOM ? [cc(0, 5, ON), cc(0, 5, OFF)] : [cc(0, 5, 127)]);
+press(6, UNDER_MS);
+check("switch 6 held " + UNDER_MS + " ms (under the hold time)", sent(), MOM ? [cc(0, 5, ON), cc(0, 5, OFF)] : [cc(0, 5, 127)]);
 check("its LED", fcb.hw.leds[5], DEF_MODE === 2 ? 0 : 1);
 
 console.log("emulator: program change");
@@ -250,6 +253,11 @@ fcb.setRaw(0, 0); wait(100);
 longKey(UP);
 check("a long UP saves and leaves", [fcb.state().mode, fcb.hw.status], [0, 0]);
 check("and the CONFIG LED stays dark in run mode", statusOver(CFG_FLASH_MS * 3), [0]);
+// The save reached the emulator's EEPROM, so going back in finds nothing unsaved: steady.
+fcb.down(UP); fcb.down(DOWN); wait(1100); fcb.up(UP); fcb.up(DOWN); wait(200);
+check("re-entering after the save: CONFIG LED steady (settings match the EEPROM)", [fcb.state().mode, statusOver(CFG_FLASH_MS * 3)], [1, [1]]);
+longKey(DOWN);
+check("and a cancel leaves with nothing changed", [fcb.state().mode, fcb.hw.status], [0, 0]);
 // Switch 3 was cycled back to its mode; if that is inverted momentary (default 3), saving
 // asserts it (state on, LED lit) without sending a CC. No program change either way.
 check("with nothing sent and no program change", [sent(), fcb.state().program], [[], p]);

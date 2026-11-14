@@ -23,7 +23,7 @@ Each footswitch has one of four modes, set in configuration mode (default: stomp
 | Mode | Display digit | Behaviour |
 |---|---|---|
 | Stomp | 1 | Simple toggle between 127 and 0 |
-| Stomp with momentary | 2 | Toggle, but a hold of more than 1 s undoes it on release (see below) |
+| Stomp with momentary | 2 | Toggle, but a hold of more than 0.6 s undoes it on release (see below) |
 | Momentary | 3 | 127 while pressed, 0 on release |
 | Inverted momentary | 4 | 0 while pressed, 127 on release. The LED follows the value sent, so it is lit at rest: from power-on, and straight after saving it in this mode |
 
@@ -31,8 +31,8 @@ Each footswitch has one of four modes, set in configuration mode (default: stomp
 
 A footswitch press always acts immediately: it toggles the stomp and sends the new CC value. What happens on release depends on how long the switch was held.
 
-- **Released within 1 second:** the new state stays latched, like a normal stomp switch.
-- **Released after more than 1 second:** the stomp goes back to the state it had before the press, and the matching CC value is sent again.
+- **Released within 0.6 seconds:** the new state stays latched, like a normal stomp switch.
+- **Released after more than 0.6 seconds:** the stomp goes back to the state it had before the press, and the matching CC value is sent again.
 
 For example, with a stomp ON, pressing it sends OFF. If you let go within a second it stays OFF. If you hold it longer and then let go, it sends ON again.
 
@@ -71,7 +71,7 @@ Requires SDCC 4.x, `make` (and `gcc` for the host tests) (`apt install sdcc make
 
 ```
 make              # build/fcb1010_32k.bin and build/fcb1010_64k_mirrored.bin, and the emulator page
-make test         # 1102 logic checks on this computer
+make test         # 1117 logic checks on this computer
 make check        # every test suite, without bumping the build number
 make emulator     # update emulator/index.html and run its checks (needs clang and Node)
 test/sim_smoke.sh # runs the real image in the uCsim 8051 simulator (apt install sdcc-ucsim)
@@ -79,7 +79,7 @@ test/sim_smoke.sh # runs the real image in the uCsim 8051 simulator (apt install
 
 Each `make` that rebuilds the firmware image increments the build number in `src/version_build.inc`; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone. If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 8.7 KB (8957 bytes at the last build), so it needs a 16 KB or larger chip; the 32 KB image suits a 27C256 / 28C256. Unused space is filled with 0xFF. Each build checks the size against the 32 KB ROM (the build fails if it does not fit) and updates the figure in this paragraph.
+The code is about 9.0 KB (9168 bytes at the last build), so it needs a 16 KB or larger chip; the 32 KB image suits a 27C256 / 28C256. Unused space is filled with 0xFF. Each build checks the size against the 32 KB ROM (the build fails if it does not fit) and updates the figure in this paragraph.
 
 ## Flashing to an EEPROM
 
@@ -101,9 +101,9 @@ The EPROM used in the FCB1010 is HT27C512-70 (at least it is in my device).
 
 ## Configuration mode
 
-Hold UP and DOWN together for 1 second. The CONFIG LED lights, and flashes once you have changed any setting, until you save or cancel. If you put every change back (for example cycle a mode all the way round), it stops flashing. Footswitches and pedals send no MIDI while you are in configuration mode, and incoming MIDI is ignored.
+Hold UP and DOWN together for 1 second. The CONFIG LED lights, and flashes while any setting differs from what is saved in the pedal's memory (EEPROM). If you put every change back (for example cycle a mode all the way round), it stops flashing. If it flashes as soon as you enter configuration mode, the last save did not reach the memory. Footswitches and pedals send no MIDI while you are in configuration mode, and incoming MIDI is ignored.
 
-UP and DOWN on their own move to the next or previous page. Hold UP (ENTER), or UP + DOWN together, for 1 second to save and leave, or hold DOWN (ESCAPE) for 1 second to cancel every change and leave. Either way the display goes back to the program number. Configuration mode opens on page 1. Tapping UP + DOWN does nothing in configuration mode, except on pages 5 and 6 (see below).
+UP and DOWN on their own move to the next or previous page. Hold UP (ENTER) for 0.6 seconds, or UP + DOWN together for 1 second, to save and leave, or hold DOWN (ESCAPE) for 0.6 seconds to cancel every change and leave. (The UP and DOWN holds use the same time as the stomp with momentary long press, `MOMENTARY_HOLD_MS` in `src/config.h`.) Either way the display goes back to the program number. Configuration mode opens on page 1. Tapping UP + DOWN does nothing in configuration mode, except on pages 5 and 6 (see below).
 
 | Page | Panel LED | Display | Controls |
 |---|---|---|---|
@@ -131,7 +131,7 @@ Not tested, because it needs real hardware:
 - **Everything on an actual FCB1010.** The hardware map (latch addresses, LED and key wiring, ADC and EEPROM pins) comes from jspyve's public-domain reverse-engineering library at github.com/jspyve/FCB1010-lib, not from Behringer documents or from my own measurements. If the key polarity or an LED is wrong on your unit, the switch `KEY_ACTIVE_LEVEL` in `src/config.h` or the LED tables in `src/hw.c` are where to look.
 - The pedal ADC reading and the EEPROM calibration and settings save and load. The settings record has host-level round-trip tests only. The simulator does not model them. The code is adapted from the same library.
 - **MIDI IN on the real image.** The simulator's UART input would not deliver bytes to the firmware, so I could not feed it real MIDI. The parser is tested on the host, and the simulator confirms the receive interrupt queues and drains bytes without disturbing key handling or the stack, but the step from a received byte to a lit LED has not been run end to end on the 8051 image. The FCB1010's MIDI IN feeds the same UART, per the reference code, which receives SysEx through it.
-- **The 1 second threshold on real hardware.** It is counted from the 2 ms scan timer, which assumes a 12 MHz crystal. The simulator measures it correctly in simulated time, but a different crystal speed or a slower scan would shift it.
+- **The 0.6 second long-press threshold on real hardware.** It is counted from the 2 ms scan timer, which assumes a 12 MHz crystal. The simulator measures it correctly in simulated time, but a different crystal speed or a slower scan would shift it.
 - The 31250 baud MIDI rate on real silicon. It is computed for a 12 MHz crystal; the simulator confirms the bytes but not the timing.
 
 To lower the risk, program a spare chip first and keep the original in a safe place. A wrong LED or key map does no electrical harm, but it will look wrong.

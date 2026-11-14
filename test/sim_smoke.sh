@@ -79,8 +79,44 @@ expect() {
     printf '%s\n' "${out[@]}" "$@" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'
 }
 
+# Hold times under and over the long-press time, from config.h: each is placed as far
+# as possible from the hold threshold and from the DOWN auto-repeat steps (DOWN is in
+# the same row, and the simulator's steps only roughly track time), with the number of
+# program steps each hold gives. About 595 simulator steps per ms.
+# Steps per ms vary with what the firmware is doing (about 550-800 while keys are held),
+# so each step count is chosen for that whole band: UNDER stays under the long-press time,
+# OVER over it, TAP under both it and the auto-repeat delay. The DOWN program steps a hold
+# can give are a range (N_*_LO..N_*_HI) over the band.
+read -r UNDER_STEPS OVER_STEPS TAP_STEPS UNDER_LO UNDER_HI OVER_LO OVER_HI N_UNDER_LO N_UNDER_HI N_OVER_LO N_OVER_HI < <(python3 -I -c '
+import re, sys
+t = open("src/config.h").read()
+n = lambda k: int(re.search(r"#define " + k + r" (\d+)", t).group(1))
+hold = (n("MOMENTARY_HOLD_MS") // 12) * 12
+d, p = n("PROGRAM_REPEAT_DELAY_MS"), 1000 // n("PROGRAM_REPEAT_HZ")
+lo, hi = 550, 800
+steps = lambda ms: 1 if ms < d else int((ms - d) // p) + 1
+under = int((hold - 50) * lo)
+over = int((hold + 100) * hi)
+tap = int((min(hold, d) - 50) * lo)
+if under < 60 * hi or tap < 60 * hi:
+    sys.exit("sim_smoke: MOMENTARY_HOLD_MS %d is too short for these scenarios" % hold)
+r = lambda st: (st // hi, st // lo)
+(ul, uh), (ol, oh) = r(under), r(over)
+print(under, over, tap, ul, uh, ol, oh, steps(ul), steps(uh), steps(ol), steps(oh))')
+
+# check_any label got expected... : passes if got matches any of the expected lists
+# (each given with "_" for the spaces between messages).
+check_any() {
+    local label="$1" got="$2" e
+    shift 2
+    for e in "$@"; do
+        if [ "$got" = "${e//_/ }" ]; then check "$label" "$got" "$got"; return; fi
+    done
+    check "$label" "$got" "one of: $*"
+}
+
 # Per scenario, what each switch sends in each mode (stomp, stomp with momentary,
-# momentary, inverted momentary): tap; tap tap; hold 0.84 s; hold 1.2 s; tap then hold 1.2 s.
+# momentary, inverted momentary): tap; tap tap; hold under; hold over; tap then hold over.
 case "$DEF" in
     0) V1="7f"; V2="7f 00"; V6="7f"; V7="7f"; V8="7f 00" ;;
     1) V1="7f"; V2="7f 00"; V6="7f"; V7="7f 00"; V8="7f 00 7f" ;;
@@ -91,11 +127,11 @@ esac
 echo "config.h: switch 1-5 CCs 0x$CC1..0x$CC5, default pedal mode $DEF"
 
 echo "scenario 1: idle, then press row 1 (switches 1-5 and DOWN)"
-cat > "$TMP/s1.txt" <<'EOF'
+cat > "$TMP/s1.txt" <<EOF
 set hardware port[1] 0x9f
 step 800000
 set hardware port[1] 0xdf
-step 300000
+step $TAP_STEPS
 set hardware port[1] 0x9f
 step 400000
 quit
@@ -106,15 +142,15 @@ check "five stomp CCs and the program change for one DOWN from 0 (none without w
       "$(expect "$V1" $(pc_down 1))"
 
 echo "scenario 2: press, release, press again (toggle off, program steps down)"
-cat > "$TMP/s2.txt" <<'EOF'
+cat > "$TMP/s2.txt" <<EOF
 set hardware port[1] 0x9f
 step 800000
 set hardware port[1] 0xdf
-step 300000
+step $TAP_STEPS
 set hardware port[1] 0x9f
 step 800000
 set hardware port[1] 0xdf
-step 300000
+step $TAP_STEPS
 set hardware port[1] 0x9f
 step 400000
 quit
@@ -216,7 +252,7 @@ step 5000
 set memory sfr 0x98 0x51
 step 5000
 set memory sfr 0x98 0x51
-step 300000
+step $TAP_STEPS
 set hardware port[1] 0x9f
 step 400000
 dump iram $RX_HEAD_DEC $RX_HEAD_DEC 1
@@ -241,66 +277,38 @@ else
     fail=1
 fi
 
-# About 595,000 simulator steps equal one second. The hold threshold fires about 1.03s
-# after a press, so 500,000 steps (0.84s) is under it and 715,000 steps (1.20s) is over it.
+# About 595,000 simulator steps equal one second. UNDER_MS and OVER_MS (from config.h,
+# above) are under and over the long-press time.
 
-echo "scenario 6: held 0.84 s (under the 1s threshold) stays latched; DOWN repeated once more"
-cat > "$TMP/s6.txt" <<'EOF'
-set hardware port[1] 0x9f
-step 800000
-set hardware port[1] 0xdf
-step 500000
-set hardware port[1] 0x9f
-step 800000
-quit
-EOF
+echo "scenario 6: held about $UNDER_LO-$UNDER_HI ms (under the long-press time) stays latched; DOWN repeats"
+printf 'set hardware port[1] 0x9f\nstep 800000\nset hardware port[1] 0xdf\nstep %s\nset hardware port[1] 0x9f\nstep 800000\nquit\n' \
+    "$UNDER_STEPS" > "$TMP/s6.txt"
 run_sim "$TMP/s6.txt" "$TMP/s6.out"
-check "no revert; one program change for the repeated number" \
-      "$(messages "$TMP/s6.out")" \
-      "$(expect "$V6" $(pc_down 2))"
+check_any "no revert; one program change for the repeated number" "$(messages "$TMP/s6.out")" \
+      $(for k in $(seq "$N_UNDER_LO" "$N_UNDER_HI"); do printf '%s\n' "$(expect "$V6" $(pc_down "$k"))" | tr ' ' '_'; done)
 
-echo "scenario 7: held 1.2s (over the threshold) reverts on release"
-cat > "$TMP/s7.txt" <<'EOF'
-set hardware port[1] 0x9f
-step 800000
-set hardware port[1] 0xdf
-step 715000
-set hardware port[1] 0x9f
-step 800000
-quit
-EOF
+echo "scenario 7: held about $OVER_LO-$OVER_HI ms (over the long-press time) reverts on release"
+printf 'set hardware port[1] 0x9f\nstep 800000\nset hardware port[1] 0xdf\nstep %s\nset hardware port[1] 0x9f\nstep 800000\nquit\n' \
+    "$OVER_STEPS" > "$TMP/s7.txt"
 run_sim "$TMP/s7.txt" "$TMP/s7.out"
-check "over the threshold (reverts only in stomp with momentary); one program change" \
-      "$(messages "$TMP/s7.out")" \
-      "$(expect "$V7" $(pc_down 3))"
+check_any "over the threshold (reverts only in stomp with momentary); one program change" "$(messages "$TMP/s7.out")" \
+      $(for k in $(seq "$N_OVER_LO" "$N_OVER_HI"); do printf '%s\n' "$(expect "$V7" $(pc_down "$k"))" | tr ' ' '_'; done)
 
 echo "scenario 8: stomps ON, long press turns OFF, release puts them back ON"
-cat > "$TMP/s8.txt" <<'EOF'
-set hardware port[1] 0x9f
-step 800000
-set hardware port[1] 0xdf
-step 300000
-set hardware port[1] 0x9f
-step 800000
-set hardware port[1] 0xdf
-step 715000
-set hardware port[1] 0x9f
-step 800000
-quit
-EOF
+printf 'set hardware port[1] 0x9f\nstep 800000\nset hardware port[1] 0xdf\nstep %s\nset hardware port[1] 0x9f\nstep 800000\nset hardware port[1] 0xdf\nstep %s\nset hardware port[1] 0x9f\nstep 800000\nquit\n' \
+    "$TAP_STEPS" "$OVER_STEPS" > "$TMP/s8.txt"
 run_sim "$TMP/s8.txt" "$TMP/s8.out"
-check "on, off at press, back on at release only in stomp with momentary" \
-      "$(messages "$TMP/s8.out")" \
-      "$(expect "$V8" $(pc_down 4) $(pc_down 1))"
+check_any "on, off at press, back on at release only in stomp with momentary" "$(messages "$TMP/s8.out")" \
+      $(for k in $(seq "$N_OVER_LO" "$N_OVER_HI"); do printf '%s\n' "$(expect "$V8" $(pc_down $((k + 1))) $(pc_down 1))" | tr ' ' '_'; done)
 
 echo "scenario 9: a short UP + DOWN press in run mode toggles CHORD_CC"
 # 0xff presses every key, so the ten footswitches are tapped too. Held 0.5 s (under
 # the 1s config hold) and let go: one CHORD_CC 127, no program change.
-cat > "$TMP/s9.txt" <<'EOF'
+cat > "$TMP/s9.txt" <<EOF
 set hardware port[1] 0x9f
 step 800000
 set hardware port[1] 0xff
-step 300000
+step $TAP_STEPS
 set hardware port[1] 0x9f
 step 400000
 quit

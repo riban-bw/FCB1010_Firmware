@@ -2098,6 +2098,96 @@ static int status_toggles(int n)
     return flips;
 }
 
+// Key code of the footswitch for channel 1-10 on the channel page.
+static uint8_t chan_key(uint8_t ch)
+{
+    return (uint8_t)((ch <= 5) ? ch - 1 : ch);
+}
+
+// The CONFIG LED compares against the EEPROM, read the way start-up reads it.
+static void test_config_led_eeprom(void)
+{
+    printf("config: CONFIG LED compares the settings with the EEPROM\n");
+    // Stored channel 5: steady at entry; another channel flashes; back to 5 is steady.
+    reset_world();
+    cfg_stored_valid = 1;
+    stored_cfg[0] = 5;
+    stored_cfg[1] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
+    stored_cfg[2] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
+    stored_cfg[3] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x05);
+    ctl_init();
+    CHECK(midi_channel == 5);
+    chord_long();
+    CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
+    tap(CTL_KEY_UP);
+    tap(chan_key(6));
+    CHECK(midi_channel == 6 && status_led == 0 && status_toggles(CFG_FLASH_TICKS * 2) == 2);
+    tap(chan_key(5));
+    CHECK(midi_channel == 5 && status_led == 1 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
+    cancel_exit();
+
+    // Invalid records count as the defaults, as at start-up: a stored channel of 0xEE
+    // and stored trigger values over 127 match the default channel and no trigger.
+    reset_world();
+    cfg_stored_valid = 1;
+    stored_cfg[0] = 0xEE;
+    stored_cfg[1] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
+    stored_cfg[2] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
+    stored_cfg[3] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x05 | 0xF0);
+    sw_stored_valid[1] = 1;
+    stored_sw[1][0] = 0;
+    stored_sw[1][1] = 0xF8;
+    stored_sw[1][2] = 200;
+    stored_sw[1][3] = 128;
+    ctl_init();
+    CHECK(midi_channel == MIDI_CHANNEL && sw_thr[2] == 0 && sw_thr[3] == 0 && sw_mask[1] == 0);
+    chord_long();
+    CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
+    cancel_exit();
+
+    // Stored calibration: a new one flashes; storing the same values again does not.
+    reset_world();
+    cal_stored_valid = 1;
+    stored_heel[0] = 10;
+    stored_heel[1] = 20;
+    stored_toe[0]  = 200;
+    stored_toe[1]  = 210;
+    ctl_init();
+    CHECK(heel[0] == 10 && toe[1] == 210);
+    chord_long();
+    CHECK(status_led == 1);
+    tap(CTL_KEY_UP);
+    tap(CTL_KEY_UP);
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_TOE);
+    pedal(0, 200);
+    pedal(1, 210);
+    tap(0);
+    CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
+    pedal(0, 230);
+    pedal(1, 240);
+    tap(0);
+    CHECK(toe[0] == 230 && status_led == 0 && status_toggles(CFG_FLASH_TICKS * 2) == 2);
+    cancel_exit();
+
+    // A save that did not reach the EEPROM (the fake keeps saves apart from what it
+    // loads, like a failed write): the next visit flashes at once, with no edits.
+    reset_world();
+    chord_long();
+    tap(CTL_KEY_UP);
+    tap(chan_key(MIDI_CHANNEL == 7 ? 8 : 7));
+    save_exit();
+    CHECK(mode == MODE_RUN && status_led == 0 && cfg_saved > 0);
+    chord_long();
+    CHECK(mode == MODE_CONFIG && status_led == 0 && status_toggles(CFG_FLASH_TICKS * 2) == 2);
+    // Cancel reloads from the EEPROM; then the next visit is steady.
+    cancel_exit();
+    CHECK(midi_channel == MIDI_CHANNEL);
+    chord_long();
+    CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
+    cancel_exit();
+}
+
 static void test_config_led_flash(void)
 {
     printf("config: CONFIG LED flashes after a change\n");
@@ -2277,6 +2367,7 @@ int main(void)
     test_exit_restores_leds();
     test_boot_inverted();
     test_config_led_flash();
+    test_config_led_eeprom();
     test_scaling();
     test_pedal_cc();
     test_pedal_noise();

@@ -206,59 +206,70 @@ static IDATA uint8_t  rx_flash;
 static BIT_T          cfg_changed;
 static BIT_T          cfg_led_dark;
 #define cfg_flash_ticks rx_flash
-// Two 8-bit check sums (Fletcher style) of every setting, taken at config entry, so an
-// edit that is put back stops the flashing without a copy of the settings in RAM. The
-// first reuses nav_steps (run-mode auto-repeat only; config mode never repeats).
-#define cfg_sum_a nav_steps
-static IDATA uint8_t  cfg_sum_b;
-
-#define SETTINGS_SUM_ADD(x) do { a = (uint8_t)(a + (x)); b = (uint8_t)(b + a); } while (0)
-
-// Sum every saved setting: store the sums (store = 1, at config entry) or return 1 if
-// they match the stored ones (the settings are as they were at entry). A leaf, so its
-// locals are overlaid; 8-bit arithmetic only.
-static uint8_t settings_sum_check(uint8_t store)
+// 1 if every setting matches what the EEPROM holds, read back the way load_settings()
+// takes it (a record that is missing or invalid counts as the defaults; a stored
+// channel outside 1-16 counts as the default channel). So the CONFIG LED flashes exactly
+// while a save would change something, and cancel would restore what the EEPROM says.
+// Each record is read into cfg_buf in turn; no other RAM is used.
+static uint8_t settings_match_saved(void)
 {
-    uint8_t a = 0;
-    uint8_t b = 0;
     uint8_t i;
 
-    SETTINGS_SUM_ADD(midi_channel);
+    // Calibration, defaults first: heel A, heel B, toe A, toe B.
+    cfg_buf[0] = 0;
+    cfg_buf[1] = 0;
+    cfg_buf[2] = 255;
+    cfg_buf[3] = 255;
+    hal_cal_load(cfg_buf, cfg_buf + 2);
 
-    for (i = 0; i < 3; i++)
+    if (cfg_buf[0] != heel[0] || cfg_buf[1] != heel[1] || cfg_buf[2] != toe[0] || cfg_buf[3] != toe[1])
     {
-        SETTINGS_SUM_ADD(pedal_modes[i]);
+        return 0;
     }
 
+    // Relay triggers: none by default; a stored value over 127 is off.
     for (i = 0; i < 2; i++)
     {
-        SETTINGS_SUM_ADD(heel[i]);
-        SETTINGS_SUM_ADD(toe[i]);
-        SETTINGS_SUM_ADD((uint8_t)sw_mask[i]);
-        SETTINGS_SUM_ADD((uint8_t)(sw_mask[i] >> 8));
+        if (!hal_sw_load(i, cfg_buf))
+        {
+            cfg_buf[0] = 0;
+            cfg_buf[1] = 0;
+            cfg_buf[2] = 0;
+            cfg_buf[3] = 0;
+        }
+
+        if (cfg_buf[0] != (uint8_t)sw_mask[i] || (cfg_buf[1] & 0x07) != (uint8_t)(sw_mask[i] >> 8) ||
+            ((cfg_buf[2] <= 127) ? cfg_buf[2] : 0) != sw_thr[i * 2] ||
+            ((cfg_buf[3] <= 127) ? cfg_buf[3] : 0) != sw_thr[i * 2 + 1])
+        {
+            return 0;
+        }
     }
 
-    for (i = 0; i < 4; i++)
+    // Channel and pedal modes.
+    if (!hal_cfg_load(cfg_buf))
     {
-        SETTINGS_SUM_ADD(sw_thr[i]);
+        cfg_buf[0] = MIDI_CHANNEL;
+        cfg_buf[1] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
+        cfg_buf[2] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
+        cfg_buf[3] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x05);
     }
 
-    if (store)
+    if (cfg_buf[0] < 1 || cfg_buf[0] > 16)
     {
-        cfg_sum_a = a;
-        cfg_sum_b = b;
-        return 1;
+        cfg_buf[0] = MIDI_CHANNEL;
     }
 
-    return (uint8_t)(a == cfg_sum_a && b == cfg_sum_b);
+    return (uint8_t)(cfg_buf[0] == midi_channel && cfg_buf[1] == pedal_modes[0] &&
+                     cfg_buf[2] == pedal_modes[1] && (uint8_t)(cfg_buf[3] & 0x0F) == pedal_modes[2]);
 }
 
-// A setting was edited in config mode. If the settings now differ from those at entry,
-// flash the CONFIG LED (dark first, so the change shows at once); if the edit put them
-// back, stop and light it steadily again.
+// A setting was edited in config mode (or config mode was just entered). If the settings
+// now differ from the EEPROM, flash the CONFIG LED (dark first, so the change shows at
+// once); if they match it, stop and light it steadily.
 static void config_changed(void)
 {
-    if (settings_sum_check(0))
+    if (settings_match_saved())
     {
         cfg_changed  = 0;
         cfg_led_dark = 0;
@@ -773,11 +784,11 @@ static void enter_config(void)
     rx_flash  = 0;
     cfg_changed  = 0;
     cfg_led_dark = 0;
-    settings_sum_check(1);
 
     hal_status_led(1);
     hal_aux_led(HAL_LED_DIRECT_SELECT, 0);
     config_goto_page(PAGE_MODES);
+    config_changed();
 }
 
 // Take the settings from the four bytes loaded into cfg_buf, keeping the default
