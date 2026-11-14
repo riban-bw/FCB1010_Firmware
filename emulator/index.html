@@ -1,0 +1,530 @@
+<title>FCB1010 Emulator</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: a hardware panel (pedals, display, LEDs, 2 rows of footswitches) beside a MIDI monitor. */
+:root {
+  --bg: #eceef0;
+  --fg: #1c2024;
+  --muted: #5d656d;
+  --card: #ffffff;
+  --line: #cfd4d9;
+  --accent: #b4540a;
+  --unit: #2b2f34;
+  --unit-hi: #3a3f46;
+  --unit-edge: #15181b;
+  --unit-fg: #d9dde1;
+  --unit-dim: #8b939b;
+  --switch: #7d858d;
+  --switch-down: #565c63;
+  --led-off: #4a2523;
+  --led-on: #ff4a3a;
+  --aux-off: #2a3f2f;
+  --aux-on: #5fe08a;
+  --cfg-off: #4a3d1f;
+  --cfg-on: #ffb637;
+  --seg-off: #3a1c1a;
+  --seg-on: #ff5a45;
+  --log-bg: #f6f7f8;
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171a; --fg: #e4e7ea; --muted: #99a1a9; --card: #1d2125; --line: #333a40;
+    --accent: #f0a060; --unit: #23272b; --unit-hi: #2e3338; --unit-edge: #0c0e10;
+    --log-bg: #171a1d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171a; --fg: #e4e7ea; --muted: #99a1a9; --card: #1d2125; --line: #333a40;
+  --accent: #f0a060; --unit: #23272b; --unit-hi: #2e3338; --unit-edge: #0c0e10;
+  --log-bg: #171a1d; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.45;
+  padding-block: 20px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+h1 { font: 700 22px/1.2 var(--font-display); margin: 0; }
+h2 { font: 700 13px/1.2 var(--font-display); letter-spacing: .08em; text-transform: uppercase; margin: 0 0 10px; color: var(--muted); }
+.page { max-width: 1180px; margin: 0 auto; display: grid; gap: 18px; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
+.head p { margin: 4px 0 0; color: var(--muted); max-width: 60ch; }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; }
+button, input, select { font: inherit; color: inherit; }
+.btn {
+  background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn:focus-visible, .sw:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.main { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 900px) { .main { grid-template-columns: minmax(0, 1fr); } }
+
+/* the unit */
+.unit {
+  background: linear-gradient(180deg, var(--unit-hi), var(--unit) 22%);
+  border: 1px solid var(--unit-edge); border-radius: 10px; padding: 18px; color: var(--unit-fg);
+  display: grid; gap: 16px; box-shadow: 0 6px 18px rgba(0,0,0,.25);
+}
+.pedals { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.pedal { background: var(--unit-edge); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; min-width: 0; }
+.pedal .row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--unit-dim); }
+.pedal .row b { color: var(--unit-fg); font-family: var(--font-mono); font-weight: 500; }
+.meter { position: relative; height: 8px; background: #3a4046; border-radius: 4px; overflow: hidden; }
+.meter i { position: absolute; inset: 0 auto 0 0; background: var(--cfg-on); width: 0; }
+.pedal input[type=range] { width: 100%; accent-color: var(--cfg-on); margin: 0; height: 28px; }
+.panel { display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center; }
+@media (max-width: 520px) { .panel { grid-template-columns: 1fr; } }
+.display { background: #120a09; border: 1px solid var(--unit-edge); border-radius: 6px; padding: 10px 14px; justify-self: start; }
+.display svg { display: block; height: 64px; width: auto; }
+.leds { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 10px; }
+.lamp { display: flex; align-items: center; gap: 7px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--unit-dim); }
+.led { width: 12px; height: 12px; border-radius: 50%; flex: none; background: var(--led-off); border: 1px solid #0006; }
+.led.on { background: var(--led-on); box-shadow: 0 0 9px 2px #ff4a3a88; }
+.led.aux { background: var(--aux-off); } .led.aux.on { background: var(--aux-on); box-shadow: 0 0 9px 2px #5fe08a77; }
+.led.cfg { background: var(--cfg-off); } .led.cfg.on { background: var(--cfg-on); box-shadow: 0 0 9px 2px #ffb63788; }
+.hint { min-height: 2.9em; font-size: 12.5px; color: var(--unit-fg); background: var(--unit-edge); border-radius: 6px; padding: 8px 12px; }
+.rows { display: grid; gap: 10px; }
+.keyrow { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.key { display: grid; justify-items: center; gap: 5px; min-width: 0; }
+.key .num { font: 700 15px var(--font-display); }
+.key .mode { font-size: 10px; letter-spacing: .05em; color: var(--unit-dim); height: 1.2em; text-transform: uppercase; }
+.sw {
+  width: 100%; max-width: 92px; height: 58px; border-radius: 8px; border: 1px solid var(--unit-edge);
+  background: linear-gradient(180deg, #98a0a8, var(--switch)); box-shadow: 0 4px 0 var(--unit-edge); cursor: pointer;
+  touch-action: none; user-select: none; -webkit-user-select: none; transition: none;
+}
+.sw.down { background: var(--switch-down); transform: translateY(3px); box-shadow: 0 1px 0 var(--unit-edge); }
+.sw.nav { background: linear-gradient(180deg, #7a8a99, #5d6b78); }
+.sw.nav.down { background: #46525d; }
+.chord { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; color: var(--unit-dim); }
+.chord .sw { width: auto; max-width: none; height: 40px; padding: 0 16px; font-size: 12px; color: #11161a; font-weight: 600; }
+
+/* side column */
+.side { display: grid; gap: 18px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px; min-width: 0; }
+.card .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+.card .top h2 { margin: 0; }
+.log { font: 12px/1.5 var(--font-mono); background: var(--log-bg); border: 1px solid var(--line); border-radius: 6px; height: 260px; overflow: auto; padding: 6px 8px; }
+.log div { display: flex; gap: 10px; white-space: nowrap; }
+.log .t { color: var(--muted); min-width: 6ch; text-align: right; }
+.log .raw { color: var(--muted); }
+.log .empty { color: var(--muted); font-family: var(--font-body); }
+.form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.form label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
+.form input, .form select { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 84px; }
+.help { margin: 0; padding-left: 18px; display: grid; gap: 5px; color: var(--fg); }
+.help li::marker { color: var(--accent); }
+kbd { font: 500 11px var(--font-mono); background: var(--log-bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+.note { color: var(--muted); font-size: 12.5px; margin: 8px 0 0; }
+</style>
+
+<div class="page">
+  <div class="head">
+    <div>
+      <h1>FCB1010 Emulator</h1>
+      <p>Runs the replacement firmware's own controller code (compiled to WebAssembly) in your browser. Press the footswitches, move the pedals, change the settings and watch the LEDs, display and MIDI output.</p>
+    </div>
+    <div class="tools">
+      <button class="btn" id="btnPower" type="button">Power cycle</button>
+      <button class="btn" id="btnErase" type="button">Erase saved settings</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="unit" id="unit">
+      <div class="pedals">
+        <div class="pedal">
+          <div class="row"><span>EXP A &middot; CC <span id="ccA"></span></span><b id="outA">&ndash;</b></div>
+          <div class="meter"><i id="meterA"></i></div>
+          <input type="range" id="slA" min="0" max="255" value="0" aria-label="Expression pedal A position">
+          <div class="row"><span>raw</span><b id="rawA">0</b></div>
+        </div>
+        <div class="pedal">
+          <div class="row"><span>EXP B &middot; CC <span id="ccB"></span></span><b id="outB">&ndash;</b></div>
+          <div class="meter"><i id="meterB"></i></div>
+          <input type="range" id="slB" min="0" max="255" value="0" aria-label="Expression pedal B position">
+          <div class="row"><span>raw</span><b id="rawB">0</b></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="display" id="display" role="img" aria-label="Display"></div>
+        <div class="leds">
+          <div class="lamp"><span class="led cfg" id="ledCfg"></span>Config</div>
+          <div class="lamp"><span class="led aux" id="ledChan"></span>MIDI chan</div>
+          <div class="lamp"><span class="led aux" id="ledFunc"></span>MIDI func</div>
+          <div class="lamp"><span class="led aux" id="ledExp1"></span>Exp 1</div>
+          <div class="lamp"><span class="led aux" id="ledExp2"></span>Exp 2</div>
+        </div>
+      </div>
+
+      <div class="hint" id="hint"></div>
+
+      <div class="rows" id="rows"></div>
+
+      <div class="chord">
+        <button class="sw" id="chordBtn" type="button" aria-label="Press UP and DOWN together">UP + DOWN</button>
+        <span>Hold for 1s to open or close config mode. Tap to move to the next page.</span>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <div class="top"><h2>MIDI out</h2><button class="btn" id="btnClear" type="button">Clear</button></div>
+        <div class="log" id="log" aria-live="off"></div>
+      </div>
+      <div class="card">
+        <h2>MIDI in</h2>
+        <div class="form">
+          <label>CC<input id="inCc" type="number" min="0" max="127" value="20"></label>
+          <label>Value<input id="inVal" type="number" min="0" max="127" value="127"></label>
+          <label>Channel<input id="inCh" type="number" min="1" max="16" value="1"></label>
+          <button class="btn" id="btnSendIn" type="button">Send</button>
+        </div>
+        <p class="note">A CC on the pedal's channel that matches a stomp's number sets that stomp (64 and up is on) and lights its LED. Nothing is echoed back out.</p>
+      </div>
+      <div class="card">
+        <h2>How to use</h2>
+        <ul class="help">
+          <li>Click or touch a footswitch. Keys <kbd>1</kbd>&ndash;<kbd>9</kbd>, <kbd>0</kbd> are switches 1&ndash;10, <kbd>&uarr;</kbd> and <kbd>&darr;</kbd> are UP and DOWN.</li>
+          <li>Hold a stomp for over 1s to see the momentary behaviour. Hold UP or DOWN for 400 ms to start the 4 Hz auto-repeat; the program change goes out on release.</li>
+          <li>For UP + DOWN together use the button under the unit, or hold both arrow keys.</li>
+          <li>Settings are saved in this browser, like the pedal's EEPROM. Power cycle reloads them.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // The firmware's own src/ctl.c and src/keys.c, compiled to WebAssembly with emulator/emu.c standing in
+  // for the FCB1010 hardware. Rebuilt and embedded here by `make emulator`; this script only draws the
+  // panel, turns clicks and keys into switch closures, and shows the MIDI bytes the firmware sends.
+  var WASM_BASE64 = /* wasm:begin */ "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" /* wasm:end */;
+
+  var KEY_DOWN = 5, KEY_UP = 11;
+  // State readout numbers, as CTL_INSPECT_* in src/ctl.h.
+  var I = { MODE: 0, PROGRAM: 1, CHANNEL: 2, PAGE: 3, SELECTED: 4, CAL_STEP: 5, HEEL_A: 6, HEEL_B: 7,
+            TOE_A: 8, TOE_B: 9, SENT_A: 10, SENT_B: 11, DISPLAY_ERROR: 12, CAL_MIN_SPAN: 13, PEDAL_MODE: 16 };
+  var MODE_RUN = 0, PAGE_CHANNEL = 0, PAGE_MODES = 1, CAL_DONE = 0, NO_VALUE = 255;
+  var MODE_NAMES = ["stomp", "stomp + momentary", "momentary"];
+  var MODE_SHORT = ["stomp", "stomp+mom", "momentary"];
+
+  var ex = null;           // WebAssembly exports once loaded
+  var TICK_MS = 2, PEDAL_CC = [7, 11];
+  var now = 0;             // simulated clock in ms
+  var hw = { leds: [0,0,0,0,0,0,0,0,0,0], status: 0, aux: [0,0,0,0], display: 0, logLines: [] };
+  var dirtyLog = true;
+
+  function hex(a) { return a.map(function (b) { return ("0" + b.toString(16)).slice(-2); }).join(" "); }
+  function logMsg(text, raw) {
+    hw.logLines.unshift({ t: now, text: text, raw: raw });
+    if (hw.logLines.length > 200) hw.logLines.pop();
+    dirtyLog = true;
+  }
+
+  // ---- MIDI OUT: Bytes leave the firmware's queue at the UART rate; group them into messages ----
+  var msg = [];
+  function midiByte(b) {
+    if (b & 0x80) msg = [b];
+    else if (msg.length) msg.push(b);
+    else return;
+    var st = msg[0] & 0xF0, need = (st === 0xC0 || st === 0xD0) ? 2 : 3;
+    if (msg.length < need) return;
+    var ch = (msg[0] & 15) + 1, text;
+    if (st === 0xB0) text = "ch " + ch + "  CC " + msg[1] + " = " + msg[2];
+    else if (st === 0xC0) text = "ch " + ch + "  Program " + msg[1];
+    else text = "ch " + ch + "  status " + hex([msg[0]]);
+    logMsg(text, hex(msg));
+    msg = [];
+  }
+
+  // ---- Settings EEPROM: Two four-byte records kept in this browser ----
+  var STORE_KEY = "fcb1010-eeprom-v2";
+  function storeRead() {
+    try { var s = localStorage.getItem(STORE_KEY); return s ? JSON.parse(s) : null; } catch (e) { return null; }
+  }
+  function storeWrite(obj) {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(obj)); return true; } catch (e) { return false; }
+  }
+  function storeErase() { try { localStorage.removeItem(STORE_KEY); } catch (e) { /* ignore */ } }
+  function bytesAt(ptr) { return new Uint8Array(ex.memory.buffer, ptr, 4); }
+  var RECORD = ["cfg", "cal"];
+
+  var imports = { env: {
+    js_midi_out: function (b) { midiByte(b); },
+    js_stomp_led: function (i, on) { hw.leds[i] = on; },
+    js_status_led: function (on) { hw.status = on; },
+    js_aux_led: function (w, on) { hw.aux[w] = on; },
+    js_display: function (v) { hw.display = v; },
+    js_store_load: function (rec, ptr) {
+      var o = storeRead(), r = o && o[RECORD[rec]];
+      if (!r || r.length !== 4) return 0;
+      bytesAt(ptr).set(r);
+      return 1;
+    },
+    js_store_save: function (rec, ptr) {
+      var o = storeRead() || {};
+      o[RECORD[rec]] = Array.prototype.slice.call(bytesAt(ptr));
+      return storeWrite(o) ? 1 : 0;      // A failed save is silent, as on the pedal
+    }
+  } };
+
+  function ins(what) { return ex.emu_inspect(what); }
+  function state() {
+    var modes = [];
+    for (var i = 0; i < 10; i++) modes.push(ins(I.PEDAL_MODE + i));
+    return {
+      mode: ins(I.MODE), program: ins(I.PROGRAM), midiChannel: ins(I.CHANNEL), cfgPage: ins(I.PAGE),
+      cfgSel: ins(I.SELECTED), calStep: ins(I.CAL_STEP), pedalModes: modes,
+      heel: [ins(I.HEEL_A), ins(I.HEEL_B)], toe: [ins(I.TOE_A), ins(I.TOE_B)], sent: [ins(I.SENT_A), ins(I.SENT_B)]
+    };
+  }
+
+  // ---- Switches: A bit per key code while it is held; the firmware's scanner debounces it ----
+  var physical = {};
+  function keyMask() {
+    var m = 0;
+    for (var k in physical) if (physical[k]) m |= 1 << +k;
+    return m;
+  }
+  function physDown(code) {
+    if (physical[code]) return;
+    physical[code] = true;
+    if (ex) ex.emu_set_keys(keyMask());
+    paintKeys();
+  }
+  function physUp(code) {
+    if (!physical[code]) return;
+    physical[code] = false;
+    if (ex) ex.emu_set_keys(keyMask());
+    paintKeys();
+  }
+
+  // ---- Engine: Advance the simulated clock in 2ms ticks ----
+  var lastReal = performance.now(), tickAccum = 0;
+  var raw = [0, 0];
+  var powered = true;
+  function advance(dt) {
+    if (!ex) return;
+    tickAccum += dt;
+    var guard = 0;
+    while (tickAccum >= TICK_MS && guard++ < 5000) {
+      tickAccum -= TICK_MS; now += TICK_MS;
+      ex.emu_tick();
+    }
+  }
+  function loop() {
+    var t = performance.now(), dt = t - lastReal;
+    lastReal = t;
+    if (dt > 500) dt = 500;     // a sleeping tab does not replay seconds of key timing
+    if (powered) advance(dt);
+    render();
+  }
+
+  // ---- Rendering ----
+  var $ = function (id) { return document.getElementById(id); };
+  var SEG = {
+    0: "abcdef", 1: "bc", 2: "abdeg", 3: "abcdg", 4: "bcfg", 5: "acdfg", 6: "acdefg", 7: "abc", 8: "abcdefg", 9: "abcdfg"
+  };
+  var SEGP = {
+    a: "M5 3 L25 3 L22 7 L8 7 Z", b: "M26 4 L26 24 L22 21 L22 8 Z", c: "M26 28 L26 48 L22 45 L22 31 Z",
+    d: "M5 49 L25 49 L22 45 L8 45 Z", e: "M4 28 L8 31 L8 45 L4 48 Z", f: "M4 4 L8 8 L8 21 L4 24 Z",
+    g: "M5 26 L8 23 L22 23 L25 26 L22 29 L8 29 Z"
+  };
+  function digitSvg(d, x) {
+    var on = d === null ? "" : SEG[d], out = "";
+    "abcdefg".split("").forEach(function (s) {
+      out += '<path d="' + SEGP[s] + '" fill="' + (on.indexOf(s) >= 0 ? "var(--seg-on)" : "var(--seg-off)") + '" transform="translate(' + x + ',0)"/>';
+    });
+    return out;
+  }
+  // Leading zeros blanked, as hal_display does in src/hw.c.
+  function renderDisplay(v) {
+    var h = v >= 100 ? Math.floor(v / 100) : null;
+    var rest = v % 100;
+    var t = (v >= 10) ? Math.floor(rest / 10) : null;
+    var u = rest % 10;
+    $("display").innerHTML = '<svg viewBox="0 0 102 52" aria-hidden="true">' + digitSvg(h, 0) + digitSvg(t, 34) + digitSvg(u, 68) + "</svg>";
+    $("display").setAttribute("aria-label", "Display " + v);
+  }
+
+  var lastDisp = -1;
+  function hint(C) {
+    if (C.mode === MODE_RUN) {
+      return "Run mode. Program " + C.program + ", MIDI channel " + C.midiChannel + ". Hold UP + DOWN for 1s to configure.";
+    }
+    if (C.cfgPage === PAGE_CHANNEL) return "Config 1 of 3, MIDI channel: UP / DOWN change it (now " + C.midiChannel + "). Tap UP + DOWN for the next page, hold to save and leave.";
+    if (C.cfgPage === PAGE_MODES) {
+      return "Config 2 of 3, pedal modes: press a footswitch to select it, UP / DOWN change its mode. Footswitch " + (C.cfgSel + 1) +
+        " is " + MODE_NAMES[C.pedalModes[C.cfgSel]] + " (display " + ((C.cfgSel + 1) * 10 + C.pedalModes[C.cfgSel] + 1) + ").";
+    }
+    var steps = ["Calibration saved for this session. Hold UP + DOWN to store it.", "Calibration: put both pedals at the heel, then press UP.",
+                 "Calibration: put both pedals at the toe, then press UP.", ""];
+    var s = hw.display === ins(I.DISPLAY_ERROR) ? "Display " + ins(I.DISPLAY_ERROR) + ": a pedal moved less than " + ins(I.CAL_MIN_SPAN) +
+            " counts. Start again at the heel." : steps[C.calStep === CAL_DONE ? 0 : C.calStep];
+    return "Config 3 of 3. " + s + " DOWN restarts.";
+  }
+
+  function paintKeys() {
+    document.querySelectorAll(".sw[data-code]").forEach(function (el) {
+      el.classList.toggle("down", !!physical[+el.dataset.code]);
+    });
+    $("chordBtn").classList.toggle("down", !!(physical[KEY_UP] && physical[KEY_DOWN] && chordHeld));
+  }
+
+  var loadError = null;
+  function render() {
+    if (!ex) {
+      $("hint").textContent = loadError ? "Could not start the firmware: " + loadError : "Starting the firmware...";
+      return;
+    }
+    var C = state();
+    for (var i = 0; i < 10; i++) {
+      $("led" + i).classList.toggle("on", !!hw.leds[i]);
+      $("mode" + i).textContent = MODE_SHORT[C.pedalModes[i]];
+    }
+    $("ledCfg").classList.toggle("on", !!hw.status);
+    $("ledChan").classList.toggle("on", !!hw.aux[0]);
+    $("ledFunc").classList.toggle("on", !!hw.aux[1]);
+    $("ledExp1").classList.toggle("on", !!hw.aux[2]);
+    $("ledExp2").classList.toggle("on", !!hw.aux[3]);
+    if (hw.display !== lastDisp) { lastDisp = hw.display; renderDisplay(hw.display); }
+    $("hint").textContent = powered ? hint(C) : "Paused.";
+    var ch = ["A", "B"];
+    for (var p = 0; p < 2; p++) {
+      var cur = ex.emu_scale(raw[p], C.heel[p], C.toe[p]);
+      $("meter" + ch[p]).style.width = (cur / 127 * 100) + "%";
+      $("out" + ch[p]).textContent = C.sent[p] === NO_VALUE ? "–" : C.sent[p];
+      $("raw" + ch[p]).textContent = raw[p];
+      $("cc" + ch[p]).textContent = PEDAL_CC[p];
+    }
+    if (dirtyLog) {
+      dirtyLog = false;
+      var log = $("log");
+      if (!hw.logLines.length) log.innerHTML = '<div class="empty">Nothing sent yet. Press a footswitch.</div>';
+      else log.innerHTML = hw.logLines.map(function (l) {
+        return '<div><span class="t">' + (l.t / 1000).toFixed(2) + '</span><span>' + l.text + '</span><span class="raw">' + l.raw + "</span></div>";
+      }).join("");
+    }
+  }
+
+  // ---- Build the footswitch rows ----
+  function stompIndex(code) { return code < KEY_DOWN ? code : code - 1; }
+  function buildKeys() {
+    var top = [6, 7, 8, 9, 10, KEY_UP], bottom = [0, 1, 2, 3, 4, KEY_DOWN];
+    function row(codes) {
+      var s = '<div class="keyrow">';
+      codes.forEach(function (c) {
+        var isNav = c === KEY_UP || c === KEY_DOWN, idx = stompIndex(c);
+        var label = c === KEY_UP ? "UP" : c === KEY_DOWN ? "DOWN" : String(idx + 1);
+        s += '<div class="key">' +
+          (isNav ? '<span class="led" style="visibility:hidden"></span>' : '<span class="led" id="led' + idx + '"></span>') +
+          '<button class="sw' + (isNav ? " nav" : "") + '" type="button" data-code="' + c + '" aria-label="' + (isNav ? label : "Footswitch " + label) + '"></button>' +
+          '<span class="num">' + label + "</span>" +
+          '<span class="mode"' + (isNav ? "" : ' id="mode' + idx + '"') + "></span></div>";
+      });
+      return s + "</div>";
+    }
+    $("rows").innerHTML = row(top) + row(bottom);
+  }
+  buildKeys();
+
+  // ---- Input ----
+  var chordHeld = false;
+  document.querySelectorAll(".sw[data-code]").forEach(function (el) {
+    var code = +el.dataset.code;
+    el.addEventListener("pointerdown", function (e) { e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch (x) {} physDown(code); });
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach(function (ev) { el.addEventListener(ev, function () { physUp(code); }); });
+  });
+  var chordBtn = $("chordBtn");
+  chordBtn.addEventListener("pointerdown", function (e) {
+    e.preventDefault(); try { chordBtn.setPointerCapture(e.pointerId); } catch (x) {}
+    chordHeld = true; physDown(KEY_UP); physDown(KEY_DOWN);
+  });
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach(function (ev) {
+    chordBtn.addEventListener(ev, function () { if (!chordHeld) return; chordHeld = false; physUp(KEY_UP); physUp(KEY_DOWN); });
+  });
+  var keymap = { "1": 0, "2": 1, "3": 2, "4": 3, "5": 4, "6": 6, "7": 7, "8": 8, "9": 9, "0": 10, "ArrowUp": KEY_UP, "ArrowDown": KEY_DOWN };
+  var heldKeys = {};
+  document.addEventListener("keydown", function (e) {
+    var t = e.target && e.target.tagName;
+    if (t === "INPUT" || t === "SELECT" || t === "TEXTAREA") return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!(e.key in keymap)) return;
+    e.preventDefault();
+    if (e.repeat || heldKeys[e.key]) return;
+    heldKeys[e.key] = true; physDown(keymap[e.key]);
+  });
+  document.addEventListener("keyup", function (e) {
+    if (!(e.key in keymap)) return;
+    heldKeys[e.key] = false; physUp(keymap[e.key]);
+  });
+  window.addEventListener("blur", function () {
+    Object.keys(heldKeys).forEach(function (k) { if (heldKeys[k]) { heldKeys[k] = false; physUp(keymap[k]); } });
+  });
+
+  function setRaw(ch, v) { raw[ch] = v; if (ex) ex.emu_set_pedal(ch, v); }
+  $("slA").addEventListener("input", function () { setRaw(0, +this.value); });
+  $("slB").addEventListener("input", function () { setRaw(1, +this.value); });
+  $("btnClear").addEventListener("click", function () { hw.logLines = []; dirtyLog = true; });
+  function midiIn(bytes) { if (ex) bytes.forEach(function (b) { ex.emu_midi_in(b & 255); }); }
+  $("btnSendIn").addEventListener("click", function () {
+    var cc = Math.max(0, Math.min(127, +$("inCc").value | 0)), v = Math.max(0, Math.min(127, +$("inVal").value | 0));
+    var ch = Math.max(1, Math.min(16, +$("inCh").value | 0));
+    midiIn([0xB0 | (ch - 1), cc, v]);
+  });
+
+  // Power on: The firmware's own start-up (settings load, 200ms settling, first pedal reading adopted silently).
+  function reset() {
+    if (!ex) return;
+    physical = {}; heldKeys = {}; chordHeld = false; msg = [];
+    ex.emu_set_keys(0);
+    ex.emu_set_pedal(0, raw[0]); ex.emu_set_pedal(1, raw[1]);
+    hw.leds = [0,0,0,0,0,0,0,0,0,0]; hw.status = 0; hw.aux = [0,0,0,0];
+    ex.emu_power_on();
+    paintKeys();
+    lastDisp = -1;
+  }
+  $("btnPower").addEventListener("click", function () { logMsg("power cycle", ""); reset(); });
+  $("btnErase").addEventListener("click", function () { storeErase(); logMsg("saved settings erased", ""); reset(); });
+
+  // Test hook: Lets a script drive the emulator in simulated time
+  var readyResolve;
+  window.__fcb = {
+    ready: new Promise(function (r) { readyResolve = r; }),
+    state: function () { return state(); }, hw: hw, advance: function (ms) { advance(ms); render(); },
+    down: physDown, up: physUp, setRaw: function (a, b) { setRaw(0, a); setRaw(1, b); }, midiIn: midiIn,
+    pause: function () { powered = false; }, resume: function () { powered = true; lastReal = performance.now(); },
+    log: function () { return hw.logLines.map(function (l) { return l.raw; }).reverse(); }, reset: reset
+  };
+
+  function start(instance) {
+    ex = instance.exports;
+    TICK_MS = ex.emu_const(0);
+    PEDAL_CC = [ex.emu_const(11), ex.emu_const(12)];
+    reset();
+    lastReal = performance.now();
+    readyResolve();
+  }
+
+  render();
+  setInterval(loop, 8);
+  try {
+    var bin = atob(WASM_BASE64), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    WebAssembly.instantiate(bytes, imports).then(function (r) { start(r.instance); },
+      function (e) { loadError = String(e && e.message || e); render(); });
+  } catch (e) {
+    loadError = String(e && e.message || e);
+  }
+})();
+</script>
