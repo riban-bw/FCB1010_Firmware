@@ -5,7 +5,7 @@
 
 // Firmware version
 #define FW_VERSION_MAJOR 0x00
-#define FW_VERSION_MINOR 0x00
+#define FW_VERSION_MINOR 0x01
 
 // The build number is in src/version_build.inc, which `make` increments each time it
 // links the firmware image. It is compiled only into version.c (built at link time),
