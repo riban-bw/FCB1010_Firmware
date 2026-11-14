@@ -8,6 +8,7 @@
 #include "config.h"
 #include "hal.h"
 #include "ctl.h"
+#include "version.h"
 #include "keys.h"
 
 #define IMPORT(name) __attribute__((import_module("env"), import_name(name)))
@@ -22,8 +23,15 @@ IMPORT("js_stomp_led")  void    js_stomp_led(uint8_t index, uint8_t on);
 IMPORT("js_status_led") void    js_status_led(uint8_t on);
 IMPORT("js_aux_led")    void    js_aux_led(uint8_t which, uint8_t on);
 IMPORT("js_display")    void    js_display(uint8_t value);
-// Record 0 = settings, 1 = calibration; four bytes each. Load returns 1 if one was stored.
+IMPORT("js_display_text") void js_display_text(uint8_t text);
+IMPORT("js_display_blank") void js_display_blank(uint8_t mask);
+IMPORT("js_display_hex")  void js_display_hex(uint8_t value);
+IMPORT("js_display_dots") void js_display_dots(uint8_t mask);
+IMPORT("js_lamp_test")    void js_lamp_test(uint8_t how);
+// Record 0 = settings, 1 = calibration, 2 / 3 = relay triggers; four bytes each. Load returns 1 if one was stored.
 IMPORT("js_store_load") uint8_t js_store_load(uint8_t record, uint8_t *data);
+// Relay outputs, bit 0 = SWITCH 1. Records 2 and 3 are the SWITCH 1 / 2 triggers.
+IMPORT("js_relays") void js_relays(uint8_t mask);
 IMPORT("js_store_save") uint8_t js_store_save(uint8_t record, const uint8_t *data);
 
 // clang may emit calls to these for array loops, and there is no C library here.
@@ -126,8 +134,16 @@ void hal_stomp_led(uint8_t index, uint8_t on) { js_stomp_led(index, on); }
 void hal_status_led(uint8_t on)               { js_status_led(on); }
 void hal_aux_led(uint8_t which, uint8_t on)   { js_aux_led(which, on); }
 void hal_display(uint8_t value)               { js_display(value); }
+void hal_display_text(uint8_t text)           { js_display_text(text); }
+void hal_display_blank(uint8_t mask)          { js_display_blank(mask); }
+void hal_display_hex(uint8_t value)           { js_display_hex(value); }
+void hal_display_dots(uint8_t mask)           { js_display_dots(mask); }
+void hal_lamp_test(uint8_t how)               { js_lamp_test(how); }
 
 uint8_t hal_cfg_load(uint8_t *data)       { return js_store_load(0, data); }
+void    hal_relays(uint8_t mask)          { js_relays(mask); }
+uint8_t hal_sw_load(uint8_t relay, uint8_t *data)       { return js_store_load((uint8_t)(2 + relay), data); }
+uint8_t hal_sw_save(uint8_t relay, const uint8_t *data) { return js_store_save((uint8_t)(2 + relay), data); }
 uint8_t hal_cfg_save(const uint8_t *data) { return js_store_save(0, data); }
 
 // Calibration is stored in the same order as hw.c's record: heel A, toe A, heel B, toe B.
@@ -343,6 +359,10 @@ uint16_t emu_const(uint8_t what)
     case 14: return MOMENTARY_HOLD_MS;
     case 15: return PROGRAM_REPEAT_DELAY_MS;
     case 16: return PROGRAM_REPEAT_HZ;
+    case 17: return CHORD_CC;
+    case 18: return fw_version[0];
+    case 19: return fw_version[1];
+    case 20: return fw_version[2];
     default: return 0;
     }
 }

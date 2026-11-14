@@ -18,8 +18,9 @@ void    hw_init(void);
 uint8_t hw_tick_elapsed(void);
 
 // Call once per tick. Returns 1 when new averaged readings for both
-// pedals are available in *a and *b.
-uint8_t hw_poll_pedals(uint8_t *a, uint8_t *b);
+// pedals are available in hw_pedal[0] and hw_pedal[1] (no pointer parameters: RAM).
+uint8_t hw_poll_pedals(void);
+extern IDATA uint8_t hw_pedal[2];
 
 // Key events are encoded as in keys.h (KEY_EV_PRESS, KEY_EV_HOLD, KEY_EV_RELEASE).
 

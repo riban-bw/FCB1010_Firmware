@@ -9,8 +9,6 @@
 
 void main(void)
 {
-    uint8_t a;
-    uint8_t b;
     uint8_t code;
     uint8_t rx;
     uint8_t i;
@@ -25,10 +23,10 @@ void main(void)
         {
         }
 
-        if (hw_poll_pedals(&a, &b))
+        if (hw_poll_pedals())
         {
-            ctl_pedal_sample(0, a);
-            ctl_pedal_sample(1, b);
+            ctl_pedal_sample(0, hw_pedal[0]);
+            ctl_pedal_sample(1, hw_pedal[1]);
         }
     }
 
@@ -41,10 +39,10 @@ void main(void)
         {
             ctl_tick();
 
-            if (hw_poll_pedals(&a, &b))
+            if (hw_poll_pedals())
             {
-                ctl_pedal_sample(0, a);
-                ctl_pedal_sample(1, b);
+                ctl_pedal_sample(0, hw_pedal[0]);
+                ctl_pedal_sample(1, hw_pedal[1]);
             }
         }
 

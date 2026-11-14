@@ -37,8 +37,9 @@ void    ctl_pedal_sample(uint8_t channel, uint8_t raw);
 uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 
 #ifdef CTL_INSPECT
-// Emulator-only state readout (see the end of ctl.c). Mode: 0 run, 1 config. Page: 0 channel,
-// 1 pedal modes, 2 calibration. Calibration step: 0 done, 1 heel, 2 toe. A sent value of 255
+// Emulator-only state readout (see the end of ctl.c). Mode: 0 run, 1 config. Page: 0 pedal modes,
+// 1 channel, 2 heel calibration, 3 toe calibration, 4 / 5 SWITCH 1 / 2, 6 version (lamp test). Calibration step: 0 reading
+// taken, 1 heel ("Lo"), 2 toe ("Hi"), 3 error ("Er"). A sent value of 255
 // means nothing has been sent for that pedal yet. Pedal modes are read at 16 + switch index.
 #define CTL_INSPECT_MODE           0
 #define CTL_INSPECT_PROGRAM        1
@@ -52,9 +53,13 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 #define CTL_INSPECT_TOE_B          9
 #define CTL_INSPECT_SENT_A         10
 #define CTL_INSPECT_SENT_B         11
-#define CTL_INSPECT_DISPLAY_ERROR  12
+#define CTL_INSPECT_RELAYS         12
 #define CTL_INSPECT_CAL_MIN_SPAN   13
 #define CTL_INSPECT_PEDAL_MODE     16
+// Relay trigger values at 32 + relay * 2 + pedal; follow masks at 36 + relay * 2 (low
+// byte) and 37 + relay * 2 (high byte; bit 2 is CHORD_CC). Pages 4 and 5 are SWITCH 1 / 2.
+#define CTL_INSPECT_SW_THR         32
+#define CTL_INSPECT_SW_MASK        36
 
 uint8_t ctl_inspect(uint8_t what);
 #endif

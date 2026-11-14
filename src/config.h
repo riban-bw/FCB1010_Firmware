@@ -10,21 +10,47 @@
 
 // Pedal mode every footswitch starts with until it is changed in configuration mode:
 // 0 = stomp (toggle), 1 = stomp with momentary on a long press, 2 = momentary.
+// 3 = inverted momentary (0 while pressed, 127 on release).
 #ifndef DEFAULT_PEDAL_MODE
-#define DEFAULT_PEDAL_MODE 1
+#define DEFAULT_PEDAL_MODE 0
 #endif
 
-// Pressing UP and DOWN together for this long opens configuration mode, and again
-// for this long saves and closes it. A shorter press of both moves to the next page.
+// Pressing UP and DOWN together for this long opens configuration mode.
+// In configuration mode UP + DOWN does nothing; a long UP (MOMENTARY_HOLD_MS, the
+// key hold threshold) saves and closes it, and a long DOWN cancels and closes it.
 #ifndef CONFIG_HOLD_MS
 #define CONFIG_HOLD_MS 1000
 #endif
+
+// Channel page: after switch 10 the display shows 10 and its 0 flashes at this
+// half-period while a second digit can be entered; after the timeout the channel stays
+// 10. The timeout must be a whole number of half-periods.
+#define CHANNEL_DIGIT_FLASH_MS    250
+#define CHANNEL_DIGIT_TIMEOUT_MS  5000
+
+// Run mode: the MIDI CHAN LED lights for this long after each received MIDI byte.
+// Real-time bytes (clock, active sensing...) do not light it.
+#define MIDI_RX_FLASH_MS          60
+
+// Configuration page 7: every LED and display segment blinks LAMP_TEST_BLINKS times
+// (LAMP_TEST_BLINK_MS on, then the same off), then the firmware version shows, each
+// part for VERSION_SHOW_MS (a whole multiple of LAMP_TEST_BLINK_MS), then a blank display for
+// the same time, repeating.
+#define LAMP_TEST_BLINK_MS        250
+#define LAMP_TEST_BLINKS          3
+#define VERSION_SHOW_MS           1000
 
 // Number of footswitches acting as stomp switches (switches 1..10).
 #define STOMP_COUNT 10
 
 // Controller number sent by footswitches 1..10 (toggles 127 / 0).
-#define STOMP_CC_LIST 20, 21, 22, 23, 24, 25, 26, 27, 28, 29
+#define STOMP_CC_LIST 21, 22, 23, 24, 25, 26, 27, 28, 29, 30
+
+// A short press of UP + DOWN together in run mode toggles this controller (127 / 0).
+// The DIRECT SELECT LED shows its state. Keep it out of STOMP_CC_LIST.
+#ifndef CHORD_CC
+#define CHORD_CC 20
+#endif
 
 // Controller numbers sent by expression pedal A and pedal B.
 // 7 = channel volume, 11 = expression.
@@ -33,7 +59,7 @@
 // UP / DOWN program change behaviour.
 // 1 = wrap around (127 -> 0, 0 -> 127), 0 = stop at the ends.
 #ifndef PROGRAM_WRAP
-#define PROGRAM_WRAP 1
+#define PROGRAM_WRAP 0
 #endif
 
 // Value added to the program number on the 7-segment display.
@@ -79,6 +105,16 @@
 
 #ifndef PROGRAM_REPEAT_HZ
 #define PROGRAM_REPEAT_HZ 4
+#endif
+
+// Held longer: once the key has been held about PROGRAM_REPEAT_FAST_AFTER_MS (the
+// first repeat step at or after it), the repeat speeds up to PROGRAM_REPEAT_FAST_HZ.
+#ifndef PROGRAM_REPEAT_FAST_AFTER_MS
+#define PROGRAM_REPEAT_FAST_AFTER_MS 2700
+#endif
+
+#ifndef PROGRAM_REPEAT_FAST_HZ
+#define PROGRAM_REPEAT_FAST_HZ 25
 #endif
 
 // Consecutive scans a key must read the same before it counts.
