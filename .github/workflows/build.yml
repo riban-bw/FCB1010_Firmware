@@ -22,7 +22,7 @@ jobs:
             ca-certificates git make gcc python3 sdcc sdcc-ucsim clang lld nodejs
 
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # The README's version and config.h numbers are filled in by the build. If they
       # differ from what was committed, the commit was made without running make first.
@@ -43,7 +43,7 @@ jobs:
         run: make check
 
       - name: Firmware images
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: fcb1010-firmware
           path: |
