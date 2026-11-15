@@ -21,9 +21,10 @@ while chip < size:
 print("firmware size: %d bytes (%.1f KB), %d free of %d; fits a %d KB or larger chip"
       % (size, size / 1024, rom_size - size, rom_size, chip // 1024))
 
-pattern = re.compile(r"The code is about [0-9.]+ KB \([0-9]+ bytes at the last build\), "
-                     r"so it needs an? [0-9]+ KB or larger chip")
-new = ("The code is about %.1f KB (%d bytes at the last build), so it needs a %d KB or larger chip"
+# No space before the unit (README style); an older spaced sentence is still found.
+pattern = re.compile(r"The code is about [0-9.]+ ?KB \([0-9]+ bytes at the last build\), "
+                     r"so it needs an? [0-9]+ ?KB or larger chip")
+new = ("The code is about %.1fKB (%d bytes at the last build), so it needs a %dKB or larger chip"
        % (size / 1024, size, chip // 1024))
 
 text = open(readme).read()

@@ -12,7 +12,7 @@
 // 0 = stomp (toggle), 1 = stomp with momentary on a long press, 2 = momentary.
 // 3 = inverted momentary (0 while pressed, 127 on release).
 #ifndef DEFAULT_PEDAL_MODE
-#define DEFAULT_PEDAL_MODE 1
+#define DEFAULT_PEDAL_MODE 0
 #endif
 
 // Pressing UP and DOWN together for this long opens configuration mode.
@@ -62,7 +62,7 @@
 // UP / DOWN program change behaviour.
 // 1 = wrap around (127 -> 0, 0 -> 127), 0 = stop at the ends.
 #ifndef PROGRAM_WRAP
-#define PROGRAM_WRAP 1
+#define PROGRAM_WRAP 0
 #endif
 
 // Value added to the program number on the 7-segment display.
