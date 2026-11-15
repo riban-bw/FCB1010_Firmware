@@ -409,5 +409,26 @@ check("footswitch 3 now sends note 60 (velocity 100 on, note off velocity 20)",
       notes.length > 0 && notes.every((m) => (m === "9" + chHex + " 3c 64" || m === "8" + chHex + " 3c 14")) &&
       notes.some((m) => m === "9" + chHex + " 3c 64"), true);
 
+console.log("emulator: program change toggle");
+longChord();
+press(3, OVER_MS);                     // footswitch 4's editor
+press(2, 100);                         // type: program change
+press(UP, 100); press(4, 100);         // first program 5
+press(UP, 100); press(6, 100);         // second program 6
+check("UP stops at the second program (VALUE 1)", [fcb.state().edit, editLeds()], [3, [0, 0, 1, 0]]);
+press(UP, 100);
+check("still on the second program", fcb.state().edit, 3);
+press(UP, OVER_MS);
+check("footswitch 4's label shows both programs", label(3), "PC 5/6");
+press(UP, OVER_MS);
+wait(50); sent();
+const pc = (n) => "c" + chHex + " " + hex(n);
+const twoPresses = [[], []];
+press(3, 100); wait(20); twoPresses[0] = sent();
+press(3, 100); wait(20); twoPresses[1] = sent();
+const wantPc = DEF_MODE === 2 ? [[pc(5), pc(6)], [pc(5), pc(6)]] :
+               DEF_MODE === 3 ? [[pc(6), pc(5)], [pc(6), pc(5)]] : [[pc(5)], [pc(6)]];
+check("it toggles between programs 5 and 6 (following the default pedal mode)", twoPresses, wantPc);
+
 console.log(fail ? "emulator smoke test FAILED" : "emulator smoke test passed");
 process.exit(fail);

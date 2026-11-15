@@ -2702,42 +2702,64 @@ static void test_switch_messages(void)
     ctl_key_release(sw_code(8));
     CHECK(midi_len == 6 && cc_number(0) == 70 && cc_value(0) == 10 && cc_value(1) == 90 && leds[7] == 1);
 
-    // Program changes: every press sends, whatever the pedal mode; the last one pressed is
-    // lit and the other program change switches go dark; the display and UP / DOWN follow.
-    set_mode(4, PM_MOMENTARY);
-    set_msg(4, MT_PROG, 10, 0, 0);
-    set_mode(5, PM_STOMP);
-    set_msg(5, MT_PROG, 20, 0, 0);
-    set_mode(6, PM_STOMP);
-    set_msg(6, MT_CC, 77, 127, 0);
-    tap(sw_code(7));
-    CHECK(leds[6] == 1);
+    // Program change with two programs: a toggle between them, following its pedal mode.
+    // The LED shows the state, the display the program sent, and UP / DOWN step from it.
+    set_mode(4, PM_STOMP);
+    set_msg(4, MT_PROG, 10, 11, 0);
     clear_log();
-    ctl_key_press(sw_code(5));
-    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 10 && leds[4] == 1 && leds[5] == 0);
+    tap(sw_code(5));
+    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 10 && leds[4] == 1);
     CHECK(program == 10 && display == 10 + DISPLAY_PROGRAM_OFFSET);
-    ctl_key_release(sw_code(5));
-    CHECK(midi_len == 2 && leds[4] == 1);
-    tap(sw_code(6));
-    CHECK(midi_len == 4 && midi_log[2] == PROG_CHG && midi_log[3] == 20 && leds[4] == 0 && leds[5] == 1);
-    // A CC switch that was on is not affected.
-    CHECK(leds[6] == 1);
-    // Pressing it again sends it again and it stays lit.
-    tap(sw_code(6));
-    CHECK(midi_len == 6 && midi_log[5] == 20 && leds[5] == 1);
-    // UP steps from that program.
+    tap(sw_code(5));
+    CHECK(midi_len == 4 && midi_log[2] == PROG_CHG && midi_log[3] == 11 && leds[4] == 0 && program == 11);
     clear_log();
     tap(CTL_KEY_UP);
-    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 21);
-    // A long press is still one program change.
+    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 12);
+    // Momentary: the first program while held, the second on release.
+    set_mode(4, PM_MOMENTARY);
+    clear_log();
+    ctl_key_press(sw_code(5));
+    CHECK(midi_len == 2 && midi_log[1] == 10 && leds[4] == 1);
+    ctl_key_release(sw_code(5));
+    CHECK(midi_len == 4 && midi_log[3] == 11 && leds[4] == 0 && display == 11 + DISPLAY_PROGRAM_OFFSET);
+    // Stomp with momentary: a long press goes back on release.
+    set_mode(4, PM_STOMP_MOM);
     clear_log();
     long_press(sw_code(5));
-    CHECK(midi_len == 2 && midi_log[1] == 10 && leds[4] == 1 && leds[5] == 0);
+    CHECK(midi_len == 4 && midi_log[1] == 10 && midi_log[3] == 11 && leds[4] == 0);
+    // Two program change switches are independent (no radio behaviour).
+    set_mode(4, PM_STOMP);
+    set_mode(5, PM_STOMP);
+    set_msg(5, MT_PROG, 20, 21, 0);
+    tap(sw_code(5));
+    tap(sw_code(6));
+    CHECK(leds[4] == 1 && leds[5] == 1 && program == 20);
+
+    // A single program (both programs the same): sent on every press, nothing on release,
+    // whatever the pedal mode; its LED is lit only while held.
+    set_mode(6, PM_STOMP);
+    set_msg(6, MT_PROG, 30, 30, 0);
+    clear_log();
+    ctl_key_press(sw_code(7));
+    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 30 && leds[6] == 1 && program == 30);
+    ctl_key_release(sw_code(7));
+    CHECK(midi_len == 2 && leds[6] == 0 && (stomp_state & (1 << 6)) == 0);
+    tap(sw_code(7));
+    CHECK(midi_len == 4 && midi_log[3] == 30 && leds[6] == 0);
+    set_mode(6, PM_MOM_INV);
+    clear_log();
+    ctl_key_press(sw_code(7));
+    CHECK(midi_len == 2 && midi_log[1] == 30 && leds[6] == 1);
+    ctl_key_release(sw_code(7));
+    CHECK(midi_len == 2 && leds[6] == 0);
+    long_press(sw_code(7));
+    CHECK(midi_len == 4 && midi_log[3] == 30 && leds[6] == 0);
     // No room in MIDI OUT: ignored, like a stomp.
     clear_log();
     midi_space = 2;
-    tap(sw_code(6));
-    CHECK(midi_len == 0 && leds[5] == 0);
+    tap(sw_code(7));
+    tap(sw_code(5));
+    CHECK(midi_len == 0 && leds[6] == 0 && leds[4] == 1);
     midi_space = 15;
 
     // MIDI IN: a note on (velocity above 0) on the pedal's channel sets a note switch, a
@@ -2788,9 +2810,9 @@ static void test_switch_messages(void)
     // A program change switch starts off at power-on even in inverted momentary mode.
     reset_world();
     msg_stored_valid[0] = 1;
-    stored_msg[0][0] = MT_PROG;
+    stored_msg[0][0] = MT_PROG;         // a single program: rests off in any mode
     stored_msg[0][1] = 5;
-    stored_msg[0][2] = 0;
+    stored_msg[0][2] = 5;
     stored_msg[0][3] = 0;
     msg_stored_valid[1] = 1;
     stored_msg[1][0] = MT_NOTE;
@@ -2809,6 +2831,37 @@ static void test_switch_messages(void)
     CHECK(leds[0] == 0 && leds[1] == 1 && midi_len == 0);
     // The other records were missing: defaults.
     CHECK(MSG_NUM(2) == cc[2] && MSG_ON(2) == 127 && MSG_OFF(2) == 0 && msg_type(9) == MT_CC && MSG_NUM(9) == cc[9]);
+
+    // A two-program switch in inverted momentary rests on at power-on, sending nothing;
+    // pressing it sends the second program, releasing the first.
+    reset_world();
+    msg_stored_valid[0] = 1;
+    stored_msg[0][0] = MT_PROG;
+    stored_msg[0][1] = 5;
+    stored_msg[0][2] = 6;
+    stored_msg[0][3] = 0;
+    cfg_stored_valid = 1;
+    stored_cfg[0] = MIDI_CHANNEL;
+    stored_cfg[1] = 0x03;               // switch 1 inverted momentary
+    stored_cfg[2] = 0;
+    stored_cfg[3] = 0;
+    ctl_init();
+    boot_end();
+    CHECK(leds[0] == 1 && midi_len == 0);
+    ctl_key_press(sw_code(1));
+    CHECK(midi_len == 2 && midi_log[1] == 6 && leds[0] == 0);
+    ctl_key_release(sw_code(1));
+    CHECK(midi_len == 4 && midi_log[3] == 5 && leds[0] == 1);
+    // Accepting an edit while it is on sends no program change (and it turns off).
+    chord_long();
+    clear_log();
+    long_press(sw_code(1));
+    tap(CTL_KEY_UP);
+    tap(sw_code(9));
+    long_nav(CTL_KEY_UP);
+    CHECK(midi_len == 0 && (stomp_state & 1) == 0 && MSG_NUM(0) == 9);
+    cancel_exit();
+    cfg_stored_valid = 0;
 
     // A stored switch with the unused type 3 loads as a CC with the same values, and
     // values over 127 lose bit 7.
@@ -2920,11 +2973,14 @@ static void test_config_editor(void)
     tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN);
     tap(sw_code(3));
     CHECK(msg_type(2) == MT_PROG && display == SHOWN_TEXT(HAL_TEXT_PROG));
-    // A program change has only a number.
-    tap(CTL_KEY_UP); tap(CTL_KEY_UP);
+    // A program change has two programs: the number (NUMBER) and the on value (VALUE 1);
+    // UP stops there.
+    tap(CTL_KEY_UP);
     CHECK(edit_param == EP_NUM && param_leds(EP_NUM));
     tap(sw_code(5));
     CHECK(MSG_NUM(2) == 5);
+    tap(CTL_KEY_UP); tap(CTL_KEY_UP);
+    CHECK(edit_param == EP_ON && param_leds(EP_ON));
     long_nav(CTL_KEY_DOWN);
     CHECK(!edit_open && mode == MODE_CONFIG && msg_type(2) == MT_NOTE && MSG_NUM(2) == 100 &&
           MSG_ON(2) == 90 && MSG_OFF(2) == 35);

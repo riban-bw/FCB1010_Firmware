@@ -70,12 +70,16 @@
 #define MT_CC           0
 #define MT_NOTE         1
 #define MT_PROG         2
-// Program change switches: the pedal mode does not apply, a press always sends.
+// Program change switches have two programs: the number, sent when the switch turns on,
+// and the on value, sent when it turns off, so it toggles between them (following its
+// pedal mode). With both the same it is a single program, sent on every press and
+// nothing on release, whatever the pedal mode; its LED is lit only while held.
 
 // Parameters in the footswitch editor, each marked by its panel LED: message type
 // (SELECT), number (NUMBER: the CC, note or program number), on value (VALUE 1: the CC
 // value or note velocity sent when on) and off value (VALUE 2: sent when off). A program
-// change has only a number. The parameter is also the msg[] byte it edits, plus one.
+// change has two: the number (sent on) and the on value (sent off). The parameter is
+// also the msg[] byte it edits, plus one.
 #define EP_TYPE         0
 #define EP_NUM          1
 #define EP_ON           2
@@ -412,17 +416,41 @@ static uint8_t msg_type(uint8_t index)
     return (uint8_t)((msg[MSG_AT(index)] >> 7) | ((msg[MSG_AT(index) + 1] >> 6) & 2));
 }
 
+// 1 if footswitch index is a single-program switch: a program change whose two programs
+// are the same (type bits: bit 7 clear in its first byte, set in its second). A leaf
+// function, so it costs no fixed RAM.
+static uint8_t prog_single(uint8_t index)
+{
+    index = MSG_AT(index);
+
+    return (uint8_t)(((uint8_t)(msg[index] ^ msg[index + 1]) == 0x80 && (msg[index + 1] & 0x80)) ? 1 : 0);
+}
+
+static void show_program(void)
+{
+    hal_display((uint8_t)(program + DISPLAY_PROGRAM_OFFSET));
+}
+
 // Send footswitch index's message for the state on: a CC with the on or off value, a note
 // on with the on value as velocity (on) or a note off with the off value (off), or a
-// program change (on only; off sends nothing). The caller has checked there is room for
-// three bytes.
+// program change, the number (on) or the on value (off; a single-program switch sends
+// nothing). A program sent becomes the current program, so UP / DOWN step from it and the
+// run-mode display shows it. The caller has checked there is room for three bytes.
 static void send_switch(uint8_t index, uint8_t on)
 {
     if (msg_type(index) == MT_PROG)
     {
-        if (on)
+        if (on || !prog_single(index))
         {
-            send_program(msg[MSG_AT(index)]);
+            program = (uint8_t)(msg[(uint8_t)(MSG_AT(index) + (on ? 0 : 1))] & 0x7F);
+            send_program(program);
+            program_moved   = 0;
+            program_pending = 0;
+
+            if (mode == MODE_RUN)
+            {
+                show_program();
+            }
         }
 
         return;
@@ -433,10 +461,6 @@ static void send_switch(uint8_t index, uint8_t on)
     hal_midi_tx((uint8_t)(msg[(uint8_t)(MSG_AT(index) + (on ? 1 : 2))] & 0x7F));
 }
 
-static void show_program(void)
-{
-    hal_display((uint8_t)(program + DISPLAY_PROGRAM_OFFSET));
-}
 
 // Mode of one footswitch, and set it.
 static uint8_t pedal_mode_get(uint8_t index)
@@ -1018,7 +1042,7 @@ static void edit_swap(void)
 // change, a changed message puts the switch in its mode's resting state when configuration
 // mode is saved (cfg_dirty). If the switch is on, the old message's "off" (its CC off
 // value or note off) is sent now, while the old message is still known, and the switch is
-// off.
+// off (a program change sends nothing).
 static void edit_end(uint8_t accept)
 {
     if (!accept)
@@ -1035,12 +1059,16 @@ static void edit_end(uint8_t accept)
 
         if ((stomp_state >> cfg_sel) & 1)
         {
-            if (hal_midi_space() >= 3)
+            // Not for a program change: nothing is left sounding, and sending its "off"
+            // program would change the receiver's program for no reason.
+            edit_swap();
+
+            if (hal_midi_space() >= 3 && msg_type(cfg_sel) != MT_PROG)
             {
-                edit_swap();
                 send_switch(cfg_sel, 0);
-                edit_swap();
             }
+
+            edit_swap();
 
             stomp_state &= (uint16_t)~((uint16_t)1 << cfg_sel);
         }
@@ -1058,7 +1086,7 @@ static void edit_step(uint8_t code)
 {
     if (code == CTL_KEY_UP)
     {
-        if (edit_param >= ((msg_type(cfg_sel) == MT_PROG) ? EP_NUM : EP_OFF))
+        if (edit_param >= ((msg_type(cfg_sel) == MT_PROG) ? EP_ON : EP_OFF))
         {
             return;
         }
@@ -1377,12 +1405,12 @@ static void exit_config(uint8_t save)
         bit = (uint16_t)((uint16_t)1 << i);
 
         // A switch whose mode or message changed goes to its new mode's resting state: on
-        // for inverted momentary, off for the others and for a program change. If that
+        // for inverted momentary, off for the others and for a single program. If that
         // changes its state its message is sent (through the revert queue, so as soon as
         // MIDI OUT has room, and the LED follows); if it is already there nothing is sent.
         if (cfg_dirty & bit)
         {
-            if (pedal_mode_get(i) == PM_MOM_INV && msg_type(i) != MT_PROG)
+            if (pedal_mode_get(i) == PM_MOM_INV && !prog_single(i))
             {
                 stomp_prev |= bit;
             }
@@ -1659,7 +1687,7 @@ void ctl_init(void)
 
     for (i = 0; i < STOMP_COUNT; i++)
     {
-        if (pedal_mode_get(i) == PM_MOM_INV && msg_type(i) != MT_PROG)
+        if (pedal_mode_get(i) == PM_MOM_INV && !prog_single(i))
         {
             stomp_state |= (uint16_t)((uint16_t)1 << i);
             hal_stomp_led(i, 1);
@@ -1880,31 +1908,6 @@ void ctl_key_release(uint8_t code)
     }
 }
 
-// A program change footswitch pressed in run mode (whatever its pedal mode): its program
-// is sent, its LED lights and those of the other program change switches go dark (it
-// shows the program chosen last), and UP / DOWN then step from that program.
-static void prog_press(uint8_t index)
-{
-    uint8_t i;
-
-    for (i = 0; i < STOMP_COUNT; i++)
-    {
-        if (msg_type(i) == MT_PROG)
-        {
-            stomp_state &= (uint16_t)~((uint16_t)1 << i);
-            hal_stomp_led(i, 0);
-        }
-    }
-
-    stomp_state |= (uint16_t)((uint16_t)1 << index);
-    hal_stomp_led(index, 1);
-    send_switch(index, 1);
-    program         = (uint8_t)(msg[MSG_AT(index)] & 0x7F);
-    program_moved   = 0;
-    program_pending = 0;
-    show_program();
-}
-
 void ctl_key_press(uint8_t code)
 {
     uint8_t  index;
@@ -1980,12 +1983,6 @@ void ctl_key_press(uint8_t code)
         index = stomp_index(code);
         bit   = (uint16_t)((uint16_t)1 << index);
 
-        if (msg_type(index) == MT_PROG)
-        {
-            prog_press(index);
-            return;
-        }
-
         // Remember what the state was, in case this press is undone on release.
         if (stomp_state & bit)
         {
@@ -1999,7 +1996,9 @@ void ctl_key_press(uint8_t code)
         stomp_down |= bit;
         stomp_held &= (uint16_t)~bit;
 
-        on = pedal_mode_get(index);
+        // A single-program switch acts as momentary whatever its mode: lit while held,
+        // its program sent on the press and nothing on the release.
+        on = prog_single(index) ? PM_MOMENTARY : pedal_mode_get(index);
 
         if (on >= PM_MOMENTARY)
         {
