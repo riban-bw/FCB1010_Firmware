@@ -77,7 +77,31 @@ const TEXT_ER = 1, TEXT_LO = 2, TEXT_HI = 3;   // hw.text is HAL_TEXT_* + 1
 await fcb.ready;
 
 console.log("emulator: power-on and idle");
-wait(1500);
+// Power-on: every LED lit at once (no blinking) while "riban" scrolls once (no version),
+// then run mode with program 0.
+// Times from config.h; the scan starts after STARTUP_TICKS of settling.
+const cfgMs = (k) => Number(cfgText.match(new RegExp("#define " + k + "\\s+(\\d+)"))[1]);
+const BOOT_SHOW = cfgMs("VERSION_SHOW_MS"), BOOT_SETTLE = cfgMs("STARTUP_TICKS") * cfgMs("TICK_MS");
+// The "riban" frames as hw.text values (HAL_TEXT_SCROLL + 1 onwards), and what the page
+// draws for each: " r" = 2 segments, "ri" 3, "ib" 6, "ba" 11, "an" 9, "n " 3.
+const SCROLL = [" r", "ri", "ib", "ba", "an", "n "], SCROLL_TEXT = SCROLL.map((w, i) => 4 + i);
+const SCROLL_SEGS = [2, 3, 6, 11, 9, 3];
+const litSegs = () => (sandbox.document.getElementById("display").innerHTML.match(/var\(--seg-on\)/g) || []).length;
+// Sampled every 8 ms (wait() runs in 8 ms steps) until it ends: frames in order, LEDs lit.
+const bootFrames = [], bootLamps = new Set(), bootSegs = new Set();
+for (let t = 0; t < BOOT_SETTLE + BOOT_SHOW * 3 - 48; t += 8) {
+  wait(8);
+  if (fcb.hw.text) bootLamps.add(fcb.hw.lamp);
+  if (fcb.hw.text && bootFrames[bootFrames.length - 1] !== fcb.hw.text) bootFrames.push(fcb.hw.text);
+  if (fcb.hw.text) bootSegs.add(fcb.hw.text + ":" + litSegs());
+}
+check("at power-on \"riban\" scrolls: " + SCROLL.map((w) => '"' + w + '"').join(", "), bootFrames, SCROLL_TEXT);
+check("drawn with the right segments", [...bootSegs], SCROLL_TEXT.map((t, i) => t + ":" + SCROLL_SEGS[i]));
+check("every LED lit throughout (no blinking), no version shown", [[...bootLamps], fcb.hw.hex], [[3], -1]);
+wait(100);
+check("then run mode: normal LEDs, no dots, program 0", [fcb.hw.lamp, fcb.hw.hex, fcb.hw.text, fcb.hw.dots, fcb.hw.display, fcb.state().mode], [0, -1, 0, 0, 0, 0]);
+wait(BOOT_SHOW * 4);
+check("and it does not repeat", [fcb.hw.lamp, fcb.hw.hex], [0, -1]);
 check("nothing sent while idle", sent(), []);
 
 console.log("emulator: stomp switches (default mode " + DEF_MODE + ")");
@@ -209,19 +233,20 @@ fcb.setRaw(255, 255); wait(100); fcb.setRaw(128, 255); wait(100);
 check("moving pedal A sets relay 1's trigger value, shown, EXP 1 lit", [fcb.state().swThr[0] > 0, fcb.hw.display === fcb.state().swThr[0], fcb.hw.aux[2]], [true, true, 1]);
 press(UP, 100);
 check("page 6 lights SWITCH 2", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.leds[3]], [5, 0, 1, 0]);
-// Page 7: lamp test (everything lit, then dark, 3 times), then the version from version.h.
+// Page 7: every LED lit at once while "riban" scrolls, then the version from version.h,
+// repeating.
 const verText = readFileSync(new URL("../src/version.h", import.meta.url), "utf8");
 // Major and minor from version.h, the build number from version_build.inc.
 const verText2 = verText + readFileSync(new URL("../src/version_build.inc", import.meta.url), "utf8");
 const VER = ["MAJOR", "MINOR", "BUILD"].map((k) => Number(verText2.match(new RegExp("#define FW_VERSION_" + k + " (0x[0-9A-Fa-f]+)"))[1]));
 fcb.down(UP); wait(60); fcb.up(UP); wait(40);
-check("UP goes to page 7: everything lit (lamp test)", [fcb.state().cfgPage, fcb.hw.lamp], [6, 1]);
-wait(250);
-check("then dark", fcb.hw.lamp, 2);
-// Page 7 opened at most 40 ms ago; the blinks end at 1.5 s, so check at about 1.6 s.
-wait(1350);
-check("after three blinks every LED stays lit, the display shows normally", fcb.hw.lamp, 3);
-check("major version with a trailing dot", [fcb.hw.hex, fcb.hw.dots], [VER[0], 1]);
+check("UP goes to page 7: every LED lit at once, \"riban\" starts", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text], [6, 4, SCROLL_TEXT[0]]);
+// Page 7 opened at most 40 ms ago; each frame is half a version part's time.
+const pageFrames = [];
+for (let t = 0; t < BOOT_SHOW * 3 - 104; t += 8) { wait(8); if (fcb.hw.text && pageFrames[pageFrames.length - 1] !== fcb.hw.text) pageFrames.push(fcb.hw.text); }
+check("the scroll runs through every frame", pageFrames, SCROLL_TEXT);
+wait(560);
+check("major version with a trailing dot", [fcb.hw.hex, fcb.hw.dots, fcb.hw.lamp], [VER[0], 1, 4]);
 wait(1000);
 check("then minor with leading and trailing dots", [fcb.hw.hex, fcb.hw.dots], [VER[1], 5]);
 wait(1000);
@@ -233,14 +258,42 @@ check("the display draws it (segments lit)", litNow(), SEGS[VER[2] >> 4] + SEGS[
 check("and sends nothing", sent(), []);
 // Then a blank display, LEDs still lit, before major again.
 wait(1000);
-check("then the display is blank (no dots), LEDs still lit", [fcb.hw.hex, fcb.hw.blank, fcb.hw.dots, fcb.hw.lamp, litNow()], [-1, 7, 0, 3, 0]);
+check("then the display is blank (no dots), LEDs still lit", [fcb.hw.hex, fcb.hw.blank, fcb.hw.dots, fcb.hw.lamp, litNow()], [-1, 7, 0, 4, 0]);
 wait(1000);
+check("then the scroll again", [fcb.hw.text, fcb.hw.dots], [SCROLL_TEXT[0], 0]);
+wait(BOOT_SHOW * 3);
 check("then major again", [fcb.hw.hex, fcb.hw.dots], [VER[0], 1]);
+// It keeps repeating while the page is open, the LEDs lit all along.
+// Over two more cycles every part (and the blank, -1) shows again.
+// The drawn footswitch LEDs: at most one dark at a time, switches 1 to 10 in turn.
+const darkNow = () => [...Array(10).keys()].filter((i) => !sandbox.document.getElementById("led" + i).classList.contains("on"));
+const pageLamps = new Set(), pageParts = new Set(), darkSeq = [];
+let darkMax = 0;
+for (let t = 0; t < 14000; t += 8) {
+  wait(8); pageLamps.add(fcb.hw.lamp); pageParts.add(fcb.hw.hex);
+  const d = darkNow(); darkMax = Math.max(darkMax, d.length);
+  if (d.length && darkSeq[darkSeq.length - 1] !== d[0]) darkSeq.push(d[0]);
+}
+check("and keeps repeating with every LED lit", [[...pageParts].sort((x, y) => x - y), [...pageLamps]], [[-1, ...new Set(VER)].sort((x, y) => x - y), [4]]);
+check("each step blinks its footswitch LED, 1 to 10 in turn (one at a time)",
+  [darkMax, new Set(darkSeq).size, darkSeq.every((v, i) => i === 0 || v === (darkSeq[i - 1] + 1) % 10)], [1, 10, true]);
 // Settings were changed on the earlier pages, so the drawn CONFIG LED flashes on page 7
 // while the other LEDs stay lit.
 const drawnOver = (id, ms) => { const seen = new Set(); for (let t = 0; t < ms; t += 10) { wait(10); seen.add(sandbox.document.getElementById(id).classList.contains("on")); } return [...seen].sort(); };
-check("with unsaved changes the CONFIG LED flashes on page 7", [fcb.hw.lamp, drawnOver("ledCfg", CFG_FLASH_MS * 3)], [3, [false, true]]);
+check("with unsaved changes the CONFIG LED flashes on page 7", [fcb.hw.lamp, drawnOver("ledCfg", CFG_FLASH_MS * 3)], [4, [false, true]]);
 check("while the other LEDs stay lit", drawnOver("ledChan", CFG_FLASH_MS * 3), [true]);
+// Footswitch 8 held: the minor version stays, LED 8 dark; released, it carries on.
+fcb.down(8); wait(60);
+check("holding footswitch 8 shows the minor version, its LED dark", [fcb.hw.hex, fcb.hw.dots, darkNow()], [VER[1], 5, [7]]);
+wait(BOOT_SHOW * 9);
+check("and keeps it while held", [fcb.hw.hex, fcb.hw.dots, darkNow()], [VER[1], 5, [7]]);
+fcb.up(8); wait(BOOT_SHOW + 600);
+check("released: it carries on to the build (its LED lit again after its flash)", [fcb.hw.hex, fcb.hw.dots, darkNow()], [VER[2], 4, []]);
+fcb.down(0); wait(60);
+check("footswitch 1 shows \" r\", its LED dark", [fcb.hw.text, fcb.hw.dots, darkNow()], [SCROLL_TEXT[0], 0, [0]]);
+fcb.up(0); wait(BOOT_SHOW / 2 + 100);
+check("then \"ri\"", fcb.hw.text, SCROLL_TEXT[1]);
+check("and nothing is sent", sent(), []);
 press(UP, 100);
 check("UP on page 7 stays on page 7 (no wrap)", fcb.state().cfgPage, 6);
 press(DOWN, 100);

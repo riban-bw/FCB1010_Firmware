@@ -18,6 +18,10 @@ Everything uses one MIDI channel, 1 by default and changeable in configuration m
 
 Default stomp CCs are 21 to 30 for switches 1 to 10. Edit `STOMP_CC_LIST` to change them.
 
+## Power-on
+
+At power-on every LED lights and stays lit while "riban" scrolls across the display once (` r`, `ri`, `ib`, `ba`, `an`, `n `, half a second each). Then the pedal goes to run mode and the display shows the program number. Pressing any switch ends this early, and the press then works as usual. Configuration page 7 starts with the same scroll and then shows the firmware version (see below).
+
 ## Pedal modes
 
 Each footswitch has one of four modes, set in configuration mode (default: stomp, `DEFAULT_PEDAL_MODE`).
@@ -73,7 +77,7 @@ Requires SDCC 4.x, `make` (and `gcc` for the host tests) (`apt install sdcc make
 
 ```
 make              # build/fcb1010_32k.bin and build/fcb1010_64k_mirrored.bin, and the emulator page
-make test         # 1117 logic checks on this computer
+make test         # 6179 logic checks on this computer
 make check        # every test suite, without bumping the build number
 make emulator     # update emulator/index.html and run its checks (needs clang and Node)
 test/sim_smoke.sh # runs the real image in the uCsim 8051 simulator (apt install sdcc-ucsim)
@@ -81,7 +85,7 @@ test/sim_smoke.sh # runs the real image in the uCsim 8051 simulator (apt install
 
 Each `make` that rebuilds the firmware image increments the build number in `src/version_build.inc`; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone. If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 9.0 KB (9168 bytes at the last build), so it needs a 16 KB or larger chip; the 32 KB image suits a 27C256 / 28C256. Unused space is filled with 0xFF. Each build checks the size against the 32 KB ROM (the build fails if it does not fit) and updates the figure in this paragraph.
+The code is about 9.3 KB (9521 bytes at the last build), so it needs a 16 KB or larger chip; the 32 KB image suits a 27C256 / 28C256. Unused space is filled with 0xFF. Each build checks the size against the 32 KB ROM (the build fails if it does not fit) and updates the figure in this paragraph.
 
 ## Flashing to an EEPROM
 
@@ -115,7 +119,7 @@ UP and DOWN on their own move to the next or previous page. Hold UP (ENTER) for 
 | 4. Toe calibration | EXP 1 and EXP 2 | `Hi`, then `0` once the reading is taken, or `Er` | Put both pedals at the toe and press any footswitch. `Er` indicates there was insufficient difference between low and high readings. You may set low and high opposite to give an inverted control value. |
 | 5. SWITCH 1 relay | SWITCH 1 | Blank or the trigger value of the pedal last moved | Press footswitches 1 to 10 to choose which ones the relay follows (their LEDs light). Tap UP + DOWN to follow CC 20 (DIRECT SELECT lights). Move a pedal to set the CC value at which the relay turns on; move it to the heel (0) to turn that trigger off (EXP 1 / EXP 2 light while a pedal trigger is set). Multiple triggers may be selected. |
 | 6. SWITCH 2 relay | SWITCH 2 | As page 5 | As page 5, for the SWITCH 2 relay. |
-| 7. Lamp test and version | All | All segments then firmware version | Every LED blinks 3 times, then every LED stays lit (the CONFIG LED keeps flashing if there are unsaved changes) while the firmware version shows in hex, one part per second, repeating: major with a trailing dot (`00.`), minor with leading and trailing dots (`.01.`), and build with a leading dot (`.07`). The display blanks briefly before repeating. Press any footswitch to run it again. Major and minor are set in `src/version.h`; the build number (`src/version_build.inc`) goes up by one each time `make` rebuilds the firmware image, and the build fills the version shown here with the one it built. The blink and display times are in `src/config.h` |
+| 7. Lamp test and version | All | Firmware version | Every LED lights at once and stays lit (the CONFIG LED keeps flashing if there are unsaved changes) while "riban" scrolls across the display (twice the version speed), then the firmware version shows in hex, one part per second, repeating: major with a trailing dot (`00.`), minor with leading and trailing dots (`.01.`), and build with a leading dot (`.07`). The display blanks briefly before the scroll repeats. That makes ten steps (six scroll frames, major, minor, build and the blank), one for each footswitch: during each step its footswitch LED goes dark briefly, then lights again, so the LEDs run from 1 to 10. Hold a footswitch to show its step (for example 8 for the minor version); let go and the sequence carries on from there. Major and minor are set in `src/version.h`; the build number (`src/version_build.inc`) goes up by one each time `make` rebuilds the firmware image, and the build fills the version shown here with the one it built. The display time is `VERSION_SHOW_MS` in `src/config.h` (each scroll frame is half of it) |
 
 If a pedal moved less than 40 counts between the heel and toe readings, page 4 shows `Er` and nothing changes; press a footswitch again to retake the toe reading. Page 4 on its own checks the toe against the current heel. A heel reading with no toe reading is discarded.
 

@@ -37,6 +37,8 @@ static uint8_t  blank;
 #define SHOWN_ER (-1)
 #define SHOWN_LO (-2)
 #define SHOWN_HI (-3)
+// Any hal_display_text(t), e.g. the "riban" frames HAL_TEXT_SCROLL + n.
+#define SHOWN_TEXT(t) (-1 - (int)(t))
 // hal_display_hex(v) is recorded as display = SHOWN_HEX(v); dots and the lamp test too.
 #define SHOWN_HEX(v) (0x1000 + (v))
 #define BOOT_LED (DEFAULT_PEDAL_MODE == 3)
@@ -216,6 +218,8 @@ static void reset_world(void)
     sw_stored_valid[0] = 0;
     sw_stored_valid[1] = 0;
     ctl_init();
+    // Skip the power-on animation (test_boot_animation covers it).
+    boot_end();
 }
 
 static void clear_log(void)
@@ -1431,7 +1435,7 @@ static void test_config_page_leds(void)
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_SW2 && aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 1);
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_VERSION && aux[HAL_LED_SWITCH_2] == 0 && lamp == HAL_LAMP_ALL_ON);
+    CHECK(cfg_page == PAGE_VERSION && aux[HAL_LED_SWITCH_2] == 0 && lamp == HAL_LAMP_LEDS_STOMPS);
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_VERSION);
     tap(CTL_KEY_DOWN);
@@ -1458,8 +1462,46 @@ static void test_config_page_leds(void)
     CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0 && display == 0);
 }
 
-// Page 7: every LED and segment blinks LAMP_TEST_BLINKS times, then the version shows as
-// "major." / ".minor." / ".build", VERSION_SHOW_MS each, repeating (no more blinks).
+// From the first step of page 7 or power-on: every tick of the "riban" scroll, each frame
+// (" r", "ri", "ib", "ba", "an", "n ") for VERSION_SHOW_MS / 2, no dots, every LED lit.
+// Returns with the scroll's time used up exactly.
+// Footswitch LEDs: every one lit except index off (-1: none).
+static int stomp_leds_but(int off)
+{
+    int k;
+
+    for (k = 0; k < STOMP_COUNT; k++)
+    {
+        if (leds[k] != (k != off))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+// On page 7 footswitch f's LED is dark for the first VER_FLASH_STEPS of frame f, then
+// lit with the rest; at power-on HAL_LAMP_LEDS_ON lights them all (not checked here).
+static void expect_scroll(void)
+{
+    int f, k, boot = boot_anim;
+
+    for (f = 0; f < HAL_TEXT_SCROLL_FRAMES; f++)
+    {
+        for (k = 0; k < VER_STEP_TICKS * VER_SCROLL_STEPS; k++)
+        {
+            CHECK(display == SHOWN_TEXT(HAL_TEXT_SCROLL + f) && dots == 0 && blank == 0 &&
+                  lamp == (boot ? HAL_LAMP_LEDS_ON : HAL_LAMP_LEDS_STOMPS) && midi_len == 0 &&
+                  (boot || stomp_leds_but((k < VER_STEP_TICKS * VER_FLASH_STEPS) ? f : -1)));
+            ticks(1);
+        }
+    }
+}
+
+// Page 7: every LED lights at once (no blinking) and stays lit while "riban" scrolls,
+// then the version shows as "major." / ".minor." / ".build", VERSION_SHOW_MS each, then a
+// blank, repeating from the scroll.
 static void test_config_version(void)
 {
     int k;
@@ -1475,52 +1517,60 @@ static void test_config_version(void)
     }
 
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_VERSION && status_led == 1);
-    CHECK(display == 0 && blank == 7 && dots == 0);
 
     for (k = 0; k < 7; k++)
     {
         CHECK(aux[k] == 0);
     }
 
-    for (k = 0; k < STOMP_COUNT; k++)
-    {
-        CHECK(leds[k] == 0);
-    }
+    // Footswitch LEDs lit except switch 1's, which flashes for the first segment.
+    CHECK(stomp_leds_but(0));
 
-    // Three blinks: on, off, on, off, on, off, one step each.
-    for (k = 0; k < VER_BLINK_STEPS; k++)
+    // At once: LEDs lit and the scroll, each frame half a version part's time.
+    CHECK(VER_STEP_TICKS * TICK_MS == 100 && VER_ITEM_STEPS * VER_STEP_TICKS * TICK_MS == VERSION_SHOW_MS);
+    CHECK(VER_SCROLL_STEPS * 2 == VER_ITEM_STEPS && HAL_TEXT_SCROLL_FRAMES == 6);
+    clear_log();
+    expect_scroll();
+    CHECK(lamp == HAL_LAMP_LEDS_STOMPS && display == SHOWN_HEX(fw_version[0]) && dots == 0x01);
+
+    for (k = 0; k < VER_STEP_TICKS * VER_ITEM_STEPS - 1; k++)
     {
-        CHECK(lamp == ((k & 1) ? HAL_LAMP_ALL_OFF : HAL_LAMP_ALL_ON));
-        ticks(VER_STEP_TICKS - 1);
-        CHECK(lamp == ((k & 1) ? HAL_LAMP_ALL_OFF : HAL_LAMP_ALL_ON));
         ticks(1);
+        CHECK(lamp == HAL_LAMP_LEDS_STOMPS && display == SHOWN_HEX(fw_version[0]) && dots == 0x01);
     }
 
-    CHECK(VER_BLINK_STEPS == 6 && VER_STEP_TICKS * TICK_MS == 250);
-    // The LEDs stay lit after the blinks.
-    CHECK(lamp == HAL_LAMP_LEDS_ON && display == SHOWN_HEX(fw_version[0]) && dots == 0x01);
-    ticks(VER_STEP_TICKS * VER_ITEM_STEPS - 1);
-    CHECK(display == SHOWN_HEX(fw_version[0]) && dots == 0x01);
     ticks(1);
     CHECK(display == SHOWN_HEX(fw_version[1]) && dots == 0x05);
     ticks(VER_STEP_TICKS * VER_ITEM_STEPS);
-    CHECK(display == SHOWN_HEX(fw_version[2]) && dots == 0x04 && lamp == HAL_LAMP_LEDS_ON);
+    CHECK(display == SHOWN_HEX(fw_version[2]) && dots == 0x04 && lamp == HAL_LAMP_LEDS_STOMPS);
     // Then a blank display (no dots, LEDs still lit) for one part's time, then major.
     ticks(VER_STEP_TICKS * VER_ITEM_STEPS);
-    CHECK(display == 0 && blank == 7 && dots == 0 && lamp == HAL_LAMP_LEDS_ON);
+    CHECK(display == 0 && blank == 7 && dots == 0 && lamp == HAL_LAMP_LEDS_STOMPS);
     ticks(VER_STEP_TICKS * VER_ITEM_STEPS - 1);
     CHECK(display == 0 && blank == 7 && dots == 0);
+    // Then the scroll again, then major.
     ticks(1);
-    CHECK(display == SHOWN_HEX(fw_version[0]) && dots == 0x01 && lamp == HAL_LAMP_LEDS_ON);
+    expect_scroll();
+    CHECK(display == SHOWN_HEX(fw_version[0]) && dots == 0x01 && lamp == HAL_LAMP_LEDS_STOMPS);
     CHECK(midi_len == 0);
 
     // UP on the last page does nothing; a footswitch runs it all again, sending nothing.
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_VERSION && display == SHOWN_HEX(fw_version[0]));
-    tap(3);
-    CHECK(lamp == HAL_LAMP_ALL_ON && dots == 0 && blank == 7 && leds[2] == 0 && midi_len == 0);
-    ticks(VER_STEP_TICKS);
-    CHECK(lamp == HAL_LAMP_ALL_OFF);
+    ticks(VER_STEP_TICKS * VER_ITEM_STEPS);
+    CHECK(display == SHOWN_HEX(fw_version[1]));
+    // Switch 1 goes back to the scroll's first frame (test_config_version_jump has more).
+    tap(sw_code(1));
+    CHECK(lamp == HAL_LAMP_LEDS_STOMPS && display == SHOWN_TEXT(HAL_TEXT_SCROLL) && dots == 0);
+    CHECK(stomp_leds_but(0) && midi_len == 0);
+    // It keeps repeating while the page is open, LEDs lit all the time.
+    for (k = 0; k < 3; k++)
+    {
+        ticks(VER_STEP_TICKS * VER_END_STEP);
+        CHECK(lamp == HAL_LAMP_LEDS_STOMPS && display == SHOWN_TEXT(HAL_TEXT_SCROLL) && dots == 0);
+    }
+    ticks(VER_STEP_TICKS * (VER_SCROLL_END + VER_ITEM_STEPS * 2));
+    CHECK(display == SHOWN_HEX(fw_version[2]) && lamp == HAL_LAMP_LEDS_STOMPS);
 
     // Pedals and a short UP + DOWN do nothing here.
     pedal(0, 10);
@@ -1537,7 +1587,7 @@ static void test_config_version(void)
 
     // Leaving from page 7 (long UP, or a long UP + DOWN) ends the lamp test and dots.
     tap(CTL_KEY_UP);
-    CHECK(lamp == HAL_LAMP_ALL_ON);
+    CHECK(lamp == HAL_LAMP_LEDS_STOMPS);
     save_exit();
     CHECK(mode == MODE_RUN && lamp == HAL_LAMP_NORMAL && dots == 0 && display == 0);
     ticks(VER_STEP_TICKS * 2);
@@ -1547,10 +1597,119 @@ static void test_config_version(void)
     {
         tap(CTL_KEY_UP);
     }
-    ticks(VER_STEP_TICKS * VER_BLINK_STEPS + 1);
+    ticks(VER_STEP_TICKS * VER_SCROLL_END + 1);
     CHECK(display == SHOWN_HEX(fw_version[0]) && dots == 0x01);
     chord_long();
     CHECK(mode == MODE_RUN && lamp == HAL_LAMP_NORMAL && dots == 0 && display == 0);
+}
+
+// Page 7's ten segments, one per footswitch: the scroll frames " r" to "n " (switches
+// 1-6), major, minor, build (7-9) and the blank (10). Each segment flashes its footswitch
+// LED dark then lit; pressing a footswitch shows its segment and holds it until release,
+// then it carries on from there. Nothing is sent and no setting changes.
+static void test_config_version_jump(void)
+{
+    int k;
+
+    printf("config: page 7 footswitch LEDs mark the segments; a footswitch holds its segment\n");
+    reset_world();
+    chord_long();
+
+    for (k = 0; k < 6; k++)
+    {
+        tap(CTL_KEY_UP);
+    }
+
+    clear_log();
+    CHECK(cfg_page == PAGE_VERSION && cfg_changed == 0 && stomp_leds_but(0));
+
+    // Each segment's LED: dark for VER_FLASH_STEPS from its start, then lit.
+    for (k = 0; k < STOMP_COUNT; k++)
+    {
+        int len = (k < HAL_TEXT_SCROLL_FRAMES) ? VER_SCROLL_STEPS : VER_ITEM_STEPS;
+
+        CHECK(stomp_leds_but(k));
+        ticks(VER_STEP_TICKS * VER_FLASH_STEPS - 1);
+        CHECK(stomp_leds_but(k));
+        ticks(1);
+        CHECK(stomp_leds_but(-1));
+        ticks(VER_STEP_TICKS * (len - VER_FLASH_STEPS));
+    }
+
+    CHECK(stomp_leds_but(0) && display == SHOWN_TEXT(HAL_TEXT_SCROLL));
+
+    // Switch 8 (minor) held: minor shows with its dots, LED 8 dark, for as long as it is
+    // down (two whole cycles here).
+    ticks(VER_STEP_TICKS * 3);
+    ctl_key_press(sw_code(8));
+    CHECK(display == SHOWN_HEX(fw_version[1]) && dots == 0x05 && stomp_leds_but(7) && ver_paused == 1);
+    ticks(VER_STEP_TICKS * VER_END_STEP * 2);
+    CHECK(display == SHOWN_HEX(fw_version[1]) && dots == 0x05 && stomp_leds_but(7));
+    CHECK(lamp == HAL_LAMP_LEDS_STOMPS && midi_len == 0);
+    // Released: it carries on from the start of that segment (LED lights after the flash).
+    ctl_key_release(sw_code(8));
+    CHECK(ver_paused == 0);
+    ticks(VER_STEP_TICKS * VER_FLASH_STEPS - 1);
+    CHECK(stomp_leds_but(7) && display == SHOWN_HEX(fw_version[1]));
+    ticks(1);
+    CHECK(stomp_leds_but(-1));
+    ticks(VER_STEP_TICKS * (VER_ITEM_STEPS - VER_FLASH_STEPS));
+    CHECK(display == SHOWN_HEX(fw_version[2]) && dots == 0x04 && stomp_leds_but(8));
+
+    // Switch 1 from the build: " r", no dots, LED 1 dark, the others lit again.
+    ctl_key_press(sw_code(1));
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_SCROLL) && dots == 0 && stomp_leds_but(0));
+    ticks(VER_STEP_TICKS * VER_END_STEP);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_SCROLL) && stomp_leds_but(0));
+    ctl_key_release(sw_code(1));
+    ticks(VER_STEP_TICKS * VER_SCROLL_STEPS);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_SCROLL + 1) && stomp_leds_but(1));
+
+    // Every switch shows its own segment.
+    for (k = 1; k <= STOMP_COUNT; k++)
+    {
+        ctl_key_press(sw_code(k));
+
+        if (k <= HAL_TEXT_SCROLL_FRAMES)
+        {
+            CHECK(display == SHOWN_TEXT(HAL_TEXT_SCROLL + k - 1) && dots == 0);
+        }
+        else if (k < STOMP_COUNT)
+        {
+            CHECK(display == SHOWN_HEX(fw_version[k - 7]) && dots == fw_version_dots[k - 7]);
+        }
+        else
+        {
+            CHECK(display == 0 && blank == 7 && dots == 0);
+        }
+
+        CHECK(stomp_leds_but(k - 1));
+        ctl_key_release(sw_code(k));
+    }
+
+    // After switch 10 (the blank), the scroll follows.
+    ticks(VER_STEP_TICKS * VER_ITEM_STEPS);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_SCROLL) && stomp_leds_but(0));
+    CHECK(midi_len == 0 && cfg_changed == 0 && mode == MODE_CONFIG && cfg_page == PAGE_VERSION);
+
+    // DOWN while a switch is held leaves page 7; the release then does nothing.
+    ctl_key_press(sw_code(5));
+    tap(CTL_KEY_DOWN);
+    CHECK(cfg_page == PAGE_SW2 && ver_paused == 0 && lamp == HAL_LAMP_NORMAL);
+    ctl_key_release(sw_code(5));
+    CHECK(cfg_page == PAGE_SW2 && sw_mask[1] == 0 && midi_len == 0);
+
+    // Leaving config mode while a switch is held: run mode works as usual afterwards.
+    tap(CTL_KEY_UP);
+    ctl_key_press(sw_code(2));
+    CHECK(ver_paused == 1);
+    cancel_exit();
+    CHECK(mode == MODE_RUN && lamp == HAL_LAMP_NORMAL);
+    ctl_key_release(sw_code(2));
+    set_mode(0, PM_STOMP);
+    clear_log();
+    tap(sw_code(1));
+    CHECK(midi_len == 3 && cc_number(0) == stomp_cc[0] && cc_value(0) == 127 && leds[0] == 1);
 }
 
 // A short UP + DOWN press in run mode toggles CHORD_CC (127, then 0) and the DIRECT
@@ -2188,6 +2347,59 @@ static void test_config_led_eeprom(void)
     cancel_exit();
 }
 
+// Power-on: every LED lights once and stays lit while "riban" scrolls once (no version),
+// then run mode with the program number. Nothing is sent. A key ends it early.
+static void test_boot_animation(void)
+{
+    printf("start-up: riban scroll, then run mode\n");
+    reset_world();
+    clear_log();
+    ctl_init();
+    CHECK(boot_anim == 1 && mode == MODE_RUN);
+    // Every frame for its full time, then (on the last tick of "n ") run mode.
+    expect_scroll();
+    // Then run mode (the version never shows): normal LEDs, no dots, program 0, steps
+    // back to their idle values.
+    CHECK(boot_anim == 0 && lamp == HAL_LAMP_NORMAL && dots == 0 && display == program + DISPLAY_PROGRAM_OFFSET);
+    CHECK(cal_step == CAL_DONE && chan_flash_ticks == 0 && mode == MODE_RUN && midi_len == 0);
+    ticks(VER_STEP_TICKS * VER_END_STEP);
+    CHECK(lamp == HAL_LAMP_NORMAL && display == program + DISPLAY_PROGRAM_OFFSET && midi_len == 0);
+
+    // A footswitch during the animation ends it and then works as usual.
+    reset_world();
+    set_mode(0, PM_STOMP);
+    ctl_init();
+    set_mode(0, PM_STOMP);
+    clear_log();
+    ticks(VER_STEP_TICKS * (VER_SCROLL_STEPS + 1));
+    CHECK(boot_anim == 1 && lamp == HAL_LAMP_LEDS_ON && display == SHOWN_TEXT(HAL_TEXT_SCROLL + 1));
+    tap(0);
+    CHECK(boot_anim == 0 && lamp == HAL_LAMP_NORMAL && dots == 0 && display == program + DISPLAY_PROGRAM_OFFSET);
+    CHECK(midi_len == 3 && cc_number(0) == stomp_cc[0] && cc_value(0) == 127 && leds[0] == 1);
+    ticks(VER_STEP_TICKS * VER_END_STEP);
+    CHECK(lamp == HAL_LAMP_NORMAL && midi_len == 3);
+
+    // UP during the animation: it ends, and the release steps the program as usual.
+    reset_world();
+    ctl_init();
+    clear_log();
+    ticks(VER_STEP_TICKS);
+    tap(CTL_KEY_UP);
+    CHECK(boot_anim == 0 && program == 1 && midi_len == 2 && display == 1 + DISPLAY_PROGRAM_OFFSET);
+
+    // MIDI IN during the animation sets the stomp state under it (shown afterwards).
+    reset_world();
+    set_mode(0, PM_STOMP);
+    ctl_init();
+    set_mode(0, PM_STOMP);
+    ctl_midi_in((uint8_t)(0xB0 | (MIDI_CHANNEL - 1)));
+    ctl_midi_in(stomp_cc[0]);
+    ctl_midi_in(127);
+    CHECK(boot_anim == 1 && leds[0] == 1 && lamp == HAL_LAMP_LEDS_ON);
+    ticks(VER_STEP_TICKS * VER_BOOT_END_STEP);
+    CHECK(boot_anim == 0 && lamp == HAL_LAMP_NORMAL && leds[0] == 1);
+}
+
 static void test_config_led_flash(void)
 {
     printf("config: CONFIG LED flashes after a change\n");
@@ -2279,8 +2491,7 @@ static void test_config_led_flash(void)
         tap(CTL_KEY_UP);
     }
     CHECK(cfg_page == PAGE_VERSION && cfg_changed == 1);
-    ticks(VER_STEP_TICKS * VER_BLINK_STEPS);
-    CHECK(lamp == HAL_LAMP_LEDS_ON && status_toggles(CFG_FLASH_TICKS * 4) == 4);
+    CHECK(lamp == HAL_LAMP_LEDS_STOMPS && status_toggles(CFG_FLASH_TICKS * 4) == 4);
     // Putting the change back elsewhere and returning: steady.
     for (k = 0; k < 6; k++)
     {
@@ -2293,8 +2504,7 @@ static void test_config_led_flash(void)
     {
         tap(CTL_KEY_UP);
     }
-    ticks(VER_STEP_TICKS * VER_BLINK_STEPS);
-    CHECK(cfg_page == PAGE_VERSION && lamp == HAL_LAMP_LEDS_ON && status_led == 1 && status_toggles(CFG_FLASH_TICKS * 4) == 0);
+    CHECK(cfg_page == PAGE_VERSION && lamp == HAL_LAMP_LEDS_STOMPS && status_led == 1 && status_toggles(CFG_FLASH_TICKS * 4) == 0);
     cancel_exit();
     }
 }
@@ -2359,6 +2569,7 @@ int main(void)
     test_config_modes();
     test_config_page_leds();
     test_config_version();
+    test_config_version_jump();
     test_chord_cc();
     test_config_calibration();
     test_relays();
@@ -2366,6 +2577,7 @@ int main(void)
     test_midi_in();
     test_exit_restores_leds();
     test_boot_inverted();
+    test_boot_animation();
     test_config_led_flash();
     test_config_led_eeprom();
     test_scaling();

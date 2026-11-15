@@ -318,11 +318,12 @@ check "ten stomp taps and CC 0x$CHORD at 127, no program change" \
       "$(messages "$TMP/s9.out")" \
       "$(SWITCHES="$CC1 $CC2 $CC3 $CC4 $CC5 $CC6 $CC7 $CC8 $CC9 $CC10" expect "$V1" "b0${CHORD}7f")"
 
-echo "scenario 10: config page 7 blinks every LED and segment, then shows the major version"
+echo "scenario 10: config page 7 lights every LED, scrolls riban, then shows the major version"
 # Into config mode, then six taps of row 2 (UP, plus switches 6-10, which only edit
-# settings on the way) reach page 7. 50 ms in, the lamp test has the segment latch
-# (0x1FF9) at 0x00 (all lit); about 2 s in, after the blinks, led_map (units, tens,
-# left) holds the major version with the dot after the units.
+# settings on the way) reach page 7.
+# About 0.1 s in, led_map (units, tens, left) holds the first "riban" frame " r" (no
+# dots); about 3.5 s in (after the 3 s scroll) the major version with the dot after
+# the units.
 LED_MAP=$((16#$(awk '/_led_map:/ {print $1}' build/hw.rst | head -1)))
 VER_EXPECT=$(python3 -I -c '
 import re
@@ -332,6 +333,8 @@ seg = [0xFC, 0x60, 0xDA, 0xF2, 0x66, 0xB6, 0xBE, 0xE0, 0xFE, 0xF6, 0xEE, 0x3E, 0
 units = (~seg[v & 15]) & 0xFE
 tens = ((~seg[v >> 4]) & 0xFE) | 1
 print("%02x %02x ff" % (units, tens))')
+# " r": units r (segments E G = 0x0A), tens blank, left blank; no dots.
+SCROLL_EXPECT="$(printf '%02x' $(( (~0x0A & 0xFE) | 1 ))) ff ff"
 {
     echo "set hardware port[1] 0x9f"; echo "step 800000"
     echo "set hardware port[1] 0xff"; echo "step 900000"
@@ -340,21 +343,25 @@ print("%02x %02x ff" % (units, tens))')
         echo "set hardware port[1] 0xbf"; echo "step 60000"
         echo "set hardware port[1] 0x9f"; echo "step 60000"
     done
-    echo "step 30000"
-    echo "dump xram 0x1ff9 0x1ff9 1"
-    echo "step 1150000"
+    echo "step 60000"
     # One byte per dump, so a row boundary between them cannot split the output.
+    for a in 0 1 2; do echo "dump iram $((LED_MAP + a)) $((LED_MAP + a)) 1"; done
+    echo "step 2000000"
     for a in 0 1 2; do echo "dump iram $((LED_MAP + a)) $((LED_MAP + a)) 1"; done
     echo "quit"
 } > "$TMP/s10.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s10.out" "$IHX" < "$TMP/s10.txt" > "$TMP/s10.console" 2>&1
-check "during the lamp test the segment latch is 0x00 (everything lit)" \
-      "$(grep -E '^0x1ff9 ' "$TMP/s10.console" | awk '{print $2}')" "00"
-check "after the blinks the display shows the major version (units, tens, left: $VER_EXPECT)" \
+# Each address is dumped twice: the first is the scroll, the last the major version.
+check "at once the display shows the first riban frame (units, tens, left: $SCROLL_EXPECT)" \
+      "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | head -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$SCROLL_EXPECT"
+check "after the scroll the display shows the major version (units, tens, left: $VER_EXPECT)" \
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | tail -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$VER_EXPECT"
 # The channel page taps changed the channel, so a change is unsaved: on page 7 LED rows 3
-# and 4 (commons 0x08, 0x10) stay fully lit (0x00), and in row 5 (0x20) everything is lit
+# and 4 (commons 0x08, 0x10) stay lit, and in row 5 (0x20) everything is lit
 # except the CONFIG bit (0x40), which flashes, so both levels are seen.
+# Rows 3 and 4 hold the footswitch LEDs, which blink one at a time (switches 4 and 5
+# are row 3's 0x80 / 0x40, the other eight all of row 4), so those rows show 0x00 or
+# one dark footswitch bit; any other aux LED dark in row 3 fails.
 # A second run to the same point, then about 1 s of latch samples (commons at 0x1FF8,
 # segments at 0x1FF9). s51 echoes queued input into its output, so the dump lines are
 # picked out by pattern, and kept apart from the checks above.
@@ -371,15 +378,16 @@ LAMP10=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s10b.console
     function sample(c, v) {
         if (v == "ff") return
         total++
-        if (c == "08" || c == "10") { if (v != "00") bad = 1 }
+        if (c == "08") { if (v != "00" && v != "40" && v != "80") bad = 1 }
+        if (c == "10") { if (v !~ /^(00|01|02|04|08|10|20|40|80)$/) bad = 1; else if (v != "00") blink = 1 }
         if (c == "20") { n++; if (v == "40") off = 1; else if (v == "00") on = 1; else bad = 1 }
     }
     $1 == "0x1ff8" && NF == 3 { sample($2, $3); com = ""; next }
     $1 == "0x1ff8" { com = $2; next }
     $1 == "0x1ff9" && com != "" { sample(com, $2); com = "" }
-    END { print (bad ? "bad" : "ok"), (total >= 200 ? "enough" : "few:" total + 0), (n >= 20 ? "many" : n + 0), on + 0, off + 0 }')
-check "page 7 with an unsaved change: LEDs lit, CONFIG flashing (state, samples, row-5 samples, seen lit, seen dark)" \
-      "$LAMP10" "ok enough many 1 1"
+    END { print (bad ? "bad" : "ok"), (total >= 200 ? "enough" : "few:" total + 0), (n >= 20 ? "many" : n + 0), on + 0, off + 0, blink + 0 }')
+check "page 7 with an unsaved change: LEDs lit, CONFIG flashing, a footswitch LED blinking (state, samples, row-5 samples, CONFIG lit, CONFIG dark, footswitch dark)" \
+      "$LAMP10" "ok enough many 1 1 1"
 # The entry chord taps all ten stomps in run mode (their CCs); page changes send no program.
 check "no program change was sent" "$(messages "$TMP/s10.out" | tr ' ' '\n' | grep -c '^c')" "0"
 
@@ -418,6 +426,35 @@ else
     echo "  FAIL program change after a 5 s UP hold: got '$PC11', expected one in $LO11-$HI11"
     fail=1
 fi
+
+echo "scenario 12: power-on: every LED lit while riban scrolls, then run mode on its own"
+# No keys. About 0.5 s in (during the scroll) LED row 3 (common
+# 0x08: MIDI CHAN, MIDI FUNCTION, EXP and SWITCH LEDs) is fully lit (0x00); well after the
+# animation (about 10 s) it is back to the normal LEDs, none of which are lit in run mode
+# here, so it is never 0x00 (dark is 0xff). During the animation 0xff samples are the ISR
+# blanking the row, so they are skipped there.
+{
+    # 1300 steps is just over one 2 ms scan tick, so the samples walk through the rows.
+    echo "set hardware port[1] 0x9f"; echo "step 300000"
+    for i in $(seq 60); do echo "step 1300"; echo "dump xram 0x1ff8 0x1ff9 2"; done
+    echo "step 6700000"
+    for i in $(seq 60); do echo "step 1300"; echo "dump xram 0x1ff8 0x1ff9 2"; done
+    echo "quit"
+} > "$TMP/s12.txt"
+s51 -t 80C32 -X 12M -S out="$TMP/s12.out" "$IHX" < "$TMP/s12.txt" > "$TMP/s12.console" 2>&1
+# Samples in order; the first 60 dumps are during the animation, the rest after it.
+BOOT12=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s12.console" | awk '
+    function sample(c, v) {
+        k++
+        if (c != "08") return
+        if (k <= 60) { if (v == "ff") return; during++; if (v != "00") dbad = 1 } else { after++; if (v == "00") abad = 1 }
+    }
+    $1 == "0x1ff8" && NF == 3 { sample($2, $3); com = ""; next }
+    $1 == "0x1ff8" { com = $2; next }
+    $1 == "0x1ff9" && com != "" { sample(com, $2); com = "" }
+    END { print (during >= 3 ? "seen" : "few:" during + 0), (dbad ? "not-lit" : "lit"), (after >= 3 ? "seen" : "few:" after + 0), (abad ? "still-lit" : "normal") }')
+check "LED row 3 lit during the animation, normal afterwards (samples, state, samples, state)" "$BOOT12" "seen lit seen normal"
+check "nothing sent at power-on" "$(messages "$TMP/s12.out")" ""
 
 if [ "$fail" -eq 0 ]; then
     echo "simulator smoke tests passed"

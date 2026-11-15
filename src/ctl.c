@@ -106,16 +106,29 @@ static const CODE uint8_t fw_version_dots[3]    = { 0x01, 0x05, 0x04 };
 #error CONFIG_CHANGED_FLASH_MS is out of range
 #endif
 
-// Page 7 runs in steps of LAMP_TEST_BLINK_MS: LAMP_TEST_BLINKS on / off pairs, then
-// VER_ITEM_STEPS steps for each of major, minor, build and a blank display, then major again.
-#define VER_STEP_TICKS       (LAMP_TEST_BLINK_MS / TICK_MS)
-#define VER_BLINK_STEPS      (LAMP_TEST_BLINKS * 2)
-#define VER_ITEM_STEPS       (VERSION_SHOW_MS / LAMP_TEST_BLINK_MS)
-#define VER_END_STEP         (VER_BLINK_STEPS + 4 * VER_ITEM_STEPS)
+// Page 7 runs in 100 ms steps: the "riban" scroll (HAL_TEXT_SCROLL_FRAMES frames of
+// VER_SCROLL_STEPS, twice the version speed), then VER_ITEM_STEPS steps for each of major,
+// minor, build and a blank display, then the scroll again. Every LED is lit throughout.
+#define VER_STEP_MS          100
+#define VER_STEP_TICKS       (VER_STEP_MS / TICK_MS)
+#define VER_ITEM_STEPS       (VERSION_SHOW_MS / VER_STEP_MS)
+#define VER_SCROLL_STEPS     (VER_ITEM_STEPS / 2)
+#define VER_SCROLL_END       (HAL_TEXT_SCROLL_FRAMES * VER_SCROLL_STEPS)
+#define VER_END_STEP         (VER_SCROLL_END + 4 * VER_ITEM_STEPS)
+// At power-on only the scroll runs, once, then run mode.
+#define VER_BOOT_END_STEP    VER_SCROLL_END
+// Page 7 has one segment per footswitch: the six scroll frames, then major, minor, build
+// and the blank. Footswitch N's LED is dark for the first VER_FLASH_STEPS of segment N.
+#define VER_SEGMENTS         (HAL_TEXT_SCROLL_FRAMES + 4)
+#define VER_FLASH_STEPS      ((VER_SCROLL_STEPS + 1) / 2)
 
-#if VER_STEP_TICKS < 1 || VER_STEP_TICKS > 255 || VER_ITEM_STEPS < 1 || \
-    VERSION_SHOW_MS % LAMP_TEST_BLINK_MS != 0 || VER_END_STEP > 255
-#error LAMP_TEST_BLINK_MS, LAMP_TEST_BLINKS or VERSION_SHOW_MS is out of range
+#if VER_SEGMENTS != STOMP_COUNT
+#error page 7 needs one segment per footswitch
+#endif
+
+#if VER_STEP_TICKS < 1 || VER_STEP_TICKS > 255 || VER_SCROLL_STEPS < 1 || \
+    VERSION_SHOW_MS % (2 * VER_STEP_MS) != 0 || VER_END_STEP > 255
+#error VERSION_SHOW_MS is out of range (a multiple of 200, at most 3600)
 #endif
 
 #if REPEAT_DELAY_TICKS < 1 || REPEAT_PERIOD_TICKS < 1 || CHORD_TICKS < 1
@@ -205,6 +218,10 @@ static IDATA uint8_t  rx_flash;
 // the LED is in its dark half. The flash timer reuses rx_flash, which is run mode only.
 static BIT_T          cfg_changed;
 static BIT_T          cfg_led_dark;
+// The power-on lamp test and version are running (run mode; uses ver_step / ver_ticks).
+static BIT_T          boot_anim;
+// Page 7 is held on one segment while its footswitch is down.
+static BIT_T          ver_paused;
 #define cfg_flash_ticks rx_flash
 // 1 if every setting matches what the EEPROM holds, read back the way load_settings()
 // takes it (a record that is missing or invalid counts as the defaults; a stored
@@ -421,25 +438,59 @@ static void show_cal_step(void)
     }
 }
 
-// Page 7, the current step: lamp test on / off, or the version part that starts at
-// this step (other steps leave the display as it is).
+// Page 7 (and power-on), the current step: every LED lit, and the "riban" frame or
+// version part that starts at this step (other steps leave the display as it is).
 static void version_show(void)
 {
     uint8_t s = ver_step;
+    uint8_t g;
 
-    if (s < VER_BLINK_STEPS)
+    // Every LED stays lit throughout; on page 7 the footswitch LEDs mark the segments.
+    hal_lamp_test(boot_anim ? HAL_LAMP_LEDS_ON : HAL_LAMP_LEDS_STOMPS);
+
+    // g = the segment (0-9), s = the step within it.
+    if (s < VER_SCROLL_END)
     {
-        hal_lamp_test((s & 1) ? HAL_LAMP_ALL_OFF : HAL_LAMP_ALL_ON);
+        g = (uint8_t)(s / VER_SCROLL_STEPS);
+        s = (uint8_t)(s % VER_SCROLL_STEPS);
+    }
+    else
+    {
+        s = (uint8_t)(s - VER_SCROLL_END);
+        g = (uint8_t)(HAL_TEXT_SCROLL_FRAMES + s / VER_ITEM_STEPS);
+        s = (uint8_t)(s % VER_ITEM_STEPS);
+    }
+
+    // Page 7 (not power-on): segment g's footswitch LED goes dark at its start (the one
+    // before lights again), then lights after VER_FLASH_STEPS.
+    if (!boot_anim)
+    {
+        if (s == 0)
+        {
+            hal_stomp_led((uint8_t)((g == 0) ? VER_SEGMENTS - 1 : g - 1), 1);
+            hal_stomp_led(g, 0);
+        }
+        else if (s == VER_FLASH_STEPS)
+        {
+            hal_stomp_led(g, 1);
+        }
+    }
+
+    if (s != 0)
+    {
         return;
     }
 
-    // After the blinks every LED stays lit while the version shows.
-    hal_lamp_test(HAL_LAMP_LEDS_ON);
-    s = (uint8_t)(s - VER_BLINK_STEPS);
-
-    if (s % VER_ITEM_STEPS == 0)
+    // First the scroll, no dots.
+    if (g < HAL_TEXT_SCROLL_FRAMES)
     {
-        s = (uint8_t)(s / VER_ITEM_STEPS);
+        hal_display_dots(0);
+        hal_display_text((uint8_t)(HAL_TEXT_SCROLL + g));
+        return;
+    }
+
+    {
+        s = (uint8_t)(g - HAL_TEXT_SCROLL_FRAMES);
 
         // Step 3 is the blank between build and the major
         if (s == 3)
@@ -456,9 +507,45 @@ static void version_show(void)
     }
 }
 
+// End the power-on lamp test and version: normal LEDs, no dots, the program number.
+// ver_step / ver_ticks go back to their idle values (cal_step / chan_flash_ticks).
+static void boot_end(void)
+{
+    boot_anim = 0;
+    ver_step  = CAL_DONE;
+    ver_ticks = 0;
+    hal_lamp_test(HAL_LAMP_NORMAL);
+    hal_display_dots(0);
+    show_program();
+}
+
+// Page 7: footswitch index (0-9) jumps to its segment, held there until released.
+// Every footswitch LED lights; version_show then darkens this one.
+static void version_jump(uint8_t index)
+{
+    uint8_t i;
+
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        hal_stomp_led(i, 1);
+    }
+
+    ver_step   = (uint8_t)((index < HAL_TEXT_SCROLL_FRAMES) ? index * VER_SCROLL_STEPS :
+                           VER_SCROLL_END + (index - HAL_TEXT_SCROLL_FRAMES) * VER_ITEM_STEPS);
+    ver_ticks  = VER_STEP_TICKS;
+    ver_paused = 1;
+    version_show();
+}
+
 // Every scan tick on page 7: move to the next step, looping over the version parts
 static void version_tick(void)
 {
+    // Held by a footswitch: no steps until it is released.
+    if (ver_paused)
+    {
+        return;
+    }
+
     if (--ver_ticks != 0)
     {
         return;
@@ -467,9 +554,16 @@ static void version_tick(void)
     ver_ticks = VER_STEP_TICKS;
     ver_step++;
 
+    // At power-on, stop after the build number and go to run mode.
+    if (boot_anim && ver_step >= VER_BOOT_END_STEP)
+    {
+        boot_end();
+        return;
+    }
+
     if (ver_step >= VER_END_STEP)
     {
-        ver_step = VER_BLINK_STEPS;
+        ver_step = 0;
     }
 
     version_show();
@@ -486,7 +580,7 @@ static void config_show(void)
     hal_aux_led(HAL_LED_SWITCH_2, cfg_page == PAGE_SW2);
 
     // Page 7: no page LED (everything blinks); stomp LEDs off, display blank under the
-    // lamp test, then the version.
+    // version, with every LED lit.
     if (cfg_page == PAGE_VERSION)
     {
         hal_aux_led(HAL_LED_MIDI_CHAN, 0);
@@ -495,9 +589,10 @@ static void config_show(void)
         hal_aux_led(HAL_LED_EXP_2, 0);
         hal_aux_led(HAL_LED_DIRECT_SELECT, 0);
 
+        // Footswitch LEDs lit; the first segment's (switch 1) then goes dark.
         for (i = 0; i < STOMP_COUNT; i++)
         {
-            hal_stomp_led(i, 0);
+            hal_stomp_led(i, 1);
         }
 
         hal_display(0);
@@ -562,6 +657,7 @@ static void config_goto_page(uint8_t page)
 {
     cfg_page = page;
     chan_digit_pending = 0;
+    ver_paused = 0;
     // Leaving page 7 (or restarting it): normal LEDs again and no dots.
     hal_lamp_test(HAL_LAMP_NORMAL);
     hal_display_dots(0);
@@ -580,7 +676,7 @@ static void config_goto_page(uint8_t page)
     {
         resync_pedals();
     }
-    // Page 7 starts with the first lamp test step.
+    // Page 7 starts with the "riban" scroll.
     else if (page == PAGE_VERSION)
     {
         ver_step  = 0;
@@ -1170,6 +1266,13 @@ void ctl_init(void)
     hal_aux_led(HAL_LED_SWITCH_2, 0);
     hal_relays(0);
     show_program();
+
+    // Power-on: every LED lit while "riban" scrolls once (as page 7 starts), then run
+    // mode. A key press ends it early and then acts as usual.
+    boot_anim = 1;
+    ver_step  = 0;
+    ver_ticks = VER_STEP_TICKS;
+    version_show();
 }
 
 // Stomp number 0..9 for a key code, or 0xFF for UP / DOWN / invalid codes.
@@ -1283,6 +1386,13 @@ void ctl_key_release(uint8_t code)
         return;
     }
 
+    // Page 7: a footswitch release carries on from the segment it held.
+    if (ver_paused && mode == MODE_CONFIG)
+    {
+        ver_paused = 0;
+        return;
+    }
+
     bit = (uint16_t)((uint16_t)1 << index);
 
     if ((stomp_down & bit) == 0)
@@ -1325,6 +1435,12 @@ void ctl_key_press(uint8_t code)
         return;
     }
 
+    // Any key ends the power-on animation, then is handled as usual.
+    if (boot_anim)
+    {
+        boot_end();
+    }
+
     // UP / DOWN: Nothing happens on press. The key is tracked so that its release (or the
     // auto-repeat timer) can act, and so that pressing both can be told from pressing one.
     if (code == CTL_KEY_UP || code == CTL_KEY_DOWN)
@@ -1354,10 +1470,10 @@ void ctl_key_press(uint8_t code)
             config_changed();
             hal_stomp_led(index, (sw_mask[cfg_page - PAGE_SW1] & bit) ? 1 : 0);
         }
-        // Page 7: any footswitch runs the lamp test and version again.
+        // Page 7: a footswitch shows its segment and holds it until released.
         else if (cfg_page == PAGE_VERSION)
         {
-            config_goto_page(PAGE_VERSION);
+            version_jump(stomp_index(code));
         }
         else
         {
@@ -1646,7 +1762,7 @@ void ctl_tick(void)
         channel_digit_tick();
     }
 
-    if (mode == MODE_CONFIG && cfg_page == PAGE_VERSION)
+    if (boot_anim || (mode == MODE_CONFIG && cfg_page == PAGE_VERSION))
     {
         version_tick();
     }

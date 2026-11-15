@@ -1,0 +1,53 @@
+# Build and test the firmware on every push and pull request.
+# Runs in Debian 12 (bookworm), the same system as the development machine, so the
+# compilers match (SDCC 4.2.0, clang 14) and the images should be identical to a local build.
+# The build number is never bumped here (make check builds with BUILD_BUMP=0), so the
+# images carry the number that was committed. Nothing is committed back.
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: debian:bookworm
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git make gcc python3 sdcc sdcc-ucsim clang lld nodejs
+
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # The README's version and config.h numbers are filled in by the build. If they
+      # differ from what was committed, the commit was made without running make first.
+      # (The size sentence is left out: it is checked by the build itself.)
+      - name: README matches config.h and version.h
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          python3 -I tools/readme_version.py src/version.h src/version_build.inc README.md
+          python3 -I tools/readme_config.py src/config.h README.md
+          if ! git diff --exit-code README.md; then
+            echo "::error file=README.md::README.md is out of date with src/config.h or the version: run make and commit README.md"
+            exit 1
+          fi
+
+      # Firmware images, host tests, emulator (WebAssembly build and smoke test) and the
+      # uCsim simulator scenarios.
+      - name: Build and run every test
+        run: make check
+
+      - name: Firmware images
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcb1010-firmware
+          path: |
+            build/fcb1010_32k.bin
+            build/fcb1010_64k_mirrored.bin
+            build/fcb1010.mem
+          if-no-files-found: error

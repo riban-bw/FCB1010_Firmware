@@ -46,6 +46,12 @@ static const CODE uint8_t stomp_led_mask[10] = { 0x04, 0x02, 0x01, 0x80, 0x40,
 #define STATUS_LED_ROW  5
 #define STATUS_LED_MASK 0x40
 
+// Lamp test with every LED lit (rows 3-5): the led_map bits that still follow their
+// own state. HAL_LAMP_LEDS_ON keeps only CONFIG; HAL_LAMP_LEDS_STOMPS keeps the
+// footswitch LEDs too (row 3: switches 4 and 5; row 4: the other eight).
+static const CODE uint8_t lamp_keep_leds[3]   = { 0x00, 0x00, STATUS_LED_MASK };
+static const CODE uint8_t lamp_keep_stomps[3] = { 0xC0, 0xFF, STATUS_LED_MASK };
+
 // Segment bits: A=0x80 B=0x40 C=0x20 D=0x10 E=0x08 F=0x04 G=0x02
 // 0-9, then the hex letters A b C d E F for hal_display_hex.
 static const CODE uint8_t digit_segments[16] = {
@@ -147,7 +153,12 @@ void hal_display(uint8_t value)
 // Segment patterns for the HAL_TEXT_* words, tens then units, same bit order as
 // digit_segments: "Er" = E (A D E F G), r (E G); "Lo" = L (D E F), o (C D E G);
 // "Hi" = H (B C E F G), i (C).
-static const CODE uint8_t text_segments[6] = { 0x9E, 0x0A, 0x1C, 0x3A, 0x6E, 0x20 };
+// Then the "riban" frames: " r", "ri", "ib", "ba", "an", "n " (space = 0x00;
+// b = C D E F G, a = A B C D E G, n = C E G).
+static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
+    0x9E, 0x0A, 0x1C, 0x3A, 0x6E, 0x20,
+    0x00, 0x0A, 0x0A, 0x20, 0x20, 0x3E, 0x3E, 0xFA, 0xFA, 0x2A, 0x2A, 0x00
+};
 
 // One bit per display position (units first); a set bit turns that position off.
 void hal_display_blank(uint8_t mask)
@@ -198,7 +209,7 @@ void hal_display_text(uint8_t text)
 {
     uint8_t i;
 
-    if (text > HAL_TEXT_HI)
+    if (text >= HAL_TEXT_COUNT)
     {
         return;
     }
@@ -235,6 +246,7 @@ static volatile uint8_t relay_bits;
 static volatile BIT_T lamp_all_on;
 static volatile BIT_T lamp_all_off;
 static volatile BIT_T lamp_leds_on;
+static volatile BIT_T lamp_stomps;
 
 // Scans each key has been down since its debounced press (stops counting at the threshold).
 static IDATA uint8_t hold[KEY_COUNT];
@@ -260,9 +272,11 @@ void timer0_isr(void) __interrupt(1)
     // A cleared bit lights, so 0x00 lights the whole row and 0xFF darkens it
     PERIPHERALS[P_LATCH_SEGMENTS] = lamp_all_on ? 0x00 : (lamp_all_off ? 0xFF :
                                     ((lamp_leds_on && scan_row >= 3) ?
-                                     // Every LED lit except CONFIG, which keeps its
-                                     // own state (it flashes for unsaved changes).
-                                     ((scan_row == STATUS_LED_ROW) ? (led_map[STATUS_LED_ROW] & STATUS_LED_MASK) : 0x00) :
+                                     // Every LED lit except CONFIG (it flashes for
+                                     // unsaved changes) and, in HAL_LAMP_LEDS_STOMPS,
+                                     // the footswitch LEDs, which keep their own state.
+                                     (led_map[scan_row] & (lamp_stomps ? lamp_keep_stomps[scan_row - 3] :
+                                                                         lamp_keep_leds[scan_row - 3])) :
                                      led_map[scan_row]));
     PERIPHERALS[P_DUMMY_MUX]      = 0;
 
@@ -300,7 +314,8 @@ void hal_lamp_test(uint8_t how)
 {
     lamp_all_on  = (how == HAL_LAMP_ALL_ON);
     lamp_all_off = (how == HAL_LAMP_ALL_OFF);
-    lamp_leds_on = (how == HAL_LAMP_LEDS_ON);
+    lamp_leds_on = (how == HAL_LAMP_LEDS_ON || how == HAL_LAMP_LEDS_STOMPS);
+    lamp_stomps  = (how == HAL_LAMP_LEDS_STOMPS);
 }
 
 void hal_relays(uint8_t mask)

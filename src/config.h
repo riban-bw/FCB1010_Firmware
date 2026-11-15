@@ -12,7 +12,7 @@
 // 0 = stomp (toggle), 1 = stomp with momentary on a long press, 2 = momentary.
 // 3 = inverted momentary (0 while pressed, 127 on release).
 #ifndef DEFAULT_PEDAL_MODE
-#define DEFAULT_PEDAL_MODE 0
+#define DEFAULT_PEDAL_MODE 1
 #endif
 
 // Pressing UP and DOWN together for this long opens configuration mode.
@@ -36,12 +36,11 @@
 // Real-time bytes (clock, active sensing...) do not light it.
 #define MIDI_RX_FLASH_MS          60
 
-// Configuration page 7: every LED and display segment blinks LAMP_TEST_BLINKS times
-// (LAMP_TEST_BLINK_MS on, then the same off), then the firmware version shows, each
-// part for VERSION_SHOW_MS (a whole multiple of LAMP_TEST_BLINK_MS), then a blank display for
-// the same time, repeating.
-#define LAMP_TEST_BLINK_MS        250
-#define LAMP_TEST_BLINKS          3
+// Power-on and configuration page 7: every LED lights (once, and stays lit) while
+// "riban" scrolls across the display, one frame per VERSION_SHOW_MS / 2. Power-on then
+// goes to run mode. Page 7 then shows the firmware version, each part (major, minor,
+// build) for VERSION_SHOW_MS, then a blank display for the same time, and repeats.
+// VERSION_SHOW_MS must be a multiple of 200, at most 3600.
 #define VERSION_SHOW_MS           1000
 
 // Number of footswitches acting as stomp switches (switches 1..10).
@@ -63,7 +62,7 @@
 // UP / DOWN program change behaviour.
 // 1 = wrap around (127 -> 0, 0 -> 127), 0 = stop at the ends.
 #ifndef PROGRAM_WRAP
-#define PROGRAM_WRAP 0
+#define PROGRAM_WRAP 1
 #endif
 
 // Value added to the program number on the 7-segment display.

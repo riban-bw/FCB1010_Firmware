@@ -84,7 +84,6 @@ RULES = [
     (r"Switch 10 flashes `0` for ([\d.]+ seconds?)", [sec_words(num("CHANNEL_DIGIT_TIMEOUT_MS"))]),
     (r"After ([\d.]+ seconds?), or on a page change", [sec_words(num("CHANNEL_DIGIT_TIMEOUT_MS"))]),
     (r"moved less than (\d+) counts between the heel and toe", [num("CAL_MIN_SPAN")]),
-    (r"Every LED blinks (\d+) times", [num("LAMP_TEST_BLINKS")]),
     (r"shows in hex, one part (per second|every [\d.]+ seconds?)",
      ["per second" if show == 1000 else "every " + sec_words(show)]),
     (r"\(default: ([a-z ]+), `DEFAULT_PEDAL_MODE`\)", [modes[num("DEFAULT_PEDAL_MODE") & 3]]),

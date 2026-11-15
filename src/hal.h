@@ -45,6 +45,11 @@ void    hal_display(uint8_t value);
 #define HAL_TEXT_ER  0
 #define HAL_TEXT_LO  1
 #define HAL_TEXT_HI  2
+// "riban" scrolling across the two digits, one frame each: " r", "ri", "ib", "ba",
+// "an", "n " (HAL_TEXT_SCROLL + 0..HAL_TEXT_SCROLL_FRAMES - 1).
+#define HAL_TEXT_SCROLL         3
+#define HAL_TEXT_SCROLL_FRAMES  6
+#define HAL_TEXT_COUNT          (HAL_TEXT_SCROLL + HAL_TEXT_SCROLL_FRAMES)
 
 void    hal_display_text(uint8_t text);
 
@@ -63,6 +68,8 @@ void    hal_display_dots(uint8_t mask);
 #define HAL_LAMP_ALL_ON   1
 #define HAL_LAMP_ALL_OFF  2
 #define HAL_LAMP_LEDS_ON  3
+// As HAL_LAMP_LEDS_ON, but the footswitch LEDs also follow hal_stomp_led().
+#define HAL_LAMP_LEDS_STOMPS 4
 
 // Lamp test: light every LED and display segment, turn them all off, light every LED
 // but show the display normally, or go back to showing the normal LED and display
