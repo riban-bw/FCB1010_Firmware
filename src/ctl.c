@@ -985,18 +985,28 @@ static void exit_config(uint8_t save)
     {
         bit = (uint16_t)((uint16_t)1 << i);
 
+        // A switch whose mode changed goes to its new mode's resting state: on for
+        // inverted momentary, off for the others. If that changes its state the CC is
+        // sent (through the revert queue, so as soon as MIDI OUT has room, and the LED
+        // follows); if it is already there nothing is sent.
         if (cfg_dirty & bit)
         {
             if (pedal_mode_get(i) == PM_MOM_INV)
             {
-                stomp_state  |= bit;
-                stomp_prev   |= bit;
-                stomp_revert &= (uint16_t)~bit;
+                stomp_prev |= bit;
             }
-            else if (stomp_state & bit)
+            else
             {
                 stomp_prev &= (uint16_t)~bit;
+            }
+
+            if ((stomp_state ^ stomp_prev) & bit)
+            {
                 stomp_revert |= bit;
+            }
+            else
+            {
+                stomp_revert &= (uint16_t)~bit;
             }
         }
     }

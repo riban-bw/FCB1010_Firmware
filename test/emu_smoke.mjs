@@ -311,8 +311,9 @@ fcb.down(UP); fcb.down(DOWN); wait(1100); fcb.up(UP); fcb.up(DOWN); wait(200);
 check("re-entering after the save: CONFIG LED steady (settings match the EEPROM)", [fcb.state().mode, statusOver(CFG_FLASH_MS * 3)], [1, [1]]);
 longKey(DOWN);
 check("and a cancel leaves with nothing changed", [fcb.state().mode, fcb.hw.status], [0, 0]);
-// Switch 3 was cycled back to its mode; if that is inverted momentary (default 3), saving
-// asserts it (state on, LED lit) without sending a CC. No program change either way.
+// Switch 3 was cycled back to its mode, so saving puts it in that mode's resting state,
+// which it is already in (on for inverted momentary, from power-on; off otherwise): no CC
+// is sent. No program change either way.
 check("with nothing sent and no program change", [sent(), fcb.state().program], [[], p]);
 check("switch 3's LED after saving", fcb.hw.leds[2], DEF_MODE === 3 ? 1 : 0);
 check("the SWITCH 1 record was stored", JSON.parse(store["fcb1010-eeprom-v2"]).sw1.slice(0, 2), [8, 4]);

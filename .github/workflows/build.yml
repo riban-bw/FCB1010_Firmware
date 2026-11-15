@@ -47,7 +47,7 @@ jobs:
         with:
           name: fcb1010-firmware
           path: |
-            build/fcb1010_32k.bin
-            build/fcb1010_64k_mirrored.bin
+            build/fcb1010_27c512.bin
+            build/fcb1010_27c256.bin
             build/fcb1010.mem
           if-no-files-found: error

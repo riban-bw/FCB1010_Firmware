@@ -1211,8 +1211,9 @@ static void test_config_modes(void)
     CHECK(pedal_mode_get(8) == PM_STOMP && pedal_mode_get(9) == PM_STOMP && pedal_modes[2] == 0);
 
     // Changing a switch to inverted momentary asserts it on saving: its state is set and
-    // its LED lights, whether it was off (switch 2) or on (switch 3), but no CC is sent.
-    // Cancelling does not.
+    // its LED lights, whether it was off (switch 2) or on (switch 3). Like a change to
+    // any mode, the CC is sent only if the state changed: 127 for switch 2, nothing for
+    // switch 3 (already on). Cancelling does not.
     reset_world();
     set_mode(1, PM_MOMENTARY);
     set_mode(2, PM_STOMP);
@@ -1229,7 +1230,7 @@ static void test_config_modes(void)
     clear_log();
     save_exit();
     ticks(1);
-    CHECK(midi_len == 0);
+    CHECK(midi_len == 3 && cc_number(0) == stomp_cc[1] && cc_value(0) == 127);
     CHECK(leds[1] == 1 && leds[2] == 1 && (stomp_state & 6) == 6);
     clear_log();
     tap(1);
@@ -1271,7 +1272,7 @@ static void test_config_modes(void)
     reset_world();
     // Toggle mode, so this does not depend on DEFAULT_PEDAL_MODE.
     set_mode(4, PM_STOMP);
-    // Switch 3 cycles to stomp + momentary (not inverted momentary, which would send 127).
+    // Switch 3 changes mode but is off and stays off (stomp + momentary), so nothing is sent.
     set_mode(2, PM_STOMP);
     tap(4);
     chord_long();
@@ -1281,6 +1282,39 @@ static void test_config_modes(void)
     save_exit();
     ticks(1);
     CHECK(midi_len == 0 && leds[4] == 1);
+
+    // The same rule the other way: inverted momentary (on at rest) changed to stomp
+    // goes to stomp's resting state, off, and CC 0 is sent.
+    reset_world();
+    set_mode(5, PM_MOM_INV);
+    CHECK(leds[5] == 1 && (stomp_state & (1 << 5)) != 0);
+    chord_long();
+    tap(sw_code(6));
+    tap(sw_code(6));
+    CHECK(pedal_mode_get(5) == PM_STOMP);
+    clear_log();
+    save_exit();
+    ticks(1);
+    CHECK(midi_len == 3 && cc_number(0) == stomp_cc[5] && cc_value(0) == 0);
+    CHECK(leds[5] == 0 && (stomp_state & (1 << 5)) == 0);
+
+    // MIDI OUT full when saving: the switch changed to inverted momentary stays as it was
+    // until there is room, then its 127 is sent and its LED lights (like the CC 0 above).
+    reset_world();
+    set_mode(1, PM_MOMENTARY);
+    chord_long();
+    tap(1);
+    tap(1);
+    CHECK(pedal_mode_get(1) == PM_MOM_INV);
+    clear_log();
+    midi_space = 2;
+    save_exit();
+    ticks(1);
+    CHECK(midi_len == 0 && leds[1] == 0 && mode == MODE_RUN);
+    midi_space = 15;
+    ticks(1);
+    CHECK(midi_len == 3 && cc_number(0) == stomp_cc[1] && cc_value(0) == 127);
+    CHECK(leds[1] == 1 && (stomp_state & 2) != 0);
 
     // Pressing a footswitch on the modes page does not send MIDI.
     reset_world();

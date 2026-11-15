@@ -41,7 +41,11 @@ else
 EMU_PAGE := emu-skipped
 endif
 
-all: $(OUT)/fcb1010_32k.bin $(OUT)/fcb1010_64k_mirrored.bin $(EMU_PAGE)
+# ROM images named for the chip: 27C512 (64KB) and 27C256 (32KB). The old names are
+# kept as copies.
+ROMS := $(OUT)/fcb1010_27c512.bin $(OUT)/fcb1010_27c256.bin $(OUT)/fcb1010_64k_mirrored.bin
+
+all: $(OUT)/fcb1010_32k.bin $(ROMS) $(EMU_PAGE)
 
 .PHONY: emu-skipped
 emu-skipped:
@@ -83,6 +87,13 @@ $(OUT)/fcb1010_32k.bin: $(OUT)/fcb1010.ihx
 # where the top address line may be high or low.
 $(OUT)/fcb1010_64k_mirrored.bin: $(OUT)/fcb1010_32k.bin
 	cat $< $< > $@
+
+# The same images under the chip names the README uses.
+$(OUT)/fcb1010_27c512.bin: $(OUT)/fcb1010_64k_mirrored.bin
+	cp $< $@
+
+$(OUT)/fcb1010_27c256.bin: $(OUT)/fcb1010_32k.bin
+	cp $< $@
 
 test: $(OUT)/test_ctl $(OUT)/test_keys
 	$(OUT)/test_ctl

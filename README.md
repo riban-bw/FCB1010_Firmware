@@ -50,7 +50,7 @@ For example, with an effect on, pressing its switch turns it off. If you let go 
 
 ### Changing program
 
-UP and DOWN step the program number by one, from 0 to 127 (stopping at 0 and 127; a press that cannot change the number sends nothing). The program change is sent when you let go of the switch. Hold the pedal to auto-repeat, initally slowly then rapidly, and only the program you stop on is sent.
+UP and DOWN step the program number by one, from 0 to 127 (stopping at 0 and 127; a press that cannot change the number sends nothing). The program change is sent when you let go of the switch. Hold the pedal to auto-repeat, initially slowly then rapidly, and only the program you stop on is sent.
 
 ### The relay outputs (SWITCH 1 and SWITCH 2)
 
@@ -74,7 +74,7 @@ Tap UP or DOWN to move to the next or previous page. To leave, hold UP (ENTER) f
 
 | Page | Panel LED | Display | Controls |
 |---|---|---|---|
-| 1. Pedal modes | MIDI FUNCTION | Mode of the selected footswitch (1 to 4 - see [Link Footswitch modes](#footswitch-modes)" above) | Press a footswitch to select it (its LED lights) and see its mode; press it again to change its mode. |
+| 1. Pedal modes | MIDI FUNCTION | Mode of the selected footswitch (1 to 4 - see [Footswitch modes](#footswitch-modes) above) | Press a footswitch to select it (its LED lights) and see its mode; press it again to change its mode. |
 | 2. MIDI channel | MIDI CHANNEL | Channel 1 to 16 | Footswitches 1 to 10 pick channels 1 to 10. Switch 10 flashes `0` for 5 seconds; press 1 to 6 for 11 to 16, or 10 again for 10. After 5 seconds, or on a page change, the channel stays as 10. |
 | 3. Heel calibration | EXP 1 and EXP 2 | `Lo`, then `0` once the reading is taken | Put both pedals at the heel and press any footswitch. |
 | 4. Toe calibration | EXP 1 and EXP 2 | `Hi`, then `0` once the reading is taken, or `Er` | Put both pedals at the toe and press any footswitch. `Er` means a pedal hardly moved between heel and toe; press a footswitch to try again. Calibrating with the heel and toe swapped reverses the pedal. |
@@ -82,7 +82,7 @@ Tap UP or DOWN to move to the next or previous page. To leave, hold UP (ENTER) f
 | 6. SWITCH 2 relay | SWITCH 2 | As page 5 | As page 5, for the SWITCH 2 relay. |
 | 7. Lamp test and version | All | "riban", then the firmware version | Every LED lights while "riban" scrolls, then the firmware version shows in three parts: major with a trailing dot (`00.`), minor with dots both sides (`.01.`), and build with a leading dot (`.0A`), then it repeats. Each of the ten steps (six scroll frames, the three version parts and a blank) blinks its own footswitch LED, 1 to 10 in turn. Hold a footswitch to show its step, for example 8 for the minor version; let go to carry on. |
 
-When you save, an effect whose mode you changed is turned off (and CC value 0 is sent), so it does not carry a stale state into its new mode. A switch changed to inverted momentary is turned on instead, without sending anything. If a save fails it is not reported: the new settings apply until power-off.
+When you save, each footswitch whose mode you changed is put in its new mode's resting state, so it does not carry a stale state into its new mode: on for inverted momentary, off for the other modes. If that changes the switch, its new value is sent, so the receiving device stays in step. If a save fails it is not reported: the new settings apply until power-off.
 
 ## Installing
 
@@ -90,21 +90,29 @@ When you save, an effect whose mode you changed is turned off (and CC value 0 is
 
 The stock presets, banks, direct-select modes and the Behringer SysEx editor do not work with this firmware. Put the original chip back to restore stock behaviour. The settings are kept away from where the stock firmware keeps its presets, but they may still be corrupted, so be prepared to set them up again.
 
-### Flashing to an EEPROM
+### Flashing to an EPROM or EEPROM
 
-The EPROM used in my FCB1010 is HT27C512-70 which is 64KB. Some devices have the smaller 27C256 64KB or 27C128 32KB EPROM.
+The program memory is a 28-pin chip in a socket. The EPROM used in my FCB1010 is an HT27C512-70, which is 64KB. Some units have the smaller 27C256 (32KB) or 27C128 (16KB). The firmware is the same for each; only the image file and the replacement chip differ.
 
-1. **Identify the stock chip.** Open the case (16 screws on the underside). The program memory is the 28-pin socketed chip, often under a label or hot glue. Read the part number. A 27C256-type (32KB) is common, but go by what is printed on yours. I recommend taking a photo of the original physical installation to have a record of what it looked like before you started to make changes.
+| Chip in the socket | Size | Image to write | Replacement chips |
+|---|---|---|---|
+| 27C512 (for example HT27C512) | 64KB | `build/fcb1010_27c512.bin` | A 27C512-pinout part: W27C512 (electrically erasable, so it can be reprogrammed in the programmer), or a one-time programmable AT27C512R |
+| 27C256 | 32KB | `build/fcb1010_27c256.bin` | A 27C256-pinout part such as an AT27C256R, or an AT28C256 EEPROM on an adapter (see step 3) |
+
+The 27C512 image is the 32KB firmware twice, so it runs whether the socket drives the chip's top address line (pin 1, A15) high or low. Both images are built by `make` and offered by the GitHub build.
+
+1. **Identify the stock chip.** Open the case (16 screws on the underside). The program memory is the 28-pin socketed chip, often under a label or hot glue. Read the part number and find it in the table above; go by what is printed on yours. I recommend taking a photo of the original physical installation to have a record of what it looked like before you started to make changes.
 2. **Back up the original.** Read the stock chip with your programmer and save the file. Put a fresh label on it and keep it. This may allow you to flash the stock firmware to your new, target (E)EPROM to validate the flashing process. It is unlikely that the original chip is rewritable.
-3. **Choose a replacement that fits the socket.** A parallel EEPROM such as the AT28C256 has a different pinout from a 27C256 on pins 1 and 27. Pin 27 is /WE on the EEPROM but address line A14 on the EPROM, so a plain swap can cause spurious write pulses and corrupt the code. You may need to use a 28C256-to-27C256 adapter board (for example [this PCBWay design](https://www.pcbway.com/project/shareproject/28C256_to_27C256.html), which has jumpers for both pinouts), or a 27C256-pinout part such as an AT27C256R. I haven't tested either in an FCB1010.
-4. **Program the chip.** With a programmer such as a TL866 and the open-source `minipro` tool, the command looks like this (the device name must match your chip, see `minipro -l`):
+3. **Choose a replacement with the same pinout as the socket.** The 27C512 and 27C256 differ on pin 1 (A15 on the 27C512, Vpp on the 27C256), so use a part of the same family as the stock chip. A parallel EEPROM such as the AT28C256 differs from both on pins 1 and 27: pin 27 is /WE on the EEPROM but address line A14 on the EPROMs, so a plain swap can cause spurious write pulses and corrupt the code. If you want an AT28C256 in a 27C256 socket, use a 28C256-to-27C256 adapter board (for example [this PCBWay design](https://www.pcbway.com/project/shareproject/28C256_to_27C256.html), which has jumpers for both pinouts). I haven't tested any of these in an FCB1010.
+4. **Program the chip.** With a programmer such as a TL866 and the open-source `minipro` tool, the commands look like this (the device name must match your chip exactly; list the names with `minipro -l | grep -i 27c512`):
 
    ```
-   minipro -p "AT28C256" -w build/fcb1010_32k.bin
-   minipro -p "AT28C256" -m build/fcb1010_32k.bin   # verify
+   minipro -p "W27C512@DIP28" -w build/fcb1010_27c512.bin   # 27C512 socket
+   minipro -p "W27C512@DIP28" -m build/fcb1010_27c512.bin   # verify
+   minipro -p "AT27C256R@DIP28" -w build/fcb1010_27c256.bin # 27C256 socket
    ```
 
-   If your chip is 64KB (27C512 type), write `build/fcb1010_64k_mirrored.bin`. That file is the same image twice, so it runs whether the top address line is high or low.
+   `minipro` erases an electrically erasable chip such as the W27C512 before writing it. A used UV-erasable EPROM (one with a window) must be erased under UV light first.
 5. **Install it with the pedal unplugged from power.** Match pin 1 to the notch on the socket, the same as the old chip was.
 6. **Power on.** "riban" should scroll across the display, then it should show `0`. Press UP and release it, and the display should show `1`.
 
@@ -143,16 +151,18 @@ The rest of this document is for building, changing or checking the firmware.
 Requires SDCC 4.x, `make` (and `gcc` for the host tests) (`apt install sdcc make gcc`).
 
 ```
-make              # build/fcb1010_32k.bin and build/fcb1010_64k_mirrored.bin, and the emulator page
-make test         # 6179 logic checks on this computer
+make              # the ROM images in build/ (see below) and the emulator page
+make test         # 6187 logic checks on this computer
 make check        # every test suite, without bumping the build number
 make emulator     # update emulator/index.html and run its checks (needs clang and Node)
 test/sim_smoke.sh # runs the real image in the uCsim 8051 simulator (apt install sdcc-ucsim)
 ```
 
+The ROM images are `build/fcb1010_27c512.bin` (64KB, the 32KB image twice, for a 27C512) and `build/fcb1010_27c256.bin` (32KB, for a 27C256 or 28C256). The older names `fcb1010_64k_mirrored.bin` and `fcb1010_32k.bin` are built too, with the same contents. Unused space is filled with 0xFF. The code is linked for addresses below 32KB only, since how the FCB1010 wires the top address line of a 27C512 socket is not known.
+
 If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 9.3KB (9521 bytes at the last build), so it needs a 16KB or larger chip; the 32KB image suits a 27C256 / 28C256. Unused space is filled with 0xFF. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 9.3KB (9524 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
 
 Each build also updates this README: the code size above, the firmware version on configuration page 7, and every value taken from `src/config.h` (the option table below and the numbers quoted elsewhere). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the README was not updated after a change to `src/config.h`.
 

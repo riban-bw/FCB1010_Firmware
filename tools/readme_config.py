@@ -89,7 +89,6 @@ RULES = [
     (r"Held: after (\d+)ms the number auto-repeats at (\d+)Hz",
      [num("PROGRAM_REPEAT_DELAY_MS"), num("PROGRAM_REPEAT_HZ")]),
     (r"speeding up to about (\d+)Hz", [num("PROGRAM_REPEAT_FAST_HZ")]),
-    (r"Hz after ([\d.]+)s,", [secs(num("PROGRAM_REPEAT_FAST_AFTER_MS"))]),
     # Configuration
     (r"Hold UP and DOWN together for ([\d.]+ seconds?)", [sec_words(config_hold)]),
     (r"or UP \+ DOWN together for ([\d.]+ seconds?)", [sec_words(config_hold)]),
