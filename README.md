@@ -209,7 +209,25 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 
 ### Settings storage
 
-Settings are stored in the 24C16 EEPROM: relay triggers at 0x7E0 (SWITCH 1) and 0x7E8 (SWITCH 2), calibration at 0x7F0 and channel plus pedal modes at 0x7F8, away from the low addresses where the stock firmware keeps presets. A missing or invalid record loads as the defaults. The CONFIG LED compares the settings being edited with what is read back from these records.
+Settings are stored in the 24C16 EEPROM (2KB, addresses 0x000-0x7FF) as four 6-byte records at the top of the chip, away from the low addresses where the stock firmware keeps presets. Each record is 8-byte aligned, and its last two bytes (0x7E6-0x7E7, 0x7EE-0x7EF and so on) are unused.
+
+| Address | Record | Byte 0 | Byte 1 | Byte 2 | Byte 3 | Byte 4 | Byte 5 |
+|---|---|---|---|---|---|---|---|
+| 0x7E0 | SWITCH 1 relay | magic 0xC3 | followed footswitches 1-8 (bit 0 = switch 1) | bits 0-1: footswitches 9-10; bit 2: follows the UP + DOWN toggle | EXP 1 trigger value (1-127, 0 = off) | EXP 2 trigger value (1-127, 0 = off) | checksum, salt 0x3C |
+| 0x7E8 | SWITCH 2 relay | magic 0xC4 | as SWITCH 1 | as SWITCH 1 | as SWITCH 1 | as SWITCH 1 | checksum, salt 0xC3 |
+| 0x7F0 | Pedal calibration | magic 0xC1 | EXP 1 heel reading | EXP 1 toe reading | EXP 2 heel reading | EXP 2 toe reading | checksum, salt 0x5A |
+| 0x7F8 | Channel and modes | magic 0xC2 | MIDI channel (1-16) | modes of footswitches 1-4 | modes of footswitches 5-8 | bits 0-3: modes of footswitches 9-10 | checksum, salt 0xA5 |
+
+- **Checksum:** the XOR of bytes 0-4 and the record's salt.
+- **Pedal modes:** 2 bits per footswitch, the lowest-numbered switch in the lowest bits (switch 1 in bits 0-1 of byte 2, switch 2 in bits 2-3, and so on). The values are 0 stomp, 1 stomp with momentary, 2 momentary and 3 inverted momentary.
+- **Calibration:** the readings are the raw 8-bit ADC values.
+- **Missing or invalid records:** a record with the wrong magic or checksum loads as the defaults:
+  - relays follow nothing and have no triggers;
+  - calibration is heel 0, toe 255;
+  - the channel and pedal modes come from `src/config.h`.
+- **Out-of-range values:** a stored channel outside 1-16 loads as the default channel, and a trigger value over 127 loads as off.
+- **Saving:** a save writes the record a byte at a time and reads it back.
+- **CONFIG LED:** it compares the settings being edited with what is read back from these records.
 
 ### Hardware notes
 
