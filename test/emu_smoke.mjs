@@ -371,5 +371,43 @@ console.log("emulator: expression pedal");
 fcb.setRaw(200, 0); wait(100);
 check("pedal A at 200 of 255 sends CC 7", sent(), ["b1 07 64"]);
 
+console.log("emulator: footswitch editor");
+fcb.setRaw(0, 0); wait(100); sent();
+const TEXT_CC = 10, TEXT_NOTE = 11;   // HAL_TEXT_CC / HAL_TEXT_NOTE + 1
+const label = (i) => sandbox.document.getElementById("cc" + i).textContent;
+const chHex = (fcb.state().midiChannel - 1).toString(16);
+// SELECT, NUMBER, VALUE 1, VALUE 2 (HAL_LED_SELECT .. HAL_LED_VALUE_2).
+const editLeds = () => [fcb.hw.aux[7], fcb.hw.aux[8], fcb.hw.aux[9], fcb.hw.aux[10]];
+longChord();
+check("config mode, page 1", [fcb.state().mode, fcb.state().cfgPage], [1, 0]);
+// A long press of footswitch 3 opens its editor on the message type.
+press(2, OVER_MS);
+check("a long footswitch press opens its editor on the type: SELECT lit, \"CC\" shown",
+      [fcb.state().edit, editLeds(), fcb.hw.text], [1, [1, 0, 0, 0], TEXT_CC]);
+press(1, 100);
+check("footswitch 2 makes it a note (\"nt\")", fcb.hw.text, TEXT_NOTE);
+press(UP, 100);
+check("UP: the number, NUMBER lit", [fcb.state().edit, editLeds()], [2, [0, 1, 0, 0]]);
+press(6, 100); press(10, 100);
+check("footswitches 6 and 10 type 60", [fcb.hw.display, fcb.hw.text], [60, 0]);
+press(UP, 100);
+press(0, 100); press(10, 100); press(10, 100);
+check("UP: the on value (VALUE 1 lit), 1 0 0 types 100", [fcb.state().edit, editLeds(), fcb.hw.display], [3, [0, 0, 1, 0], 100]);
+press(UP, 100);
+press(1, 100); press(10, 100);
+check("UP: the off value (VALUE 2 lit), 2 10 types 20", [fcb.state().edit, editLeds(), fcb.hw.display], [4, [0, 0, 0, 1], 20]);
+press(UP, OVER_MS);
+check("a long UP accepts: editor closed, its LEDs dark, still in config mode", [fcb.state().edit, editLeds(), fcb.state().mode], [0, [0, 0, 0, 0], 1]);
+check("the footswitch label shows the new message", label(2), "Note 60");
+press(UP, OVER_MS);
+check("a long UP then saves and leaves", fcb.state().mode, 0);
+check("footswitch 3's record was stored (note, 60, on 100, off 20)", JSON.parse(store["fcb1010-eeprom-v2"]).fs2, [1, 60, 100, 20]);
+wait(20); sent();
+press(2, 100); wait(20);
+const notes = sent();
+check("footswitch 3 now sends note 60 (velocity 100 on, note off velocity 20)",
+      notes.length > 0 && notes.every((m) => (m === "9" + chHex + " 3c 64" || m === "8" + chHex + " 3c 14")) &&
+      notes.some((m) => m === "9" + chHex + " 3c 64"), true);
+
 console.log(fail ? "emulator smoke test FAILED" : "emulator smoke test passed");
 process.exit(fail);

@@ -6,7 +6,7 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 
 ## Features
 
-- 10 footswitches, each sending its own MIDI controller (CC), with a choice of four switch behaviours
+- 10 footswitches, each sending its own MIDI controller (CC), note or program change, with a choice of four switch behaviours
 - Program change from UP and DOWN, with fast scrolling when held
 - 2 expression pedals
 - 2 relay outputs (the SWITCH 1 and SWITCH 2 jacks), triggered by any footswitch or pedal, to switch amp channels or other gear
@@ -28,7 +28,7 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 | UP + DOWN tapped together | An extra on/off switch (CC 20). The DIRECT SELECT LED shows its state |
 | UP + DOWN held 1s | Opens configuration mode (see Configuration) |
 
-Everything uses one MIDI channel, channel 1 unless you change it in configuration mode. Footswitches 1 to 10 send CC 21 to 30, with value 127 for on and 0 for off.
+Everything uses one MIDI channel, channel 1 unless you change it in configuration mode. Footswitches 1 to 10 send CC 21 to 30, with value 127 for on and 0 for off. You can give any footswitch a different message (see [Footswitch messages](#footswitch-messages)).
 
 ### Footswitch modes
 
@@ -48,6 +48,18 @@ In stomp with momentary mode a press always acts immediately: it toggles the eff
 
 For example, with an effect on, pressing its switch turns it off. If you let go within 0.6 seconds it stays off. If you hold it longer and then let go, it comes back on. This lets you drop an effect out (or bring one in) for just as long as you hold the switch.
 
+### Footswitch messages
+
+Each footswitch sends one of three kinds of message, set in the footswitch editor (see [Configuration](#configuration)):
+
+| Type | Display | On | Off |
+|---|---|---|---|
+| CC | `CC` | The controller number with the on value | The controller number with the off value |
+| Note | `nt` | Note on: the note number, with the on value as velocity | Note off: the note number, with the off value as velocity |
+| Prog | `Pr` | Program change: the program number | Nothing |
+
+CC and note switches work in any of the footswitch modes. A program change switch sends its program on every press, whatever its mode, and works like a preset button: its LED lights and the LEDs of the other program change switches go out. The display then shows that program, and UP and DOWN step on from it.
+
 ### Changing program
 
 UP and DOWN step the program number by one, from 0 to 127 (stopping at 0 and 127; a press that cannot change the number sends nothing). The program change is sent when you let go of the switch. Hold the pedal to auto-repeat, initially slowly then rapidly, and only the program you stop on is sent.
@@ -58,7 +70,7 @@ Each of the two relay jacks can follow any mix of footswitches, the UP + DOWN sw
 
 ### Keeping in step with your DAW
 
-The pedal listens on its MIDI IN socket. When your DAW or synth sends one of the pedal's controllers on the pedal's channel, the matching LED changes to match: value 64 to 127 is on and 0 to 63 is off. For example, CC 21 value 127 sets stomp 1 on and lights its LED, and CC 21 value 0 turns it off. The next press of that footswitch then carries on from there.
+The pedal listens on its MIDI IN socket. When your DAW or synth sends one of the pedal's controllers on the pedal's channel, the matching LED changes to match: the switch's on value turns it on and its off value turns it off, and any other value counts as on from 64 to 127 and off from 0 to 63. A note switch follows its note the same way: a note on turns it on and a note off turns it off. Program changes are ignored. For example, CC 21 value 127 sets stomp 1 on and lights its LED, and CC 21 value 0 turns it off. The next press of that footswitch then carries on from there.
 
 The pedal never sends these back out, so it is safe to connect MIDI OUT and MIDI IN to the same device. The MIDI CHAN LED flickers whenever MIDI arrives.
 
@@ -74,7 +86,7 @@ Tap UP or DOWN to move to the next or previous page. To leave, hold UP (ENTER) f
 
 | Page | Panel LED | Display | Controls |
 |---|---|---|---|
-| 1. Pedal modes | MIDI FUNCTION | Mode of the selected footswitch (1 to 4 - see [Footswitch modes](#footswitch-modes) above) | Press a footswitch to select it (its LED lights) and see its mode; press it again to change its mode. |
+| 1. Pedal modes | MIDI FUNCTION | Mode of the selected footswitch (1 to 4 - see [Footswitch modes](#footswitch-modes) above) | Press a footswitch to select it (its LED lights) and see its mode; press it again to change its mode. Hold a footswitch for 0.6 seconds to open its editor (see below). |
 | 2. MIDI channel | MIDI CHANNEL | Channel 1 to 16 | Footswitches 1 to 10 pick channels 1 to 10. Switch 10 flashes `0` for 5 seconds; press 1 to 6 for 11 to 16, or 10 again for 10. After 5 seconds, or on a page change, the channel stays as 10. |
 | 3. Heel calibration | EXP 1 and EXP 2 | `Lo`, then `0` once the reading is taken | Put both pedals at the heel and press any footswitch. |
 | 4. Toe calibration | EXP 1 and EXP 2 | `Hi`, then `0` once the reading is taken, or `Er` | Put both pedals at the toe and press any footswitch. `Er` means a pedal hardly moved between heel and toe; press a footswitch to try again. Calibrating with the heel and toe swapped reverses the pedal. |
@@ -82,7 +94,20 @@ Tap UP or DOWN to move to the next or previous page. To leave, hold UP (ENTER) f
 | 6. SWITCH 2 relay | SWITCH 2 | As page 5 | As page 5, for the SWITCH 2 relay. |
 | 7. Lamp test and version | All | "riban", then the firmware version | Every LED lights while "riban" scrolls, then the firmware version shows in three parts: major with a trailing dot (`00.`), minor with dots both sides (`.01.`), and build with a leading dot (`.0A`), then it repeats. Each of the ten steps (six scroll frames, the three version parts and a blank) blinks its own footswitch LED, 1 to 10 in turn. Hold a footswitch to show its step, for example 8 for the minor version; let go to carry on. |
 
-When you save, each footswitch whose mode you changed is put in its new mode's resting state, so it does not carry a stale state into its new mode: on for inverted momentary, off for the other modes. If that changes the switch, its new value is sent, so the receiving device stays in step. If a save fails it is not reported: the new settings apply until power-off.
+#### Footswitch editor
+
+On page 1, hold a footswitch to edit its message. That footswitch's LED stays lit so you can see which one you are editing. Tap UP and DOWN to move between its settings. A panel LED shows which one you are on:
+
+| Setting | Panel LED | Display | How to set it |
+|---|---|---|---|
+| Message type | SELECT | `CC`, `nt` (note) or `Pr` (program change) | Footswitch 1 for CC, 2 for note, 3 for program change. Or move either expression pedal: the bottom third is CC, the middle third note, the top third program change. |
+| Number | NUMBER | 0 to 127 | The controller number, note number or program number. Type it with the footswitches (1 to 9 are digits 1 to 9, 10 is 0), for example 6 then 10 for 60, or move either expression pedal. |
+| On value | VALUE 1 | 0 to 127 | The value a CC sends when the switch turns on, or the note on velocity. Set it the same way. |
+| Off value | VALUE 2 | 0 to 127 | The value a CC sends when the switch turns off, or the note off velocity. Set it the same way. A program change has only a number, so UP stops there. |
+
+A number is complete once no more digits would fit (13 and up, or three digits), so the next digit you press starts a new number. Hold UP (ENTER) for 0.6 seconds to keep your changes and go back to page 1, or hold DOWN (ESCAPE) for 0.6 seconds to put the old values back. Like other settings, the message is only stored when you save and leave configuration mode. If the switch was on when you changed its message, the old message's "off" is sent and the switch turns off.
+
+When you save, each footswitch whose mode or message you changed is put in its new mode's resting state, so it does not carry a stale state into its new mode: on for inverted momentary, off for the other modes. If that changes the switch, its new value is sent, so the receiving device stays in step. If a save fails it is not reported: the new settings apply until power-off.
 
 ## Installing
 
@@ -127,10 +152,11 @@ The rest of this document is for building, changing or checking the firmware.
 
 | Message | Sent | Received |
 |---|---|---|
-| Control change, footswitches | CC 21 to 30 (`STOMP_CC_LIST`), 127 on, 0 off | A CC on channel 1 with a stomp's controller number sets that stomp: 64 to 127 on, 0 to 63 off |
+| Control change, footswitches | CC 21 to 30 (`STOMP_CC_LIST`), 127 on, 0 off by default; any controller number, on value and off value per switch | A CC on channel 1 with a CC switch's controller number sets that switch: its on value is on, its off value off, and any other value 64 to 127 on, 0 to 63 off |
+| Note on / off, footswitches | Note switches: note on (0x9n) with the on value as velocity when on, note off (0x8n) with the off value as velocity when off | A note on with velocity 1 to 127 sets a note switch with that note on; a note off, or a note on with velocity 0, sets it off |
 | Control change, UP + DOWN switch | `CHORD_CC`, 127 / 0 | CC 20 sets the UP + DOWN toggle and DIRECT SELECT LED the same way |
 | Control change, pedals | CC 7 and CC 11 (`PEDAL_CC_LIST`), 0 to 127 | Ignored |
-| Program change | 0 to 127, on release of UP / DOWN | Ignored |
+| Program change | 0 to 127, on release of UP / DOWN, and on every press of a program change footswitch | Ignored |
 
 - Everything is on one channel: `MIDI_CHANNEL` until a channel is saved in configuration mode.
 - Received messages only set the pedal's own state and LEDs; nothing is echoed to MIDI OUT. The next footswitch press toggles from the received state: if CC 21 turned switch 1 on, pressing switch 1 sends CC 21 value 0.
@@ -163,7 +189,7 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 9.3KB (9524 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 10.8KB (11091 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
 
 Each build also updates this README: the code size above, the firmware version on configuration page 7, and every value taken from `src/config.h` (the option table below and the numbers quoted elsewhere). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the README was not updated after a change to `src/config.h`.
 
@@ -209,10 +235,11 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 
 ### Settings storage
 
-Settings are stored in the 24C16 EEPROM (2KB, addresses 0x000-0x7FF) as four 6-byte records at the top of the chip, away from the low addresses where the stock firmware keeps presets. Each record is 8-byte aligned, and its last two bytes (0x7E6-0x7E7, 0x7EE-0x7EF and so on) are unused.
+Settings are stored in the 24C16 EEPROM (2KB, addresses 0x000-0x7FF) as fourteen 6-byte records at the top of the chip (0x790-0x7FF), away from the low addresses where the stock firmware keeps presets. Each record is 8-byte aligned, and its last two bytes (0x796-0x797, 0x79E-0x79F and so on) are unused.
 
 | Address | Record | Byte 0 | Byte 1 | Byte 2 | Byte 3 | Byte 4 | Byte 5 |
 |---|---|---|---|---|---|---|---|
+| 0x790 + 8 × (n - 1) | Footswitch n (1-10: 0x790, 0x798 ... 0x7D8) | magic 0xD0 + (n - 1) | message type | number (0-127) | on value (0-127) | off value (0-127) | checksum; salts 0x96, 0x69, 0x55, 0xAA, 0x33, 0xCC, 0x0F, 0xF0, 0x5F, 0xF5 for switches 1-10 |
 | 0x7E0 | SWITCH 1 relay | magic 0xC3 | followed footswitches 1-8 (bit 0 = switch 1) | bits 0-1: footswitches 9-10; bit 2: follows the UP + DOWN toggle | EXP 1 trigger value (1-127, 0 = off) | EXP 2 trigger value (1-127, 0 = off) | checksum, salt 0x3C |
 | 0x7E8 | SWITCH 2 relay | magic 0xC4 | as SWITCH 1 | as SWITCH 1 | as SWITCH 1 | as SWITCH 1 | checksum, salt 0xC3 |
 | 0x7F0 | Pedal calibration | magic 0xC1 | EXP 1 heel reading | EXP 1 toe reading | EXP 2 heel reading | EXP 2 toe reading | checksum, salt 0x5A |
@@ -221,12 +248,14 @@ Settings are stored in the 24C16 EEPROM (2KB, addresses 0x000-0x7FF) as four 6-b
 - **Checksum:** the XOR of bytes 0-4 and the record's salt.
 - **Pedal modes:** 2 bits per footswitch, the lowest-numbered switch in the lowest bits (switch 1 in bits 0-1 of byte 2, switch 2 in bits 2-3, and so on). The values are 0 stomp, 1 stomp with momentary, 2 momentary and 3 inverted momentary.
 - **Calibration:** the readings are the raw 8-bit ADC values.
+- **Footswitch messages:** the type is 0 CC, 1 note, 2 program change; type 3 is unused and loads as CC with the same values. Values over 127 lose bit 7. A program change ignores the on and off values. (Earlier development builds kept two switches per record at 0x7B8-0x7DF with magics 0xC5-0xC9; those no longer match and load as the defaults.)
 - **Missing or invalid records:** a record with the wrong magic or checksum loads as the defaults:
+  - footswitch messages are CC `STOMP_CC_LIST` with on value 127 and off value 0;
   - relays follow nothing and have no triggers;
   - calibration is heel 0, toe 255;
   - the channel and pedal modes come from `src/config.h`.
 - **Out-of-range values:** a stored channel outside 1-16 loads as the default channel, and a trigger value over 127 loads as off.
-- **Saving:** a save writes the record a byte at a time and reads it back.
+- **Saving:** a save writes each record in one page write (the six bytes are within one 16-byte page) and reads it back in one sequential read. Loading reads a record the same way.
 - **CONFIG LED:** it compares the settings being edited with what is read back from these records.
 
 ### Hardware notes
@@ -236,7 +265,7 @@ The hardware map (latch addresses, LED and key wiring, ADC and EEPROM pins) come
 ### What has and has not been tested
 
 Tested:
-- The controller logic: stomp toggling, all four pedal modes, program change on release with auto-repeat, the UP + DOWN chord, every configuration page and its saved bytes, pedal scaling, hysteresis, calibration flow, a full MIDI buffer, bad input, and MIDI IN parsing including running status, split messages, real-time bytes, SysEx, other channels and the 63/64 threshold, plus the momentary long-press behaviour: every switch, two switches at once, duplicate or unmatched hold and release events, a full MIDI queue at press and at release, calibration, and incoming MIDI CC changes during a hold (`make test`).
+- The controller logic: stomp toggling, all four pedal modes, CC, note and program change footswitch messages and the footswitch editor (typed and pedal values, accept, revert, saved records), program change on release with auto-repeat, the UP + DOWN chord, every configuration page and its saved bytes, pedal scaling, hysteresis, calibration flow, a full MIDI buffer, bad input, and MIDI IN parsing including running status, split messages, real-time bytes, SysEx, other channels and the 63/64 threshold, plus the momentary long-press behaviour: every switch, two switches at once, duplicate or unmatched hold and release events, a full MIDI queue at press and at release, calibration, and incoming MIDI CC changes during a hold (`make test`).
 - The browser emulator, which runs the same control code, with a scripted smoke test (`make emulator`).
 - The real 8051 image in a simulator: key scan and debounce, toggle on and off, program change, MIDI UART output with the correct bytes, the UP + DOWN chord opening and closing configuration mode (read back from RAM, including the stack depth of the save path), the long-press behaviour just under (stays latched) and just over (reverts) the long-press time, the power-on and page 7 LEDs and display, and the stack under receive load (`test/sim_smoke.sh`).
 
@@ -251,7 +280,7 @@ A wrong LED or key map does no electrical harm, but it will look wrong.
 
 ### Memory
 
-The 8032 has only 256 bytes of internal RAM and this firmware uses almost all of the directly addressable part. To make room for configuration mode the MIDI OUT queue is 16 bytes, the MIDI IN queue 8 and the key event queue 8. The simulator shows the stack peaking about 36 bytes below the end of RAM (during configuration save). If you add features, check `build/fcb1010.mem` for the stack headroom and run `test/sim_smoke.sh`, which fails if the stack gets too close to the end.
+The 8032 has only 256 bytes of internal RAM and this firmware uses almost all of the directly addressable part. To make room for configuration mode the MIDI OUT queue is 16 bytes, the MIDI IN queue 8 and the key event queue 8. The simulator shows the stack peaking 22 bytes below the end of RAM (0xE9, during configuration save, with both interrupts nested on top). If you add features, check `build/fcb1010.mem` for the stack headroom and run `test/sim_smoke.sh`, which fails if the stack gets too close to the end.
 
 ### Source layout
 

@@ -91,14 +91,17 @@ void hal_status_led(uint8_t on)
 // DIRECT SELECT is the reference table's LED_DIRECT_BANK_SEL (row 5, mask 0x01).
 // SWITCH 1 and SWITCH 2 are the reference table's LED_SWITCH_1 / LED_SWITCH_2 (row 3,
 // masks 0x10 and 0x20), not its status LED_SWITCH.
-static const CODE uint8_t aux_led_row[7]  = { 3, 3, 3, 3, 5, 3, 3 };
-static const CODE uint8_t aux_led_mask[7] = { 0x02, 0x01, 0x08, 0x04, 0x01, 0x10, 0x20 };
+// SELECT, NUMBER, VALUE 1 and VALUE 2 are the reference table's LED_SELECT, LED_NUMBER,
+// LED_VALUE_1 and LED_VALUE_2 (row 5, masks 0x10, 0x08, 0x04, 0x02).
+static const CODE uint8_t aux_led_row[HAL_LED_COUNT]  = { 3, 3, 3, 3, 5, 3, 3, 5, 5, 5, 5 };
+static const CODE uint8_t aux_led_mask[HAL_LED_COUNT] = { 0x02, 0x01, 0x08, 0x04, 0x01, 0x10, 0x20,
+                                                          0x10, 0x08, 0x04, 0x02 };
 
 void hal_aux_led(uint8_t which, uint8_t on)
 {
     uint8_t row;
 
-    if (which > HAL_LED_SWITCH_2)
+    if (which >= HAL_LED_COUNT)
     {
         return;
     }
@@ -155,9 +158,12 @@ void hal_display(uint8_t value)
 // "Hi" = H (B C E F G), i (C).
 // Then the "riban" frames: " r", "ri", "ib", "ba", "an", "n " (space = 0x00;
 // b = C D E F G, a = A B C D E G, n = C E G).
+// Then the footswitch message types: "CC" = C (A D E F) twice; "nt" = n, t (D E F G);
+// "Pr" = P (A B E F G), r.
 static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
     0x9E, 0x0A, 0x1C, 0x3A, 0x6E, 0x20,
-    0x00, 0x0A, 0x0A, 0x20, 0x20, 0x3E, 0x3E, 0xFA, 0xFA, 0x2A, 0x2A, 0x00
+    0x00, 0x0A, 0x0A, 0x20, 0x20, 0x3E, 0x3E, 0xFA, 0xFA, 0x2A, 0x2A, 0x00,
+    0x9C, 0x9C, 0x2A, 0x1E, 0xCE, 0x0A
 };
 
 // One bit per display position (units first); a set bit turns that position off.
@@ -633,90 +639,136 @@ static uint8_t i2c_read(uint8_t send_nak)
 
 #define EEPROM_DEVICE  0xA0
 
-// The 24C16 puts address bits 8..10 into the device address byte.
-static uint8_t eeprom_control(uint16_t address)
-{
-    return (uint8_t)(EEPROM_DEVICE | ((address >> 7) & 0x0E));
-}
-
-// Calibration record near the top of the 2KB 24C16, away from the low
-// addresses (from 0x000) where Behringer's SysEx documentation places the stock
-// preset data, so putting the original chip back is unlikely to be affected.
-// Record layout: Magic, heelA, toeA, heelB, toeB, checksum
-#define CAL_ADDRESS  0x7F0
-#define CAL_MAGIC    0xC1
-
-// Settings record next to the calibration record: magic, channel, three bytes of
-// packed pedal modes, checksum.
-#define CFG_ADDRESS  0x7F8
-#define CFG_MAGIC    0xC2
-
-// Both records are 6 bytes and 8-byte aligned, so the low 3 address bits are the byte's
-// index in the record. A record is named by its offset from CAL_ADDRESS (0 or 8).
-// Relay trigger records for SWITCH 1 and SWITCH 2 sit just below, at 0x7E0 and 0x7E8.
-// A record is named by its offset from EEPROM_BASE; offset / 8 indexes the magic and
-// checksum salt tables (the calibration and settings values are unchanged).
-#define EEPROM_BASE  0x7E0
+// Settings records at the top of the 2KB 24C16, away from the low addresses (from 0x000)
+// where Behringer's SysEx documentation places the stock preset data, so putting the
+// original chip back is unlikely to be affected. Each record is 6 bytes, 8-byte aligned:
+// magic, the four bytes of hal_rec, checksum (the XOR of the first five bytes and the
+// record's salt). Record rec (HAL_REC_*) is at EEPROM_BASE + rec * 8, so the relay,
+// calibration and settings records keep their addresses (0x7E0, 0x7E8, 0x7F0, 0x7F8),
+// with the ten footswitch message records below them from 0x790.
+#define EEPROM_BASE  0x790
 #define REC_LENGTH   6
-#define REC_SW1      0
-#define REC_SW2      8
-#define REC_CAL      16
-#define REC_CFG      24
 
-#if CAL_ADDRESS != EEPROM_BASE + REC_CAL || CFG_ADDRESS != EEPROM_BASE + REC_CFG || (EEPROM_BASE & 7) != 0
+#if EEPROM_BASE + HAL_REC_SW1 * 8 != 0x7E0 || EEPROM_BASE + HAL_REC_CAL * 8 != 0x7F0 || \
+    EEPROM_BASE + HAL_REC_CFG * 8 != 0x7F8 || EEPROM_BASE + HAL_RECORDS * 8 != 0x800
 #error EEPROM record layout assumptions broken
 #endif
 
-static const CODE uint8_t rec_magic[4] = { 0xC3, 0xC4, CAL_MAGIC, CFG_MAGIC };
-static const CODE uint8_t rec_salt[4]  = { 0x3C, 0xC3, 0x5A, 0xA5 };
+// The footswitch magics (0xD0-0xD9) differ from the two-switch records that used to be at
+// 0x7B8-0x7DF (0xC5-0xC9), so those read as invalid.
+static const CODE uint8_t rec_magic[HAL_RECORDS] = {
+    0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xC3, 0xC4, 0xC1, 0xC2
+};
+static const CODE uint8_t rec_salt[HAL_RECORDS] = {
+    0x96, 0x69, 0x55, 0xAA, 0x33, 0xCC, 0x0F, 0xF0, 0x5F, 0xF5, 0x3C, 0xC3, 0x5A, 0xA5
+};
 
-// One record buffer shared by every load and save (they never overlap), and the result
-// of the last EEPROM access as a bit, instead of per-function buffers and pointers.
-static IDATA uint8_t eeprom_rec[REC_LENGTH];
-static BIT_T         eeprom_ok;
+// The one record buffer, shared with ctl.c (loads and saves never overlap), and the result
+// of the last EEPROM access as a bit.
+IDATA uint8_t hal_rec[4];
+static BIT_T  eeprom_ok;
 
-// Read one byte; eeprom_ok says whether the EEPROM acknowledged.
-static uint8_t eeprom_read_byte(uint16_t address)
+// Every record is in the 24C16's top 256-byte block (0x700-0x7FF), whose number goes in
+// the device address byte, so the device byte is a constant and the word address one byte.
+#define REC_CONTROL   ((uint8_t)(EEPROM_DEVICE | ((EEPROM_BASE >> 7) & 0x0E)))
+#define REC_LOW(rec)  ((uint8_t)((EEPROM_BASE & 0xFF) + (uint8_t)((rec) << 3)))
+
+#if (EEPROM_BASE >> 8) != 7 || (EEPROM_BASE & 7) != 0
+#error EEPROM records must be 8-byte aligned in the top 256-byte block
+#endif
+
+// Byte i (0-5) of record rec as stored: magic, hal_rec[0..3], checksum.
+static uint8_t rec_byte(uint8_t rec, uint8_t i)
 {
-    uint8_t value = 0;
+    if (i == 0)
+    {
+        return rec_magic[rec];
+    }
 
+    if (i <= 4)
+    {
+        return hal_rec[i - 1];
+    }
+
+    return (uint8_t)(rec_magic[rec] ^ hal_rec[0] ^ hal_rec[1] ^ hal_rec[2] ^ hal_rec[3] ^ rec_salt[rec]);
+}
+
+// Start a transfer at record rec's first byte. 1 if the EEPROM acknowledged.
+static uint8_t rec_address(uint8_t rec)
+{
     ADC_CS = 1;
-
     i2c_start();
-    eeprom_ok = (i2c_write(eeprom_control(address)) &&
-                 i2c_write((uint8_t)(address & 0xFF))) ? 1 : 0;
+
+    return (uint8_t)((i2c_write(REC_CONTROL) && i2c_write(REC_LOW(rec))) ? 1 : 0);
+}
+
+// Set by hal_rec_save for its read-back: hal_rec_load then compares every byte with what
+// was written instead of loading it.
+static BIT_T rec_verify;
+
+// Read record rec into hal_rec, all six bytes in one sequential read. 1 if every byte was
+// read and the magic and checksum match (or, for a read-back, every byte matches).
+uint8_t hal_rec_load(uint8_t rec)
+{
+    uint8_t i;
+    uint8_t b;
+
+    eeprom_ok = 0;
+
+    if (rec < HAL_RECORDS && rec_address(rec))
+    {
+        i2c_start();
+        eeprom_ok = i2c_write((uint8_t)(REC_CONTROL | 1)) ? 1 : 0;
+    }
 
     if (eeprom_ok)
     {
-        i2c_start();
-        eeprom_ok = i2c_write((uint8_t)(eeprom_control(address) | 1)) ? 1 : 0;
-
-        if (eeprom_ok)
+        for (i = 0; i < REC_LENGTH; i++)
         {
-            value = i2c_read(1);
+            // Acknowledge every byte but the last, which ends the read.
+            b = i2c_read((uint8_t)(i == REC_LENGTH - 1));
+
+            // The magic, then the data into hal_rec, then the checksum of what was read.
+            if (!rec_verify && i != 0 && i != REC_LENGTH - 1)
+            {
+                hal_rec[i - 1] = b;
+            }
+            else if (b != rec_byte(rec, i))
+            {
+                eeprom_ok = 0;
+            }
         }
     }
 
     i2c_stop();
+    rec_verify = 0;
 
-    return value;
+    return eeprom_ok;
 }
 
-// Write the eeprom_rec byte that belongs at this address (its low 3 bits).
-static uint8_t eeprom_write_byte(uint16_t address)
+// Write hal_rec as record rec (adding the magic and checksum) in one page write, then read
+// it back. The six bytes are within one 16-byte page (records are 8-byte aligned), so
+// there is one write cycle per record.
+uint8_t hal_rec_save(uint8_t rec)
 {
-    uint8_t ok;
+    uint8_t  i;
     uint16_t tries;
 
-    ADC_CS = 1;
+    if (rec >= HAL_RECORDS)
+    {
+        return 0;
+    }
 
-    i2c_start();
-    ok = i2c_write(eeprom_control(address));
-    ok = (uint8_t)(ok && i2c_write((uint8_t)(address & 0xFF)));
-    ok = (uint8_t)(ok && i2c_write(eeprom_rec[(uint8_t)address & 7]));
+    eeprom_ok = rec_address(rec);
+
+    for (i = 0; i < REC_LENGTH && eeprom_ok; i++)
+    {
+        eeprom_ok = i2c_write(rec_byte(rec, i)) ? 1 : 0;
+    }
+
     i2c_stop();
 
-    if (!ok)
+    if (!eeprom_ok)
     {
         return 0;
     }
@@ -725,145 +777,17 @@ static uint8_t eeprom_write_byte(uint16_t address)
     for (tries = 0; tries < 5000; tries++)
     {
         i2c_start();
-        ok = i2c_write(eeprom_control(address));
+        eeprom_ok = i2c_write(REC_CONTROL) ? 1 : 0;
         i2c_stop();
 
-        if (ok)
+        if (eeprom_ok)
         {
-            return 1;
+            rec_verify = 1;
+            return hal_rec_load(rec);
         }
     }
 
     return 0;
-}
-
-// Same checksums as before (calibration salt 0x5A, settings 0xA5), so saved records
-// stay readable.
-static uint8_t rec_checksum(uint8_t which)
-{
-    return (uint8_t)(eeprom_rec[0] ^ eeprom_rec[1] ^ eeprom_rec[2] ^ eeprom_rec[3] ^ eeprom_rec[4] ^
-                     rec_salt[which >> 3]);
-}
-
-// Read a record into eeprom_rec. 1 if every byte was read and the magic and checksum match.
-static uint8_t rec_load(uint8_t which)
-{
-    uint8_t i;
-
-    for (i = 0; i < REC_LENGTH; i++)
-    {
-        eeprom_rec[i] = eeprom_read_byte((uint16_t)(EEPROM_BASE + (uint8_t)(which + i)));
-
-        if (!eeprom_ok)
-        {
-            return 0;
-        }
-    }
-
-    return (eeprom_rec[0] == rec_magic[which >> 3] &&
-            eeprom_rec[5] == rec_checksum(which)) ? 1 : 0;
-}
-
-// Write eeprom_rec[1..4] as a record (adding the magic and checksum), then read it back.
-static uint8_t rec_save(uint8_t which)
-{
-    uint8_t i;
-
-    eeprom_rec[0] = rec_magic[which >> 3];
-    eeprom_rec[5] = rec_checksum(which);
-
-    for (i = 0; i < REC_LENGTH; i++)
-    {
-        if (!eeprom_write_byte((uint16_t)(EEPROM_BASE + (uint8_t)(which + i))))
-        {
-            return 0;
-        }
-    }
-
-    for (i = 0; i < REC_LENGTH; i++)
-    {
-        if (eeprom_read_byte((uint16_t)(EEPROM_BASE + (uint8_t)(which + i))) != eeprom_rec[i] || !eeprom_ok)
-        {
-            return 0;
-        }
-    }
-
-    return 1;
-}
-
-uint8_t hal_sw_load(uint8_t relay, IDATA uint8_t *data)
-{
-    if (!rec_load(relay ? REC_SW2 : REC_SW1))
-    {
-        return 0;
-    }
-
-    data[0] = eeprom_rec[1];
-    data[1] = eeprom_rec[2];
-    data[2] = eeprom_rec[3];
-    data[3] = eeprom_rec[4];
-
-    return 1;
-}
-
-uint8_t hal_sw_save(uint8_t relay, const IDATA uint8_t *data)
-{
-    eeprom_rec[1] = data[0];
-    eeprom_rec[2] = data[1];
-    eeprom_rec[3] = data[2];
-    eeprom_rec[4] = data[3];
-
-    return rec_save(relay ? REC_SW2 : REC_SW1);
-}
-
-uint8_t hal_cal_load(IDATA uint8_t *heel, IDATA uint8_t *toe)
-{
-    if (!rec_load(REC_CAL))
-    {
-        return 0;
-    }
-
-    heel[0] = eeprom_rec[1];
-    toe[0]  = eeprom_rec[2];
-    heel[1] = eeprom_rec[3];
-    toe[1]  = eeprom_rec[4];
-
-    return 1;
-}
-
-uint8_t hal_cfg_load(IDATA uint8_t *data)
-{
-    if (!rec_load(REC_CFG))
-    {
-        return 0;
-    }
-
-    data[0] = eeprom_rec[1];
-    data[1] = eeprom_rec[2];
-    data[2] = eeprom_rec[3];
-    data[3] = eeprom_rec[4];
-
-    return 1;
-}
-
-uint8_t hal_cfg_save(const IDATA uint8_t *data)
-{
-    eeprom_rec[1] = data[0];
-    eeprom_rec[2] = data[1];
-    eeprom_rec[3] = data[2];
-    eeprom_rec[4] = data[3];
-
-    return rec_save(REC_CFG);
-}
-
-uint8_t hal_cal_save(const IDATA uint8_t *heel, const IDATA uint8_t *toe)
-{
-    eeprom_rec[1] = heel[0];
-    eeprom_rec[2] = toe[0];
-    eeprom_rec[3] = heel[1];
-    eeprom_rec[4] = toe[1];
-
-    return rec_save(REC_CAL);
 }
 
 // ---------------------------------------------------------------

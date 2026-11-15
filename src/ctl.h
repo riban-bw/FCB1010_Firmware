@@ -55,11 +55,17 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 #define CTL_INSPECT_SENT_B         11
 #define CTL_INSPECT_RELAYS         12
 #define CTL_INSPECT_CAL_MIN_SPAN   13
+// The footswitch editor: 0 closed, else 1 + its parameter (type, number, on value, off
+// value).
+#define CTL_INSPECT_EDIT           14
 #define CTL_INSPECT_PEDAL_MODE     16
 // Relay trigger values at 32 + relay * 2 + pedal; follow masks at 36 + relay * 2 (low
 // byte) and 37 + relay * 2 (high byte; bit 2 is CHORD_CC). Pages 4 and 5 are SWITCH 1 / 2.
 #define CTL_INSPECT_SW_THR         32
 #define CTL_INSPECT_SW_MASK        36
+// Footswitch messages: the 30 bytes of msg[], three per switch: number (bit 7 = type
+// bit 0), on value (bit 7 = type bit 1), off value.
+#define CTL_INSPECT_MSG            40
 
 uint8_t ctl_inspect(uint8_t what);
 #endif

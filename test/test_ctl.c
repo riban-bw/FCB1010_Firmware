@@ -25,7 +25,12 @@ static uint8_t  midi_log[LOG_MAX];
 static int      midi_len;
 static int      midi_space = 15;
 static uint8_t  leds[10];
-static uint8_t  aux[7];
+static uint8_t  aux[HAL_LED_COUNT];
+// Footswitch message records: saved by the firmware, and stored (what a load returns).
+static int      msg_saved;
+// Footswitch message records (type, number, on value, off value), one per switch.
+static int      msg_stored_valid[HAL_REC_SW1];
+static uint8_t  stored_msg[HAL_REC_SW1][4], saved_msg[HAL_REC_SW1][4];
 // Relay outputs and the saved / stored relay trigger records.
 static uint8_t  relays;
 static int      sw_saved;
@@ -113,70 +118,93 @@ void hal_lamp_test(uint8_t how)
     lamp = how;
 }
 
-uint8_t hal_cal_load(uint8_t *heel, uint8_t *toe)
-{
-    if (!cal_stored_valid)
-    {
-        return 0;
-    }
-
-    heel[0] = stored_heel[0];
-    heel[1] = stored_heel[1];
-    toe[0]  = stored_toe[0];
-    toe[1]  = stored_toe[1];
-
-    return 1;
-}
-
-uint8_t hal_cal_save(const uint8_t *heel, const uint8_t *toe)
-{
-    cal_saved++;
-    saved_heel[0] = heel[0];
-    saved_heel[1] = heel[1];
-    saved_toe[0]  = toe[0];
-    saved_toe[1]  = toe[1];
-
-    return 1;
-}
-
-uint8_t hal_cfg_load(uint8_t *data)
-{
-    if (!cfg_stored_valid)
-    {
-        return 0;
-    }
-
-    memcpy(data, stored_cfg, 4);
-    return 1;
-}
-
-uint8_t hal_cfg_save(const uint8_t *data)
-{
-    cfg_saved++;
-    memcpy(saved_cfg, data, 4);
-    return 1;
-}
-
 void hal_relays(uint8_t mask)
 {
     relays = mask;
 }
 
-uint8_t hal_sw_load(uint8_t relay, uint8_t *data)
+// The settings records through the shared buffer, kept in the per-kind arrays above
+// (calibration as heel A, toe A, heel B, toe B, like the EEPROM record). Saves are kept
+// apart from what loads return, so every save behaves like a failed one when reloading.
+uint8_t hal_rec[4];
+
+uint8_t hal_rec_load(uint8_t rec)
 {
-    if (!sw_stored_valid[relay])
+    if (rec < HAL_REC_SW1)
+    {
+        if (!msg_stored_valid[rec])
+        {
+            return 0;
+        }
+
+        memcpy(hal_rec, stored_msg[rec], 4);
+        return 1;
+    }
+
+    if (rec <= HAL_REC_SW2)
+    {
+        if (!sw_stored_valid[rec - HAL_REC_SW1])
+        {
+            return 0;
+        }
+
+        memcpy(hal_rec, stored_sw[rec - HAL_REC_SW1], 4);
+        return 1;
+    }
+
+    if (rec == HAL_REC_CAL)
+    {
+        if (!cal_stored_valid)
+        {
+            return 0;
+        }
+
+        hal_rec[0] = stored_heel[0];
+        hal_rec[1] = stored_toe[0];
+        hal_rec[2] = stored_heel[1];
+        hal_rec[3] = stored_toe[1];
+        return 1;
+    }
+
+    if (rec == HAL_REC_CFG && cfg_stored_valid)
+    {
+        memcpy(hal_rec, stored_cfg, 4);
+        return 1;
+    }
+
+    return 0;
+}
+
+uint8_t hal_rec_save(uint8_t rec)
+{
+    if (rec < HAL_REC_SW1)
+    {
+        msg_saved++;
+        memcpy(saved_msg[rec], hal_rec, 4);
+    }
+    else if (rec <= HAL_REC_SW2)
+    {
+        sw_saved++;
+        memcpy(saved_sw[rec - HAL_REC_SW1], hal_rec, 4);
+    }
+    else if (rec == HAL_REC_CAL)
+    {
+        cal_saved++;
+        saved_heel[0] = hal_rec[0];
+        saved_toe[0]  = hal_rec[1];
+        saved_heel[1] = hal_rec[2];
+        saved_toe[1]  = hal_rec[3];
+    }
+    else if (rec == HAL_REC_CFG)
+    {
+        cfg_saved++;
+        memcpy(saved_cfg, hal_rec, 4);
+    }
+    else
     {
         return 0;
     }
 
-    memcpy(data, stored_sw[relay], 4);
-    return 1;
-}
-
-uint8_t hal_sw_save(uint8_t relay, const uint8_t *data)
-{
-    sw_saved++;
-    memcpy(saved_sw[relay], data, 4);
     return 1;
 }
 
@@ -217,6 +245,8 @@ static void reset_world(void)
     sw_saved = 0;
     sw_stored_valid[0] = 0;
     sw_stored_valid[1] = 0;
+    msg_saved = 0;
+    memset(msg_stored_valid, 0, sizeof(msg_stored_valid));
     ctl_init();
     // Skip the power-on animation (test_boot_animation covers it).
     boot_end();
@@ -2592,6 +2622,477 @@ static void test_boot_inverted(void)
     CHECK(relays == 1 && aux[HAL_LED_SWITCH_1] == 1 && midi_len == 0);
 }
 
+// Set footswitch sw's (0-9) message as if it had been saved.
+static void set_msg(uint8_t sw, uint8_t type, uint8_t num, uint8_t on, uint8_t off)
+{
+    msg[sw * 3]     = (uint8_t)((num & 0x7F) | ((type & 1) << 7));
+    msg[sw * 3 + 1] = (uint8_t)((on & 0x7F) | ((type & 2) << 6));
+    msg[sw * 3 + 2] = (uint8_t)(off & 0x7F);
+}
+
+#define MSG_NUM(sw)  (msg[(sw) * 3] & 0x7F)
+#define MSG_ON(sw)   (msg[(sw) * 3 + 1] & 0x7F)
+#define MSG_OFF(sw)  (msg[(sw) * 3 + 2])
+
+#define NOTE_ON   (0x90 | (MIDI_CHANNEL - 1))
+#define NOTE_OFF  (0x80 | (MIDI_CHANNEL - 1))
+#define PROG_CHG  (0xC0 | (MIDI_CHANNEL - 1))
+
+// Only the editor parameter's LED is lit (SELECT type, NUMBER, VALUE 1 on, VALUE 2 off).
+static int param_leds(int p)
+{
+    return aux[HAL_LED_SELECT] == (p == EP_TYPE) && aux[HAL_LED_NUMBER] == (p == EP_NUM) &&
+           aux[HAL_LED_VALUE_1] == (p == EP_ON) && aux[HAL_LED_VALUE_2] == (p == EP_OFF);
+}
+
+static void test_switch_messages(void)
+{
+    const uint8_t cc[10] = { STOMP_CC_LIST };
+    int i;
+
+    printf("run mode: footswitch messages (CC on / off values, notes, program changes)\n");
+
+    // Default: a CC from STOMP_CC_LIST, 127 on and 0 off.
+    reset_world();
+    for (i = 0; i < 10; i++)
+    {
+        CHECK(msg_type((uint8_t)i) == MT_CC && MSG_NUM(i) == cc[i] && MSG_ON(i) == 127 && MSG_OFF(i) == 0);
+    }
+
+    // CC with on 100, off 20.
+    set_mode(0, PM_STOMP);
+    set_msg(0, MT_CC, 50, 100, 20);
+    clear_log();
+    tap(sw_code(1));
+    CHECK(midi_len == 3 && cc_status(0) == CC_STATUS && cc_number(0) == 50 && cc_value(0) == 100 && leds[0] == 1);
+    tap(sw_code(1));
+    CHECK(midi_len == 6 && cc_number(1) == 50 && cc_value(1) == 20 && leds[0] == 0);
+
+    // Note, stomp mode: note on with the on value as velocity, then note off with the off
+    // value.
+    set_mode(1, PM_STOMP);
+    set_msg(1, MT_NOTE, 60, 90, 40);
+    clear_log();
+    tap(sw_code(2));
+    CHECK(midi_len == 3 && midi_log[0] == NOTE_ON && midi_log[1] == 60 && midi_log[2] == 90 && leds[1] == 1);
+    tap(sw_code(2));
+    CHECK(midi_len == 6 && midi_log[3] == NOTE_OFF && midi_log[4] == 60 && midi_log[5] == 40 && leds[1] == 0);
+
+    // Note, momentary: on while pressed, off on release.
+    set_mode(2, PM_MOMENTARY);
+    set_msg(2, MT_NOTE, 36, 127, 0);
+    clear_log();
+    ctl_key_press(sw_code(3));
+    CHECK(midi_len == 3 && midi_log[0] == NOTE_ON && midi_log[1] == 36 && midi_log[2] == 127 && leds[2] == 1);
+    ctl_key_release(sw_code(3));
+    CHECK(midi_len == 6 && midi_log[3] == NOTE_OFF && midi_log[4] == 36 && midi_log[5] == 0 && leds[2] == 0);
+
+    // Note, stomp with momentary: a long press undoes the note on release.
+    set_mode(3, PM_STOMP_MOM);
+    set_msg(3, MT_NOTE, 40, 70, 0);
+    clear_log();
+    long_press(sw_code(4));
+    CHECK(midi_len == 6 && midi_log[0] == NOTE_ON && midi_log[3] == NOTE_OFF && leds[3] == 0);
+
+    // Inverted momentary CC: the off value while pressed, the on value on release.
+    set_mode(7, PM_MOM_INV);
+    set_msg(7, MT_CC, 70, 90, 10);
+    clear_log();
+    ctl_key_press(sw_code(8));
+    ctl_key_release(sw_code(8));
+    CHECK(midi_len == 6 && cc_number(0) == 70 && cc_value(0) == 10 && cc_value(1) == 90 && leds[7] == 1);
+
+    // Program changes: every press sends, whatever the pedal mode; the last one pressed is
+    // lit and the other program change switches go dark; the display and UP / DOWN follow.
+    set_mode(4, PM_MOMENTARY);
+    set_msg(4, MT_PROG, 10, 0, 0);
+    set_mode(5, PM_STOMP);
+    set_msg(5, MT_PROG, 20, 0, 0);
+    set_mode(6, PM_STOMP);
+    set_msg(6, MT_CC, 77, 127, 0);
+    tap(sw_code(7));
+    CHECK(leds[6] == 1);
+    clear_log();
+    ctl_key_press(sw_code(5));
+    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 10 && leds[4] == 1 && leds[5] == 0);
+    CHECK(program == 10 && display == 10 + DISPLAY_PROGRAM_OFFSET);
+    ctl_key_release(sw_code(5));
+    CHECK(midi_len == 2 && leds[4] == 1);
+    tap(sw_code(6));
+    CHECK(midi_len == 4 && midi_log[2] == PROG_CHG && midi_log[3] == 20 && leds[4] == 0 && leds[5] == 1);
+    // A CC switch that was on is not affected.
+    CHECK(leds[6] == 1);
+    // Pressing it again sends it again and it stays lit.
+    tap(sw_code(6));
+    CHECK(midi_len == 6 && midi_log[5] == 20 && leds[5] == 1);
+    // UP steps from that program.
+    clear_log();
+    tap(CTL_KEY_UP);
+    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 21);
+    // A long press is still one program change.
+    clear_log();
+    long_press(sw_code(5));
+    CHECK(midi_len == 2 && midi_log[1] == 10 && leds[4] == 1 && leds[5] == 0);
+    // No room in MIDI OUT: ignored, like a stomp.
+    clear_log();
+    midi_space = 2;
+    tap(sw_code(6));
+    CHECK(midi_len == 0 && leds[5] == 0);
+    midi_space = 15;
+
+    // MIDI IN: a note on (velocity above 0) on the pedal's channel sets a note switch, a
+    // note off or note on with velocity 0 clears it; a CC with the same number does not.
+    reset_world();
+    set_mode(1, PM_STOMP);
+    set_msg(1, MT_NOTE, 60, 90, 0);
+    set_mode(0, PM_STOMP);
+    set_msg(0, MT_CC, 60, 127, 0);
+    ctl_midi_in(NOTE_ON); ctl_midi_in(60); ctl_midi_in(1);
+    CHECK(leds[1] == 1 && leds[0] == 0 && midi_len == 0);
+    ctl_midi_in(NOTE_ON); ctl_midi_in(60); ctl_midi_in(0);
+    CHECK(leds[1] == 0);
+    ctl_midi_in(NOTE_ON); ctl_midi_in(60); ctl_midi_in(100);
+    ctl_midi_in(NOTE_OFF); ctl_midi_in(60); ctl_midi_in(64);
+    CHECK(leds[1] == 0);
+    // Running status note on.
+    ctl_midi_in(NOTE_ON); ctl_midi_in(61); ctl_midi_in(100); ctl_midi_in(60); ctl_midi_in(100);
+    CHECK(leds[1] == 1);
+    ctl_midi_in(CC_STATUS); ctl_midi_in(60); ctl_midi_in(127);
+    CHECK(leds[0] == 1 && leds[1] == 1);
+    // Another channel, and program changes, are ignored.
+    ctl_midi_in((uint8_t)(0x80 | (MIDI_CHANNEL % 16))); ctl_midi_in(60); ctl_midi_in(0);
+    CHECK(leds[1] == 1);
+    set_mode(2, PM_STOMP);
+    set_msg(2, MT_PROG, 5, 0, 0);
+    ctl_midi_in(PROG_CHG); ctl_midi_in(5);
+    CHECK(leds[2] == 0 && midi_len == 0);
+
+    // MIDI IN CC with custom values: the on value is on and the off value off, even when
+    // they are the other way round from the 64 rule; other values follow the 64 rule.
+    set_mode(3, PM_STOMP);
+    set_msg(3, MT_CC, 80, 0, 127);
+    ctl_midi_in(CC_STATUS); ctl_midi_in(80); ctl_midi_in(0);
+    CHECK(leds[3] == 1);
+    ctl_midi_in(CC_STATUS); ctl_midi_in(80); ctl_midi_in(127);
+    CHECK(leds[3] == 0);
+    ctl_midi_in(CC_STATUS); ctl_midi_in(80); ctl_midi_in(100);
+    CHECK(leds[3] == 1);
+    ctl_midi_in(CC_STATUS); ctl_midi_in(80); ctl_midi_in(30);
+    CHECK(leds[3] == 0);
+    set_msg(3, MT_CC, 80, 40, 30);
+    ctl_midi_in(CC_STATUS); ctl_midi_in(80); ctl_midi_in(40);
+    CHECK(leds[3] == 1 && midi_len == 0);
+    ctl_midi_in(CC_STATUS); ctl_midi_in(80); ctl_midi_in(30);
+    CHECK(leds[3] == 0);
+
+    // A program change switch starts off at power-on even in inverted momentary mode.
+    reset_world();
+    msg_stored_valid[0] = 1;
+    stored_msg[0][0] = MT_PROG;
+    stored_msg[0][1] = 5;
+    stored_msg[0][2] = 0;
+    stored_msg[0][3] = 0;
+    msg_stored_valid[1] = 1;
+    stored_msg[1][0] = MT_NOTE;
+    stored_msg[1][1] = 60;
+    stored_msg[1][2] = 100;
+    stored_msg[1][3] = 30;
+    cfg_stored_valid = 1;
+    stored_cfg[0] = MIDI_CHANNEL;
+    stored_cfg[1] = 0x0F;               // switches 1 and 2 inverted momentary
+    stored_cfg[2] = 0;
+    stored_cfg[3] = 0;
+    ctl_init();
+    boot_end();
+    CHECK(msg_type(0) == MT_PROG && MSG_NUM(0) == 5 && msg_type(1) == MT_NOTE && MSG_NUM(1) == 60 &&
+          MSG_ON(1) == 100 && MSG_OFF(1) == 30);
+    CHECK(leds[0] == 0 && leds[1] == 1 && midi_len == 0);
+    // The other records were missing: defaults.
+    CHECK(MSG_NUM(2) == cc[2] && MSG_ON(2) == 127 && MSG_OFF(2) == 0 && msg_type(9) == MT_CC && MSG_NUM(9) == cc[9]);
+
+    // A stored switch with the unused type 3 loads as a CC with the same values, and
+    // values over 127 lose bit 7.
+    reset_world();
+    msg_stored_valid[4] = 1;
+    stored_msg[4][0] = 3;
+    stored_msg[4][1] = 33;
+    stored_msg[4][2] = 0x80 | 44;
+    stored_msg[4][3] = 0x80 | 12;
+    ctl_init();
+    boot_end();
+    CHECK(msg_type(4) == MT_CC && MSG_NUM(4) == 33 && MSG_ON(4) == 44 && MSG_OFF(4) == 12);
+    cfg_stored_valid = 0;
+    memset(msg_stored_valid, 0, sizeof(msg_stored_valid));
+}
+
+static void test_config_editor(void)
+{
+    const uint8_t cc[10] = { STOMP_CC_LIST };
+    int i;
+
+    printf("config: footswitch editor\n");
+    reset_world();
+    set_mode(2, PM_STOMP);
+    chord_long();
+    CHECK(mode == MODE_CONFIG && cfg_page == PAGE_MODES);
+    CHECK(param_leds(-1));
+
+    // A short press of the selected switch changes its mode on release, not on press.
+    tap(sw_code(3));
+    CHECK(cfg_sel == 2 && pedal_mode_get(2) == PM_STOMP);
+    ctl_key_press(sw_code(3));
+    CHECK(pedal_mode_get(2) == PM_STOMP);
+    ctl_key_release(sw_code(3));
+    CHECK(pedal_mode_get(2) == PM_STOMP_MOM && display == 2);
+
+    // A long press opens the editor on the message type (SELECT lit) without changing the
+    // mode.
+    clear_log();
+    long_press(sw_code(3));
+    CHECK(edit_open && pedal_mode_get(2) == PM_STOMP_MOM && cfg_sel == 2);
+    CHECK(param_leds(EP_TYPE) && display == SHOWN_TEXT(HAL_TEXT_CC) && aux[HAL_LED_MIDI_FUNC] == 1);
+    for (i = 0; i < 10; i++)
+    {
+        CHECK(leds[i] == (i == 2));
+    }
+
+    // Type: switch 2 = note ("nt"), 3 = program change ("Pr"), 1 = CC, others nothing.
+    tap(sw_code(2));
+    CHECK(msg_type(2) == MT_NOTE && display == SHOWN_TEXT(HAL_TEXT_NOTE));
+    tap(sw_code(7));
+    CHECK(msg_type(2) == MT_NOTE);
+    // The CONFIG LED starts flashing on the next tick (the settings differ from the EEPROM).
+    ticks(1);
+    CHECK(cfg_changed && status_led == 0);
+
+    // UP: the number (NUMBER lit).
+    tap(CTL_KEY_UP);
+    CHECK(edit_param == EP_NUM && param_leds(EP_NUM) && display == cc[2]);
+    // Digits: 6, 4 make 64, which is complete (no third digit fits), so 1, 2 then make 12,
+    // and 8 starts again (128 is over 127); 10 types 0, so 8, 10 make 80.
+    tap(sw_code(6)); tap(sw_code(4));
+    CHECK(MSG_NUM(2) == 64 && display == 64 && msg_type(2) == MT_NOTE);
+    tap(sw_code(1)); tap(sw_code(2));
+    CHECK(MSG_NUM(2) == 12);
+    tap(sw_code(8));
+    CHECK(MSG_NUM(2) == 8);
+    tap(sw_code(10));
+    CHECK(MSG_NUM(2) == 80);
+    tap(sw_code(1)); tap(sw_code(2)); tap(sw_code(7));
+    CHECK(MSG_NUM(2) == 127);
+    tap(sw_code(10));
+    CHECK(MSG_NUM(2) == 0);
+    tap(sw_code(1)); tap(sw_code(10)); tap(sw_code(10));
+    CHECK(MSG_NUM(2) == 100 && msg_type(2) == MT_NOTE);
+
+    // UP: the on value (VALUE 1 lit). A new parameter starts a new number.
+    tap(CTL_KEY_UP);
+    CHECK(edit_param == EP_ON && param_leds(EP_ON) && display == 127);
+    tap(sw_code(9)); tap(sw_code(10));
+    CHECK(MSG_ON(2) == 90 && msg_type(2) == MT_NOTE);
+    // UP: the off value (VALUE 2 lit).
+    tap(CTL_KEY_UP);
+    CHECK(edit_param == EP_OFF && param_leds(EP_OFF) && display == 0);
+    tap(sw_code(3)); tap(sw_code(5));
+    CHECK(MSG_OFF(2) == 35 && MSG_ON(2) == 90 && msg_type(2) == MT_NOTE);
+    // No wrap: UP stays on the off value, DOWN goes back to the type, then stays.
+    tap(CTL_KEY_UP);
+    CHECK(edit_param == EP_OFF);
+    tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN);
+    CHECK(edit_param == EP_TYPE && param_leds(EP_TYPE) && display == SHOWN_TEXT(HAL_TEXT_NOTE));
+    // Footswitch holds and the short UP + DOWN do nothing in the editor; nothing is sent.
+    long_press(sw_code(5));
+    chord_short();
+    CHECK(edit_open && msg_type(2) == MT_NOTE && midi_len == 0);
+
+    // A long UP [ENTER] accepts: back to the modes page with switch 3 selected.
+    long_nav(CTL_KEY_UP);
+    CHECK(!edit_open && mode == MODE_CONFIG && param_leds(-1));
+    CHECK(aux[HAL_LED_MIDI_FUNC] == 1 && display == 2 && leds[2] == 1);
+    CHECK(msg_type(2) == MT_NOTE && MSG_NUM(2) == 100 && MSG_ON(2) == 90 && MSG_OFF(2) == 35);
+
+    // Open it again, change it, and a long DOWN [ESCAPE] puts the values back.
+    long_press(sw_code(3));
+    CHECK(edit_open && edit_param == EP_TYPE);
+    tap(CTL_KEY_UP); tap(CTL_KEY_UP); tap(CTL_KEY_UP);
+    tap(sw_code(7));
+    CHECK(MSG_OFF(2) == 7);
+    tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN);
+    tap(sw_code(3));
+    CHECK(msg_type(2) == MT_PROG && display == SHOWN_TEXT(HAL_TEXT_PROG));
+    // A program change has only a number.
+    tap(CTL_KEY_UP); tap(CTL_KEY_UP);
+    CHECK(edit_param == EP_NUM && param_leds(EP_NUM));
+    tap(sw_code(5));
+    CHECK(MSG_NUM(2) == 5);
+    long_nav(CTL_KEY_DOWN);
+    CHECK(!edit_open && mode == MODE_CONFIG && msg_type(2) == MT_NOTE && MSG_NUM(2) == 100 &&
+          MSG_ON(2) == 90 && MSG_OFF(2) == 35);
+
+    // Save and leave: every footswitch record is saved; switch 3 sends its note.
+    save_exit();
+    CHECK(mode == MODE_RUN && msg_saved == 10);
+    CHECK(saved_msg[2][0] == MT_NOTE && saved_msg[2][1] == 100 && saved_msg[2][2] == 90 && saved_msg[2][3] == 35);
+    CHECK(saved_msg[0][0] == MT_CC && saved_msg[0][1] == cc[0] && saved_msg[0][2] == 127 && saved_msg[0][3] == 0);
+    CHECK(saved_msg[9][1] == cc[9] && param_leds(-1));
+    clear_log();
+    tap(sw_code(3));
+    CHECK(midi_len == 3 && midi_log[0] == NOTE_ON && midi_log[1] == 100 && midi_log[2] == 90);
+
+    // An accepted change to a switch that is on sends the old message's "off" (its off
+    // value) at once and turns it off; at the save it goes to its resting state with the
+    // new message.
+    reset_world();
+    set_mode(0, PM_STOMP);
+    set_msg(0, MT_CC, cc[0], 127, 9);
+    tap(sw_code(1));
+    CHECK(leds[0] == 1);
+    chord_long();
+    clear_log();
+    long_press(sw_code(1));
+    tap(CTL_KEY_UP);
+    tap(sw_code(5)); tap(sw_code(5));
+    long_nav(CTL_KEY_UP);
+    CHECK(midi_len == 3 && cc_number(0) == cc[0] && cc_value(0) == 9 && (stomp_state & 1) == 0);
+    save_exit();
+    CHECK(leds[0] == 0 && midi_len == 3);
+    clear_log();
+    tap(sw_code(1));
+    CHECK(midi_len == 3 && cc_number(0) == 55 && cc_value(0) == 127);
+
+    // An inverted momentary switch whose message changes rests on with the new message.
+    reset_world();
+    set_mode(1, PM_MOM_INV);
+    chord_long();
+    clear_log();
+    long_press(sw_code(2));
+    tap(CTL_KEY_UP);
+    tap(sw_code(9));
+    long_nav(CTL_KEY_UP);
+    CHECK(midi_len == 3 && cc_number(0) == cc[1] && cc_value(0) == 0);
+    save_exit();
+    ticks(1);
+    CHECK(midi_len == 6 && cc_number(1) == 9 && cc_value(1) == 127 && leds[1] == 1);
+
+    // Unchanged on accept: nothing is sent and nothing moves.
+    reset_world();
+    set_mode(0, PM_STOMP);
+    tap(sw_code(1));
+    chord_long();
+    clear_log();
+    long_press(sw_code(1));
+    long_nav(CTL_KEY_UP);
+    save_exit();
+    ticks(1);
+    CHECK(midi_len == 0 && leds[0] == 1);
+
+    // Only the off value changed: that is a change too.
+    reset_world();
+    chord_long();
+    long_press(sw_code(1));
+    tap(CTL_KEY_UP); tap(CTL_KEY_UP); tap(CTL_KEY_UP);
+    tap(sw_code(4));
+    long_nav(CTL_KEY_UP);
+    CHECK(MSG_OFF(0) == 4 && (cfg_dirty & 1));
+    cancel_exit();
+    CHECK(MSG_OFF(0) == 0);
+
+    // Pedals in the editor: the first reading only records; moving sets the parameter.
+    // Type by thirds of the travel (default calibration 0-255).
+    reset_world();
+    chord_long();
+    long_press(sw_code(4));
+    pedal(0, 0);
+    CHECK(msg_type(3) == MT_CC);
+    pedal(0, 128);
+    CHECK(msg_type(3) == MT_NOTE && display == SHOWN_TEXT(HAL_TEXT_NOTE));
+    pedal(0, 255);
+    CHECK(msg_type(3) == MT_PROG);
+    pedal(1, 255);
+    pedal(1, 10);
+    CHECK(msg_type(3) == MT_CC);
+    // Values: the pedal's CC value; a pedal ends a typed number.
+    tap(CTL_KEY_UP);
+    tap(sw_code(1));
+    pedal(1, 10);
+    CHECK(MSG_NUM(3) == 1);
+    pedal(1, 128);
+    CHECK(MSG_NUM(3) == ctl_scale(128, 0, 255) && display == ctl_scale(128, 0, 255) && msg_type(3) == MT_CC);
+    tap(sw_code(2));
+    CHECK(MSG_NUM(3) == 2);
+    // Small wobble is ignored.
+    pedal(1, 129);
+    CHECK(MSG_NUM(3) == 2);
+    // The off value from a pedal (a parameter change takes a new first reading).
+    tap(CTL_KEY_UP); tap(CTL_KEY_UP);
+    pedal(0, 0);
+    CHECK(MSG_OFF(3) == 0);
+    pedal(0, 200);
+    CHECK(MSG_OFF(3) == ctl_scale(200, 0, 255) && msg_type(3) == MT_CC && MSG_NUM(3) == 2);
+    CHECK(midi_len == 0);
+    // A long UP + DOWN saves and leaves with the editor open: the change is kept.
+    chord_long();
+    CHECK(mode == MODE_RUN && !edit_open && saved_msg[3][1] == 2 && saved_msg[3][3] == ctl_scale(200, 0, 255) &&
+          msg_saved == 10);
+
+    // A long press of the selected switch while DOWN is held does not open the editor
+    // (the long DOWN cancels and leaves).
+    reset_world();
+    chord_long();
+    ctl_key_press(CTL_KEY_DOWN);
+    ctl_key_press(sw_code(1));
+    ctl_key_hold(sw_code(1));
+    CHECK(!edit_open);
+    ctl_key_hold(CTL_KEY_DOWN);
+    CHECK(mode == MODE_RUN);
+    ctl_key_release(sw_code(1));
+    ctl_key_release(CTL_KEY_DOWN);
+
+    // The editor is only on the modes page: a long press elsewhere does what a press does.
+    reset_world();
+    chord_long();
+    tap(CTL_KEY_UP);
+    long_press(sw_code(3));
+    CHECK(!edit_open && midi_channel == 3);
+    cancel_exit();
+
+    // Cancelling config mode after an accepted change restores the saved message.
+    reset_world();
+    chord_long();
+    long_press(sw_code(1));
+    tap(sw_code(2));
+    long_nav(CTL_KEY_UP);
+    CHECK(msg_type(0) == MT_NOTE);
+    cancel_exit();
+    CHECK(mode == MODE_RUN && msg_type(0) == MT_CC && MSG_NUM(0) == cc[0] && msg_saved == 0);
+
+    // The CONFIG LED: a change that is put back matches the EEPROM again (steady). A stored
+    // record compares the way it loads.
+    reset_world();
+    msg_stored_valid[0] = 1;
+    stored_msg[0][0] = 3;               // type 3: loads as CC
+    stored_msg[0][1] = cc[0];
+    stored_msg[0][2] = 127;
+    stored_msg[0][3] = 0x80;            // off value 0 with bit 7 set
+    chord_long();
+    CHECK(!cfg_changed && status_led == 1);
+    long_press(sw_code(1));
+    tap(sw_code(3));
+    ticks(1);
+    CHECK(cfg_changed);
+    tap(sw_code(1));
+    ticks(1);
+    CHECK(!cfg_changed && status_led == 1);
+    tap(sw_code(2));
+    ticks(1);
+    CHECK(cfg_changed);
+    long_nav(CTL_KEY_DOWN);
+    ticks(1);
+    CHECK(!cfg_changed && status_led == 1);
+    cancel_exit();
+    memset(msg_stored_valid, 0, sizeof(msg_stored_valid));
+}
+
 int main(void)
 {
     test_stomp_modes();
@@ -2614,6 +3115,8 @@ int main(void)
     test_boot_animation();
     test_config_led_flash();
     test_config_led_eeprom();
+    test_switch_messages();
+    test_config_editor();
     test_scaling();
     test_pedal_cc();
     test_pedal_noise();

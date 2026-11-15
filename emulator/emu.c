@@ -140,39 +140,12 @@ void hal_display_hex(uint8_t value)           { js_display_hex(value); }
 void hal_display_dots(uint8_t mask)           { js_display_dots(mask); }
 void hal_lamp_test(uint8_t how)               { js_lamp_test(how); }
 
-uint8_t hal_cfg_load(uint8_t *data)       { return js_store_load(0, data); }
 void    hal_relays(uint8_t mask)          { js_relays(mask); }
-uint8_t hal_sw_load(uint8_t relay, uint8_t *data)       { return js_store_load((uint8_t)(2 + relay), data); }
-uint8_t hal_sw_save(uint8_t relay, const uint8_t *data) { return js_store_save((uint8_t)(2 + relay), data); }
-uint8_t hal_cfg_save(const uint8_t *data) { return js_store_save(0, data); }
 
-// Calibration is stored in the same order as hw.c's record: heel A, toe A, heel B, toe B.
-static uint8_t cal_buf[4];
-
-uint8_t hal_cal_load(uint8_t *heel, uint8_t *toe)
-{
-    if (!js_store_load(1, cal_buf))
-    {
-        return 0;
-    }
-
-    heel[0] = cal_buf[0];
-    toe[0]  = cal_buf[1];
-    heel[1] = cal_buf[2];
-    toe[1]  = cal_buf[3];
-
-    return 1;
-}
-
-uint8_t hal_cal_save(const uint8_t *heel, const uint8_t *toe)
-{
-    cal_buf[0] = heel[0];
-    cal_buf[1] = toe[0];
-    cal_buf[2] = heel[1];
-    cal_buf[3] = toe[1];
-
-    return js_store_save(1, cal_buf);
-}
+// Settings records go to the page's store by HAL_REC_* number (the page names them).
+uint8_t hal_rec[4];
+uint8_t hal_rec_load(uint8_t rec) { return rec < HAL_RECORDS && js_store_load(rec, hal_rec); }
+uint8_t hal_rec_save(uint8_t rec) { return rec < HAL_RECORDS && js_store_save(rec, hal_rec); }
 
 // ---------------------------------------------------------------
 // Pedals: Averaged like hw_poll_pedals (four readings each, alternating, every 8 ticks)

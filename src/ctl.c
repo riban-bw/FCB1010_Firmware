@@ -6,7 +6,8 @@
 
 // Controller behaviour:
 //   footswitches 1..10  -> stomp switches, each with a mode chosen in configuration mode:
-//                           stomp, stomp with momentary on a long press, or momentary
+//                           stomp, stomp with momentary on a long press, or momentary,
+//                           and a message (CC, note or program change) set in its editor
 //   expression pedal A/B -> continuous CC 0..127
 //   UP / DOWN            -> MIDI program change +1 / -1, sent when the key is released;
 //                           held, the number auto-repeats on the display and is sent on release
@@ -64,6 +65,25 @@
 
 #define KEYBIT_UP       0x01
 #define KEYBIT_DOWN     0x02
+
+// Footswitch message types (two bits, kept in bit 7 of its first two msg[] bytes).
+#define MT_CC           0
+#define MT_NOTE         1
+#define MT_PROG         2
+// Program change switches: the pedal mode does not apply, a press always sends.
+
+// Parameters in the footswitch editor, each marked by its panel LED: message type
+// (SELECT), number (NUMBER: the CC, note or program number), on value (VALUE 1: the CC
+// value or note velocity sent when on) and off value (VALUE 2: sent when off). A program
+// change has only a number. The parameter is also the msg[] byte it edits, plus one.
+#define EP_TYPE         0
+#define EP_NUM          1
+#define EP_ON           2
+#define EP_OFF          3
+
+// A pedal in the editor chooses the type by thirds of its travel.
+#define EDIT_TYPE_NOTE_FROM  43
+#define EDIT_TYPE_PROG_FROM  86
 
 static const CODE uint8_t stomp_cc[STOMP_COUNT] = { STOMP_CC_LIST };
 static const CODE uint8_t pedal_cc[2]           = { PEDAL_CC_LIST };
@@ -135,21 +155,47 @@ static const CODE uint8_t fw_version_dots[3]    = { 0x01, 0x05, 0x04 };
 #error The repeat and configuration times must each be at least one tick
 #endif
 
-static IDATA uint8_t  mode;
+// A few of the most used bytes are directly addressed (no IDATA): they fill a gap below
+// the bit area that IDATA cannot use, so they cost no stack room, and the code is smaller.
+static uint8_t        mode;
 
 // MIDI IN parser state: Current (running) status byte and a pending first data byte.
 static IDATA uint8_t  rx_status;
 static IDATA uint8_t  rx_data1;
 static BIT_T    rx_have_data1;
-static IDATA uint8_t  program;
+static uint8_t        program;
 static IDATA uint16_t stomp_state;
 
 // Settings that can be changed in configuration mode and are saved in the EEPROM.
-static IDATA uint8_t  midi_channel;
+static uint8_t        midi_channel;
 static IDATA uint8_t  pedal_modes[3];
+// Footswitch messages, three bytes per switch: msg[i * 3] is the number (CC, note or
+// program) with type bit 0 in bit 7, msg[i * 3 + 1] the on value (CC value or note
+// velocity) with type bit 1 in bit 7, msg[i * 3 + 2] the off value. Each switch has its
+// own EEPROM record (type, number, on value, off value).
+#define MSG_BYTES       3
+// Index of switch i's first msg[] byte, i * 3 as 8-bit shift and add: SDCC would compute
+// i * MSG_BYTES with a call to its 16-bit multiply (a call level deeper, and slower).
+#define MSG_AT(i)       ((uint8_t)((uint8_t)((uint8_t)(i) << 1) + (uint8_t)(i)))
+static IDATA uint8_t  msg[STOMP_COUNT * MSG_BYTES];
 
-// Scratch record for loading and saving the settings (a shared buffer saves RAM).
-static IDATA uint8_t  cfg_buf[4];
+// The footswitch editor (configuration page 1, a long footswitch press): open, which
+// parameter, the switch's three bytes when it was opened (DOWN [ESCAPE] puts them back), and
+// whether a number is being typed (the next digit adds to it instead of starting anew).
+// The switch being edited is cfg_sel. The parameter and the three bytes share RAM with
+// state that is idle while the editor is open (defined below with that state).
+static BIT_T          edit_open;
+static BIT_T          edit_typing;
+// An editor change waits for the next tick to compare the settings with the EEPROM
+// (config_changed), so that deep EEPROM read runs from ctl_tick, not from under a key or
+// pedal handler.
+static BIT_T          cfg_check_due;
+// Page 1: a footswitch press there is in progress (its hold opens the editor), and it
+// was a press of the selected switch, which changes its mode on release.
+static BIT_T          mode_press_live;
+static BIT_T          mode_cycle_pending;
+
+// Settings are loaded and saved through the HAL's one record buffer, hal_rec.
 
 // Per stomp (one bit each): down = a press is in progress, held = it will be undone on
 // release (a long press, or a momentary pedal), revert = an undo is waiting for MIDI room,
@@ -180,8 +226,8 @@ static BIT_T          chord_cc_on;
 
 // Configuration mode state: Open page, footswitch being edited on the modes page, calibration
 // step, and which pedals had their mode changed.
-static IDATA uint8_t  cfg_page;
-static IDATA uint8_t  cfg_sel;
+static uint8_t        cfg_page;
+static uint8_t        cfg_sel;
 static IDATA uint8_t  cal_step;
 static IDATA uint16_t cfg_dirty;
 // Switch 10 was pressed on the channel page and a second digit can follow; scan ticks
@@ -194,6 +240,8 @@ static IDATA uint8_t  chan_flash_ticks;
 // Page 7 reuses both: ticks into the current step, and the step number.
 #define ver_ticks chan_flash_ticks
 #define ver_step  cal_step
+// The footswitch editor's parameter: only open on page 1, where neither is used.
+#define edit_param chan_flash_ticks
 // A heel reading was taken on page 3 (in ref_raw) and waits for a toe reading.
 static BIT_T          cal_heel_taken;
 
@@ -205,6 +253,13 @@ static IDATA uint8_t  toe[2];
 static IDATA uint8_t  last_raw[2];
 static IDATA uint8_t  sent[2];
 static IDATA uint8_t  ref_raw[2];
+// The footswitch editor's saved bytes. ref_raw is the run-mode pedal reference (set again
+// from the first reading after configuration mode) and the calibration heel reading kept
+// from page 3 for page 4, which opening the editor discards (cal_heel_taken = 0). The
+// third byte is nav_steps, which only counts UP / DOWN auto-repeat steps in run mode
+// (reset when a repeat starts).
+#define edit_bak     ref_raw
+#define edit_bak_off nav_steps
 
 // Relay (SWITCH 1 / 2) triggers, saved: follow masks (SW_CC_BIT and footswitches) and
 // pedal trigger values (index relay * 2 + pedal, 0 = off). relay_out is what the
@@ -223,23 +278,60 @@ static BIT_T          boot_anim;
 // Page 7 is held on one segment while its footswitch is down.
 static BIT_T          ver_paused;
 #define cfg_flash_ticks rx_flash
+
+// Footswitch i's message record into hal_rec[1..3] in msg[]'s form: the defaults (a CC
+// from STOMP_CC_LIST, on value 127, off value 0) if it is missing or invalid, the unused
+// type 3 as a CC, and each value cut to 7 bits. A macro, not a function: the EEPROM read
+// under it is the deepest stack use, and a call level would add two bytes to it.
+#define MSG_REC_LOAD(i)                                                         \
+    do {                                                                        \
+        if (!hal_rec_load((uint8_t)(HAL_REC_MSG0 + (i))))                       \
+        {                                                                       \
+            hal_rec[0] = MT_CC;                                                 \
+            hal_rec[1] = stomp_cc[i];                                           \
+            hal_rec[2] = 127;                                                   \
+            hal_rec[3] = 0;                                                     \
+        }                                                                       \
+        if ((hal_rec[0] & 3) == 3)                                              \
+        {                                                                       \
+            hal_rec[0] = MT_CC;                                                 \
+        }                                                                       \
+        hal_rec[1] = (uint8_t)((hal_rec[1] & 0x7F) | ((hal_rec[0] & 1) << 7));  \
+        hal_rec[2] = (uint8_t)((hal_rec[2] & 0x7F) | ((hal_rec[0] & 2) << 6));  \
+        hal_rec[3] &= 0x7F;                                                     \
+    } while (0)
+
 // 1 if every setting matches what the EEPROM holds, read back the way load_settings()
 // takes it (a record that is missing or invalid counts as the defaults; a stored
 // channel outside 1-16 counts as the default channel). So the CONFIG LED flashes exactly
 // while a save would change something, and cancel would restore what the EEPROM says.
-// Each record is read into cfg_buf in turn; no other RAM is used.
+// Each record is read into hal_rec in turn; no other RAM is used.
 static uint8_t settings_match_saved(void)
 {
     uint8_t i;
 
-    // Calibration, defaults first: heel A, heel B, toe A, toe B.
-    cfg_buf[0] = 0;
-    cfg_buf[1] = 0;
-    cfg_buf[2] = 255;
-    cfg_buf[3] = 255;
-    hal_cal_load(cfg_buf, cfg_buf + 2);
+    // Footswitch messages.
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        MSG_REC_LOAD(i);
 
-    if (cfg_buf[0] != heel[0] || cfg_buf[1] != heel[1] || cfg_buf[2] != toe[0] || cfg_buf[3] != toe[1])
+        if (hal_rec[1] != msg[MSG_AT(i)] || hal_rec[2] != msg[MSG_AT(i) + 1] ||
+            hal_rec[3] != msg[MSG_AT(i) + 2])
+        {
+            return 0;
+        }
+    }
+
+    // Calibration (heel A, toe A, heel B, toe B), or the defaults.
+    if (!hal_rec_load(HAL_REC_CAL))
+    {
+        hal_rec[0] = 0;
+        hal_rec[1] = 255;
+        hal_rec[2] = 0;
+        hal_rec[3] = 255;
+    }
+
+    if (hal_rec[0] != heel[0] || hal_rec[1] != toe[0] || hal_rec[2] != heel[1] || hal_rec[3] != toe[1])
     {
         return 0;
     }
@@ -247,38 +339,38 @@ static uint8_t settings_match_saved(void)
     // Relay triggers: none by default; a stored value over 127 is off.
     for (i = 0; i < 2; i++)
     {
-        if (!hal_sw_load(i, cfg_buf))
+        if (!hal_rec_load((uint8_t)(HAL_REC_SW1 + i)))
         {
-            cfg_buf[0] = 0;
-            cfg_buf[1] = 0;
-            cfg_buf[2] = 0;
-            cfg_buf[3] = 0;
+            hal_rec[0] = 0;
+            hal_rec[1] = 0;
+            hal_rec[2] = 0;
+            hal_rec[3] = 0;
         }
 
-        if (cfg_buf[0] != (uint8_t)sw_mask[i] || (cfg_buf[1] & 0x07) != (uint8_t)(sw_mask[i] >> 8) ||
-            ((cfg_buf[2] <= 127) ? cfg_buf[2] : 0) != sw_thr[i * 2] ||
-            ((cfg_buf[3] <= 127) ? cfg_buf[3] : 0) != sw_thr[i * 2 + 1])
+        if (hal_rec[0] != (uint8_t)sw_mask[i] || (hal_rec[1] & 0x07) != (uint8_t)(sw_mask[i] >> 8) ||
+            ((hal_rec[2] <= 127) ? hal_rec[2] : 0) != sw_thr[i * 2] ||
+            ((hal_rec[3] <= 127) ? hal_rec[3] : 0) != sw_thr[i * 2 + 1])
         {
             return 0;
         }
     }
 
     // Channel and pedal modes.
-    if (!hal_cfg_load(cfg_buf))
+    if (!hal_rec_load(HAL_REC_CFG))
     {
-        cfg_buf[0] = MIDI_CHANNEL;
-        cfg_buf[1] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
-        cfg_buf[2] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
-        cfg_buf[3] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x05);
+        hal_rec[0] = MIDI_CHANNEL;
+        hal_rec[1] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
+        hal_rec[2] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
+        hal_rec[3] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x05);
     }
 
-    if (cfg_buf[0] < 1 || cfg_buf[0] > 16)
+    if (hal_rec[0] < 1 || hal_rec[0] > 16)
     {
-        cfg_buf[0] = MIDI_CHANNEL;
+        hal_rec[0] = MIDI_CHANNEL;
     }
 
-    return (uint8_t)(cfg_buf[0] == midi_channel && cfg_buf[1] == pedal_modes[0] &&
-                     cfg_buf[2] == pedal_modes[1] && (uint8_t)(cfg_buf[3] & 0x0F) == pedal_modes[2]);
+    return (uint8_t)(hal_rec[0] == midi_channel && hal_rec[1] == pedal_modes[0] &&
+                     hal_rec[2] == pedal_modes[1] && (uint8_t)(hal_rec[3] & 0x0F) == pedal_modes[2]);
 }
 
 // A setting was edited in config mode (or config mode was just entered). If the settings
@@ -312,6 +404,33 @@ static void send_program(uint8_t value)
 {
     hal_midi_tx((uint8_t)(0xC0 | (midi_channel - 1)));
     hal_midi_tx((uint8_t)(value & 0x7F));
+}
+
+// Type of footswitch index's message (MT_*).
+static uint8_t msg_type(uint8_t index)
+{
+    return (uint8_t)((msg[MSG_AT(index)] >> 7) | ((msg[MSG_AT(index) + 1] >> 6) & 2));
+}
+
+// Send footswitch index's message for the state on: a CC with the on or off value, a note
+// on with the on value as velocity (on) or a note off with the off value (off), or a
+// program change (on only; off sends nothing). The caller has checked there is room for
+// three bytes.
+static void send_switch(uint8_t index, uint8_t on)
+{
+    if (msg_type(index) == MT_PROG)
+    {
+        if (on)
+        {
+            send_program(msg[MSG_AT(index)]);
+        }
+
+        return;
+    }
+
+    hal_midi_tx((uint8_t)(((msg_type(index) == MT_NOTE) ? (on ? 0x90 : 0x80) : 0xB0) | (midi_channel - 1)));
+    hal_midi_tx((uint8_t)(msg[MSG_AT(index)] & 0x7F));
+    hal_midi_tx((uint8_t)(msg[(uint8_t)(MSG_AT(index) + (on ? 1 : 2))] & 0x7F));
 }
 
 static void show_program(void)
@@ -569,11 +688,53 @@ static void version_tick(void)
     version_show();
 }
 
+// The msg[] byte of the open editor parameter (EP_NUM, EP_ON or EP_OFF) of switch cfg_sel;
+// in the first two, bit 7 is a type bit and the rest the value.
+#define EDIT_BYTE msg[(uint8_t)(MSG_AT(cfg_sel) + edit_param - 1)]
+
+// The footswitch editor: SELECT / NUMBER / VALUE 1 / VALUE 2 for the parameter (type,
+// number, on value, off value), the edited switch's LED lit, and the type ("CC", "nt",
+// "Pr") or the value on the display.
+static void edit_show(void)
+{
+    uint8_t i;
+
+    hal_aux_led(HAL_LED_SELECT, edit_param == EP_TYPE);
+    hal_aux_led(HAL_LED_NUMBER, edit_param == EP_NUM);
+    hal_aux_led(HAL_LED_VALUE_1, edit_param == EP_ON);
+    hal_aux_led(HAL_LED_VALUE_2, edit_param == EP_OFF);
+
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        hal_stomp_led(i, i == cfg_sel);
+    }
+
+    if (edit_param == EP_TYPE)
+    {
+        hal_display_text((uint8_t)(HAL_TEXT_CC + msg_type(cfg_sel)));
+    }
+    else
+    {
+        hal_display((uint8_t)(EDIT_BYTE & 0x7F));
+    }
+}
+
 // Redraw the display and panel LEDs for the open page.
 static void config_show(void)
 {
     uint8_t i;
     uint8_t r;
+
+    if (edit_open)
+    {
+        edit_show();
+        return;
+    }
+
+    hal_aux_led(HAL_LED_SELECT, 0);
+    hal_aux_led(HAL_LED_NUMBER, 0);
+    hal_aux_led(HAL_LED_VALUE_1, 0);
+    hal_aux_led(HAL_LED_VALUE_2, 0);
 
     // SWITCH 1 / SWITCH 2 mark pages 5 and 6.
     hal_aux_led(HAL_LED_SWITCH_1, cfg_page == PAGE_SW1);
@@ -658,6 +819,8 @@ static void config_goto_page(uint8_t page)
     cfg_page = page;
     chan_digit_pending = 0;
     ver_paused = 0;
+    mode_press_live = 0;
+    mode_cycle_pending = 0;
     // Leaving page 7 (or restarting it): normal LEDs again and no dots.
     hal_lamp_test(HAL_LAMP_NORMAL);
     hal_display_dots(0);
@@ -750,10 +913,11 @@ static void config_step(uint8_t code)
     }
 }
 
-// A pedal reading on a SWITCH page: once it has moved SW_PEDAL_STEP from the last value
-// (or reached 0 or 127), its CC value becomes the relay's trigger value for that pedal
-// (0 turns the trigger off). The display shows it and the EXP LED shows whether it is on.
-static void sw_pedal(uint8_t ch)
+// A pedal reading in configuration mode: 1 once its CC value has moved SW_PEDAL_STEP from
+// the last one (or reached 0 or 127), and the new value is then in sent[ch]. The first
+// reading after resync_pedals() only records the value, so a pedal sets nothing until it
+// is moved.
+static uint8_t pedal_moved(uint8_t ch)
 {
     uint8_t v = ctl_scale(last_raw[ch], heel[ch], toe[ch]);
     uint8_t d;
@@ -761,42 +925,232 @@ static void sw_pedal(uint8_t ch)
     if (sent[ch] == NO_VALUE)
     {
         sent[ch] = v;
-        return;
+        return 0;
     }
 
     d = (uint8_t)((v > sent[ch]) ? v - sent[ch] : sent[ch] - v);
 
     if (d == 0 || (d < SW_PEDAL_STEP && v != 0 && v != 127))
     {
-        return;
+        return 0;
     }
 
     sent[ch] = v;
-    sw_thr[(uint8_t)((cfg_page - PAGE_SW1) * 2 + ch)] = v;
-    config_changed();
-    hal_display(v);
-    hal_aux_led((uint8_t)(HAL_LED_EXP_1 + ch), v != 0);
+    return 1;
 }
 
-// Footswitch on the modes page: A switch that is not selected is selected and its mode
-// shown. Pressing the selected switch again moves it to the next mode.
+// A pedal reading on a SWITCH page: once it has moved, its CC value becomes the relay's
+// trigger value for that pedal (0 turns the trigger off). The display shows it and the
+// EXP LED shows whether it is on.
+static void sw_pedal(uint8_t ch)
+{
+    if (!pedal_moved(ch))
+    {
+        return;
+    }
+
+    sw_thr[(uint8_t)((cfg_page - PAGE_SW1) * 2 + ch)] = sent[ch];
+    config_changed();
+    hal_display(sent[ch]);
+    hal_aux_led((uint8_t)(HAL_LED_EXP_1 + ch), sent[ch] != 0);
+}
+
+// Footswitch pressed on the modes page: A switch that is not selected is selected and its
+// mode shown. The selected switch moves to its next mode when it is released (mode_cycle),
+// unless it was held long enough to open its editor instead.
 static void mode_press(uint8_t index)
 {
-    uint8_t m;
+    mode_press_live = 1;
 
     if (index == cfg_sel)
     {
-        m = (uint8_t)((pedal_mode_get(index) + 1) & (PM_COUNT - 1));
-        pedal_mode_set(index, m);
-        cfg_dirty |= (uint16_t)((uint16_t)1 << index);
-        config_changed();
+        mode_cycle_pending = 1;
+        return;
+    }
+
+    mode_cycle_pending = 0;
+    cfg_sel = index;
+    config_show();
+}
+
+// The selected switch released after a short press on the modes page: its next mode.
+static void mode_cycle(uint8_t index)
+{
+    uint8_t m = (uint8_t)((pedal_mode_get(index) + 1) & (PM_COUNT - 1));
+
+    pedal_mode_set(index, m);
+    cfg_dirty |= (uint16_t)((uint16_t)1 << index);
+    config_changed();
+    config_show();
+}
+
+// Open the editor for footswitch cfg_sel (a long press on the modes page), on its type.
+static void edit_begin(void)
+{
+    cal_heel_taken = 0;
+    edit_open   = 1;
+    edit_param  = EP_TYPE;
+    edit_typing = 0;
+    edit_bak[0]  = msg[MSG_AT(cfg_sel)];
+    edit_bak[1]  = msg[MSG_AT(cfg_sel) + 1];
+    edit_bak_off = msg[MSG_AT(cfg_sel) + 2];
+    resync_pedals();
+    edit_show();
+}
+
+// Swap the edited switch's three bytes with the saved ones.
+static void edit_swap(void)
+{
+    uint8_t t = msg[MSG_AT(cfg_sel)];
+
+    msg[MSG_AT(cfg_sel)] = edit_bak[0];
+    edit_bak[0] = t;
+    t = msg[MSG_AT(cfg_sel) + 1];
+    msg[MSG_AT(cfg_sel) + 1] = edit_bak[1];
+    edit_bak[1] = t;
+    t = msg[MSG_AT(cfg_sel) + 2];
+    msg[MSG_AT(cfg_sel) + 2] = edit_bak_off;
+    edit_bak_off = t;
+}
+
+// Close the editor: accept = 1 (a long UP [ENTER], or leaving configuration mode with a
+// save) keeps the new message, 0 (a long DOWN [ESCAPE]) puts the old one back. Like a mode
+// change, a changed message puts the switch in its mode's resting state when configuration
+// mode is saved (cfg_dirty). If the switch is on, the old message's "off" (its CC off
+// value or note off) is sent now, while the old message is still known, and the switch is
+// off.
+static void edit_end(uint8_t accept)
+{
+    if (!accept)
+    {
+        msg[MSG_AT(cfg_sel)]     = edit_bak[0];
+        msg[MSG_AT(cfg_sel) + 1] = edit_bak[1];
+        msg[MSG_AT(cfg_sel) + 2] = edit_bak_off;
+        cfg_check_due = 1;
+    }
+    else if (msg[MSG_AT(cfg_sel)] != edit_bak[0] || msg[MSG_AT(cfg_sel) + 1] != edit_bak[1] ||
+             msg[MSG_AT(cfg_sel) + 2] != edit_bak_off)
+    {
+        cfg_dirty |= (uint16_t)((uint16_t)1 << cfg_sel);
+
+        if ((stomp_state >> cfg_sel) & 1)
+        {
+            if (hal_midi_space() >= 3)
+            {
+                edit_swap();
+                send_switch(cfg_sel, 0);
+                edit_swap();
+            }
+
+            stomp_state &= (uint16_t)~((uint16_t)1 << cfg_sel);
+        }
+    }
+
+    edit_open   = 0;
+    edit_typing = 0;
+    resync_pedals();
+    config_show();
+}
+
+// Short UP / DOWN in the editor: the next / previous parameter, not wrapping (a program
+// change stops at its number).
+static void edit_step(uint8_t code)
+{
+    if (code == CTL_KEY_UP)
+    {
+        if (edit_param >= ((msg_type(cfg_sel) == MT_PROG) ? EP_NUM : EP_OFF))
+        {
+            return;
+        }
+
+        edit_param++;
     }
     else
     {
-        cfg_sel = index;
+        if (edit_param == EP_TYPE)
+        {
+            return;
+        }
+
+        edit_param--;
     }
 
-    config_show();
+    edit_typing = 0;
+    resync_pedals();
+    edit_show();
+}
+
+static void edit_set_type(uint8_t t)
+{
+    msg[MSG_AT(cfg_sel)]     = (uint8_t)((msg[MSG_AT(cfg_sel)] & 0x7F) | ((t & 1) << 7));
+    msg[MSG_AT(cfg_sel) + 1] = (uint8_t)((msg[MSG_AT(cfg_sel) + 1] & 0x7F) | ((t & 2) << 6));
+    cfg_check_due = 1;
+    edit_show();
+}
+
+static void edit_set_value(uint8_t v)
+{
+    EDIT_BYTE = (uint8_t)((EDIT_BYTE & 0x80) | v);
+    cfg_check_due = 1;
+    edit_show();
+}
+
+// Footswitch in the editor. Type: switch 1 CC, 2 note, 3 program change (others do
+// nothing). Values: switches 1-9 type digits 1-9 and switch 10 types 0; each digit is
+// added to the number being typed while that stays within 127 (1, 2, 7 make 127),
+// otherwise it starts a new one. The number ends once no further digit would fit (13 and
+// up), so the next digit starts a new one; a pedal or a parameter change ends it too.
+static void edit_digit(uint8_t index)
+{
+    uint8_t v;
+
+    if (edit_param == EP_TYPE)
+    {
+        if (index <= MT_PROG)
+        {
+            edit_set_type(index);
+        }
+
+        return;
+    }
+
+    index = (uint8_t)((index == STOMP_COUNT - 1) ? 0 : index + 1);
+    v = (uint8_t)(EDIT_BYTE & 0x7F);
+
+    if (edit_typing && (v < 12 || (v == 12 && index <= 7)))
+    {
+        index = (uint8_t)(v * 10 + index);
+    }
+
+    edit_typing = (index < 13) ? 1 : 0;
+    edit_set_value(index);
+}
+
+// A pedal in the editor, once moved: its CC value sets the value, or for the type, the
+// first third of its travel chooses CC, the middle note and the last program change.
+static void edit_pedal(uint8_t ch)
+{
+    if (!pedal_moved(ch))
+    {
+        return;
+    }
+
+    edit_typing = 0;
+
+    if (edit_param == EP_TYPE)
+    {
+        ch = (uint8_t)((sent[ch] >= EDIT_TYPE_PROG_FROM) ? MT_PROG :
+                       (sent[ch] >= EDIT_TYPE_NOTE_FROM) ? MT_NOTE : MT_CC);
+
+        if (ch != msg_type(cfg_sel))
+        {
+            edit_set_type(ch);
+        }
+
+        return;
+    }
+
+    edit_set_value(sent[ch]);
 }
 
 // End a two-digit channel entry: stop the flashing and show the channel.
@@ -877,6 +1231,8 @@ static void enter_config(void)
     cfg_dirty = 0;
     cfg_sel   = 0;
     cal_heel_taken = 0;
+    edit_open = 0;
+    cfg_check_due = 0;
     rx_flash  = 0;
     cfg_changed  = 0;
     cfg_led_dark = 0;
@@ -887,18 +1243,18 @@ static void enter_config(void)
     config_changed();
 }
 
-// Take the settings from the four bytes loaded into cfg_buf, keeping the default
+// Take the settings from the four bytes loaded into hal_rec, keeping the default
 // channel if the saved one is out of range. Every 2-bit pedal mode value is valid.
 static void settings_unpack(void)
 {
-    if (cfg_buf[0] >= 1 && cfg_buf[0] <= 16)
+    if (hal_rec[0] >= 1 && hal_rec[0] <= 16)
     {
-        midi_channel = cfg_buf[0];
+        midi_channel = hal_rec[0];
     }
 
-    pedal_modes[0] = cfg_buf[1];
-    pedal_modes[1] = cfg_buf[2];
-    pedal_modes[2] = (uint8_t)(cfg_buf[3] & 0x0F);
+    pedal_modes[0] = hal_rec[1];
+    pedal_modes[1] = hal_rec[2];
+    pedal_modes[2] = (uint8_t)(hal_rec[3] & 0x0F);
 }
 
 // Defaults, then whatever valid settings and calibration the EEPROM holds. Used at
@@ -919,7 +1275,22 @@ static void load_settings(void)
     pedal_modes[1] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
     pedal_modes[2] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x05);
 
-    hal_cal_load(heel, toe);
+    if (hal_rec_load(HAL_REC_CAL))
+    {
+        heel[0] = hal_rec[0];
+        toe[0]  = hal_rec[1];
+        heel[1] = hal_rec[2];
+        toe[1]  = hal_rec[3];
+    }
+
+    // Footswitch messages: a CC from STOMP_CC_LIST (on 127, off 0) unless saved.
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        MSG_REC_LOAD(i);
+        msg[MSG_AT(i)]     = hal_rec[1];
+        msg[MSG_AT(i) + 1] = hal_rec[2];
+        msg[MSG_AT(i) + 2] = hal_rec[3];
+    }
 
     // Relay triggers: none by default. A saved value over 127 is ignored (off).
     for (i = 0; i < 2; i++)
@@ -928,15 +1299,15 @@ static void load_settings(void)
         sw_thr[i * 2]     = 0;
         sw_thr[i * 2 + 1] = 0;
 
-        if (hal_sw_load(i, cfg_buf))
+        if (hal_rec_load((uint8_t)(HAL_REC_SW1 + i)))
         {
-            sw_mask[i]        = (uint16_t)(cfg_buf[0] | ((uint16_t)(cfg_buf[1] & 0x07) << 8));
-            sw_thr[i * 2]     = (cfg_buf[2] <= 127) ? cfg_buf[2] : 0;
-            sw_thr[i * 2 + 1] = (cfg_buf[3] <= 127) ? cfg_buf[3] : 0;
+            sw_mask[i]        = (uint16_t)(hal_rec[0] | ((uint16_t)(hal_rec[1] & 0x07) << 8));
+            sw_thr[i * 2]     = (hal_rec[2] <= 127) ? hal_rec[2] : 0;
+            sw_thr[i * 2 + 1] = (hal_rec[3] <= 127) ? hal_rec[3] : 0;
         }
     }
 
-    if (hal_cfg_load(cfg_buf))
+    if (hal_rec_load(HAL_REC_CFG))
     {
         settings_unpack();
     }
@@ -949,6 +1320,12 @@ static void exit_config(uint8_t save)
     uint8_t  i;
     uint16_t bit;
 
+    // An open footswitch editor keeps its changes (UP + DOWN held saves and leaves).
+    if (edit_open)
+    {
+        edit_end(1);
+    }
+
     // Stop a two-digit channel entry that could still take a second digit.
     chan_digit_pending = 0;
     // Leaving from page 7 ends the lamp test and its dots.
@@ -957,22 +1334,36 @@ static void exit_config(uint8_t save)
 
     if (save)
     {
-        cfg_buf[0] = midi_channel;
-        cfg_buf[1] = pedal_modes[0];
-        cfg_buf[2] = pedal_modes[1];
-        cfg_buf[3] = pedal_modes[2];
+        hal_rec[0] = midi_channel;
+        hal_rec[1] = pedal_modes[0];
+        hal_rec[2] = pedal_modes[1];
+        hal_rec[3] = pedal_modes[2];
 
         // If a write fails the new settings still apply until power-off.
-        hal_cfg_save(cfg_buf);
-        hal_cal_save(heel, toe);
+        hal_rec_save(HAL_REC_CFG);
+
+        hal_rec[0] = heel[0];
+        hal_rec[1] = toe[0];
+        hal_rec[2] = heel[1];
+        hal_rec[3] = toe[1];
+        hal_rec_save(HAL_REC_CAL);
 
         for (i = 0; i < 2; i++)
         {
-            cfg_buf[0] = (uint8_t)sw_mask[i];
-            cfg_buf[1] = (uint8_t)(sw_mask[i] >> 8);
-            cfg_buf[2] = sw_thr[i * 2];
-            cfg_buf[3] = sw_thr[i * 2 + 1];
-            hal_sw_save(i, cfg_buf);
+            hal_rec[0] = (uint8_t)sw_mask[i];
+            hal_rec[1] = (uint8_t)(sw_mask[i] >> 8);
+            hal_rec[2] = sw_thr[i * 2];
+            hal_rec[3] = sw_thr[i * 2 + 1];
+            hal_rec_save((uint8_t)(HAL_REC_SW1 + i));
+        }
+
+        for (i = 0; i < STOMP_COUNT; i++)
+        {
+            hal_rec[0] = msg_type(i);
+            hal_rec[1] = (uint8_t)(msg[MSG_AT(i)] & 0x7F);
+            hal_rec[2] = (uint8_t)(msg[MSG_AT(i) + 1] & 0x7F);
+            hal_rec[3] = msg[MSG_AT(i) + 2];
+            hal_rec_save((uint8_t)(HAL_REC_MSG0 + i));
         }
     }
     else
@@ -985,13 +1376,13 @@ static void exit_config(uint8_t save)
     {
         bit = (uint16_t)((uint16_t)1 << i);
 
-        // A switch whose mode changed goes to its new mode's resting state: on for
-        // inverted momentary, off for the others. If that changes its state the CC is
-        // sent (through the revert queue, so as soon as MIDI OUT has room, and the LED
-        // follows); if it is already there nothing is sent.
+        // A switch whose mode or message changed goes to its new mode's resting state: on
+        // for inverted momentary, off for the others and for a program change. If that
+        // changes its state its message is sent (through the revert queue, so as soon as
+        // MIDI OUT has room, and the LED follows); if it is already there nothing is sent.
         if (cfg_dirty & bit)
         {
-            if (pedal_mode_get(i) == PM_MOM_INV)
+            if (pedal_mode_get(i) == PM_MOM_INV && msg_type(i) != MT_PROG)
             {
                 stomp_prev |= bit;
             }
@@ -1024,6 +1415,10 @@ static void exit_config(uint8_t save)
     hal_aux_led(HAL_LED_DIRECT_SELECT, chord_cc_on ? 1 : 0);
     hal_aux_led(HAL_LED_SWITCH_1, relay_out & 1);
     hal_aux_led(HAL_LED_SWITCH_2, (relay_out >> 1) & 1);
+    hal_aux_led(HAL_LED_SELECT, 0);
+    hal_aux_led(HAL_LED_NUMBER, 0);
+    hal_aux_led(HAL_LED_VALUE_1, 0);
+    hal_aux_led(HAL_LED_VALUE_2, 0);
 
     for (i = 0; i < STOMP_COUNT; i++)
     {
@@ -1044,6 +1439,10 @@ static void nav_step(uint8_t code)
     if (mode == MODE_RUN)
     {
         program_step(code);
+    }
+    else if (edit_open)
+    {
+        edit_step(code);
     }
     else
     {
@@ -1249,13 +1648,18 @@ void ctl_init(void)
     rx_flash      = 0;
     cfg_changed   = 0;
     cfg_led_dark  = 0;
+    edit_open     = 0;
+    edit_typing   = 0;
+    cfg_check_due = 0;
+    mode_press_live    = 0;
+    mode_cycle_pending = 0;
     last_raw[0]   = 0;
     last_raw[1]   = 0;
     resync_pedals();
 
     for (i = 0; i < STOMP_COUNT; i++)
     {
-        if (pedal_mode_get(i) == PM_MOM_INV)
+        if (pedal_mode_get(i) == PM_MOM_INV && msg_type(i) != MT_PROG)
         {
             stomp_state |= (uint16_t)((uint16_t)1 << i);
             hal_stomp_led(i, 1);
@@ -1274,6 +1678,10 @@ void ctl_init(void)
     hal_aux_led(HAL_LED_DIRECT_SELECT, 0);
     hal_aux_led(HAL_LED_SWITCH_1, 0);
     hal_aux_led(HAL_LED_SWITCH_2, 0);
+    hal_aux_led(HAL_LED_SELECT, 0);
+    hal_aux_led(HAL_LED_NUMBER, 0);
+    hal_aux_led(HAL_LED_VALUE_1, 0);
+    hal_aux_led(HAL_LED_VALUE_2, 0);
     hal_relays(0);
     show_program();
 
@@ -1312,7 +1720,7 @@ static void apply_revert(uint8_t index)
         stomp_state &= (uint16_t)~bit;
     }
 
-    send_cc(stomp_cc[index], on ? 127 : 0);
+    send_switch(index, on);
 
     // In configuration mode the footswitch LEDs belong to the settings pages.
     if (mode == MODE_RUN)
@@ -1359,13 +1767,36 @@ void ctl_key_hold(uint8_t code)
         {
             nav_code      = NAV_NONE;
             nav_repeating = 0;
-            exit_config((code == CTL_KEY_UP) ? 1 : 0);
+
+            // In the footswitch editor they accept or undo its changes instead.
+            if (edit_open)
+            {
+                edit_end((code == CTL_KEY_UP) ? 1 : 0);
+            }
+            else
+            {
+                exit_config((code == CTL_KEY_UP) ? 1 : 0);
+            }
         }
 
         return;
     }
 
-    if (mode != MODE_RUN || index == 0xFF)
+    // Modes page: a long press of a footswitch opens its editor (the press has selected
+    // it, and its release then changes nothing).
+    if (mode == MODE_CONFIG)
+    {
+        if (cfg_page == PAGE_MODES && !edit_open && mode_press_live && index == cfg_sel && keys_down == 0)
+        {
+            mode_press_live    = 0;
+            mode_cycle_pending = 0;
+            edit_begin();
+        }
+
+        return;
+    }
+
+    if (index == 0xFF)
     {
         return;
     }
@@ -1403,6 +1834,23 @@ void ctl_key_release(uint8_t code)
         return;
     }
 
+    // Modes page: releasing the selected switch after a short press changes its mode.
+    if (mode == MODE_CONFIG)
+    {
+        if (mode_press_live && index == cfg_sel)
+        {
+            mode_press_live = 0;
+
+            if (mode_cycle_pending)
+            {
+                mode_cycle_pending = 0;
+                mode_cycle(index);
+            }
+        }
+
+        return;
+    }
+
     bit = (uint16_t)((uint16_t)1 << index);
 
     if ((stomp_down & bit) == 0)
@@ -1430,6 +1878,31 @@ void ctl_key_release(uint8_t code)
     {
         apply_revert(index);
     }
+}
+
+// A program change footswitch pressed in run mode (whatever its pedal mode): its program
+// is sent, its LED lights and those of the other program change switches go dark (it
+// shows the program chosen last), and UP / DOWN then step from that program.
+static void prog_press(uint8_t index)
+{
+    uint8_t i;
+
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        if (msg_type(i) == MT_PROG)
+        {
+            stomp_state &= (uint16_t)~((uint16_t)1 << i);
+            hal_stomp_led(i, 0);
+        }
+    }
+
+    stomp_state |= (uint16_t)((uint16_t)1 << index);
+    hal_stomp_led(index, 1);
+    send_switch(index, 1);
+    program         = (uint8_t)(msg[MSG_AT(index)] & 0x7F);
+    program_moved   = 0;
+    program_pending = 0;
+    show_program();
 }
 
 void ctl_key_press(uint8_t code)
@@ -1469,7 +1942,14 @@ void ctl_key_press(uint8_t code)
         }
         else if (cfg_page == PAGE_MODES)
         {
-            mode_press(stomp_index(code));
+            if (edit_open)
+            {
+                edit_digit(stomp_index(code));
+            }
+            else
+            {
+                mode_press(stomp_index(code));
+            }
         }
         // SWITCH page: toggles whether the relay follows this footswitch (LED lit).
         else if (IS_SW_PAGE(cfg_page))
@@ -1499,6 +1979,12 @@ void ctl_key_press(uint8_t code)
     {
         index = stomp_index(code);
         bit   = (uint16_t)((uint16_t)1 << index);
+
+        if (msg_type(index) == MT_PROG)
+        {
+            prog_press(index);
+            return;
+        }
 
         // Remember what the state was, in case this press is undone on release.
         if (stomp_state & bit)
@@ -1541,17 +2027,44 @@ void ctl_key_press(uint8_t code)
             on = (stomp_state & bit) ? 1 : 0;
         }
 
-        send_cc(stomp_cc[index], on ? 127 : 0);
+        send_switch(index, on);
         hal_stomp_led(index, on);
     }
 }
 
-// Apply an incoming MIDI CC value to every stomp switch assigned to that CC.
+// Whether an incoming CC or note (rx_status, value) turns footswitch i on. A CC value equal
+// to the switch's on value is on, equal to its off value off, and any other value is on
+// from 64 up; a note on with a velocity above 0 is on, a note off or a note on with
+// velocity 0 is off. A leaf function, so its locals cost no fixed RAM.
+static uint8_t remote_on(uint8_t i, uint8_t value)
+{
+    i = (uint8_t)(MSG_AT(i));
+
+    if ((rx_status & 0xF0) != 0xB0)
+    {
+        return (uint8_t)(((rx_status & 0xF0) == 0x90 && value != 0) ? 1 : 0);
+    }
+
+    if (value == (msg[i + 1] & 0x7F))
+    {
+        return 1;
+    }
+
+    if (value == msg[i + 2])
+    {
+        return 0;
+    }
+
+    return (uint8_t)((value >= 64) ? 1 : 0);
+}
+
+// Apply an incoming control change or note (rx_status) to every footswitch sending that
+// CC or note (remote_on). CHORD_CC is on from 64 up. No locals beyond the loop count:
+// ctl.c's directly addressed variables must stay small enough for the gap below the bit
+// area (0x08-0x1F), or the linker moves them all above it and the stack starts higher.
 static void remote_cc(uint8_t cc, uint8_t value)
 {
-    uint8_t  i;
-    uint8_t  on = (value >= 64) ? 1 : 0;
-    uint16_t bit;
+    uint8_t i;
 
     // In configuration mode the LEDs show the settings, so remote changes wait.
     if (mode != MODE_RUN)
@@ -1559,31 +2072,30 @@ static void remote_cc(uint8_t cc, uint8_t value)
         return;
     }
 
+    // 0xB0 (CC) has bit 5 set, 0x90 and 0x80 (notes) do not.
     for (i = 0; i < STOMP_COUNT; i++)
     {
-        if (stomp_cc[i] == cc)
+        if ((msg[MSG_AT(i)] & 0x7F) == cc && msg_type(i) == ((rx_status & 0x20) ? MT_CC : MT_NOTE))
         {
-            bit = (uint16_t)((uint16_t)1 << i);
-
-            if (on)
+            if (remote_on(i, value))
             {
-                stomp_state |= bit;
+                stomp_state |= (uint16_t)((uint16_t)1 << i);
             }
             else
             {
-                stomp_state &= (uint16_t)~bit;
+                stomp_state &= (uint16_t)~((uint16_t)1 << i);
             }
 
-            hal_stomp_led(i, on);
+            hal_stomp_led(i, (uint8_t)((stomp_state >> i) & 1));
         }
     }
 
     // CHORD_CC sets the DIRECT SELECT state and LED the same way (relays that follow it
     // update on the next tick). Nothing is sent back.
-    if (cc == CHORD_CC)
+    if ((rx_status & 0x20) && cc == CHORD_CC)
     {
-        chord_cc_on = on;
-        hal_aux_led(HAL_LED_DIRECT_SELECT, on);
+        chord_cc_on = (value >= 64) ? 1 : 0;
+        hal_aux_led(HAL_LED_DIRECT_SELECT, chord_cc_on);
     }
 }
 
@@ -1615,9 +2127,10 @@ void ctl_midi_in(uint8_t byte)
         return;
     }
 
-    // Only control changes on our channel are of interest; everything else,
-    // including SysEx data and other channels, is ignored.
-    if (rx_status != (uint8_t)(0xB0 | (midi_channel - 1)))
+    // Only control changes and notes on our channel are of interest; everything else,
+    // including program changes, SysEx data and other channels, is ignored.
+    if ((uint8_t)(rx_status & 0x0F) != (uint8_t)(midi_channel - 1) ||
+        ((rx_status & 0xF0) != 0xB0 && (rx_status & 0xF0) != 0x90 && (rx_status & 0xF0) != 0x80))
     {
         return;
     }
@@ -1629,7 +2142,7 @@ void ctl_midi_in(uint8_t byte)
         return;
     }
 
-    // Running status: The next pair of data bytes is another control change.
+    // Running status: The next pair of data bytes is another message of the same kind.
     rx_have_data1 = 0;
     remote_cc(rx_data1, byte);
 }
@@ -1645,8 +2158,13 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
 
     if (mode != MODE_RUN)
     {
-        // On a SWITCH page a pedal sets that relay's trigger value; nothing is sent.
-        if (IS_SW_PAGE(cfg_page))
+        // In the footswitch editor a pedal sets the parameter; on a SWITCH page it sets
+        // that relay's trigger value. Nothing is sent.
+        if (edit_open)
+        {
+            edit_pedal(channel);
+        }
+        else if (IS_SW_PAGE(cfg_page))
         {
             sw_pedal(channel);
         }
@@ -1758,7 +2276,13 @@ void ctl_tick(void)
             hal_aux_led(HAL_LED_MIDI_CHAN, 0);
         }
     }
-    // Config mode with changes: flash the CONFIG LED.
+    // Config mode: an editor change is compared with the EEPROM, then with changes the
+    // CONFIG LED flashes.
+    else if (cfg_check_due)
+    {
+        cfg_check_due = 0;
+        config_changed();
+    }
     else if (cfg_changed && ++cfg_flash_ticks >= CFG_FLASH_TICKS)
     {
         cfg_flash_ticks = 0;
@@ -1851,6 +2375,11 @@ uint8_t ctl_inspect(uint8_t what)
         return sw_thr[what - CTL_INSPECT_SW_THR];
     }
 
+    if (what >= CTL_INSPECT_MSG && what < CTL_INSPECT_MSG + STOMP_COUNT * MSG_BYTES)
+    {
+        return msg[what - CTL_INSPECT_MSG];
+    }
+
     if (what >= CTL_INSPECT_SW_MASK && what < CTL_INSPECT_SW_MASK + 4)
     {
         what = (uint8_t)(what - CTL_INSPECT_SW_MASK);
@@ -1873,6 +2402,7 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_SENT_B:        return sent[1];
     case CTL_INSPECT_CAL_MIN_SPAN:  return CAL_MIN_SPAN;
     case CTL_INSPECT_RELAYS:        return relay_out;
+    case CTL_INSPECT_EDIT:          return edit_open ? (uint8_t)(edit_param + 1) : 0;
     default:                        return 0;
     }
 }

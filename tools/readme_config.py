@@ -113,6 +113,7 @@ RULES = [
     (r"shows in hex, one part (per second|every [\d.]+ seconds?)",
      ["per second" if show == 1000 else "every " + sec_words(show)]),
     (r"The ([\d.]+) second long-press threshold", [secs(hold)]),
+    (r"Hold a footswitch for ([\d.]+ seconds?) to open its editor", [sec_words(hold)]),
 ]
 
 text = open(readme).read()

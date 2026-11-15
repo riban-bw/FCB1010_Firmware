@@ -29,14 +29,35 @@ void    hal_status_led(uint8_t on);
 #define HAL_LED_DIRECT_SELECT 4
 #define HAL_LED_SWITCH_1   5
 #define HAL_LED_SWITCH_2   6
+// The footswitch parameter editor in configuration mode: SELECT marks it, NUMBER,
+// VALUE 1 and VALUE 2 the parameter being edited.
+#define HAL_LED_SELECT     7
+#define HAL_LED_NUMBER     8
+#define HAL_LED_VALUE_1    9
+#define HAL_LED_VALUE_2    10
+#define HAL_LED_COUNT      11
 
 void    hal_aux_led(uint8_t which, uint8_t on);
 
-// Saved settings (MIDI channel and pedal modes) are four bytes. Load returns 1 and fills
-// data[4] if a valid record was found; save returns 1 if it read back correctly.
-// IDATA pointers are one byte on the 8051 (a generic pointer is three, kept in RAM).
-uint8_t hal_cfg_load(IDATA uint8_t *data);
-uint8_t hal_cfg_save(const IDATA uint8_t *data);
+// Saved settings: records of four bytes, all passed through hal_rec (one shared buffer
+// and a one-byte argument, so no pointer or second parameter takes RAM).
+// hal_rec_load(rec) returns 1 and fills hal_rec if a valid record was found (otherwise
+// hal_rec is undefined); hal_rec_save(rec) stores hal_rec and returns 1 if it read back.
+//   HAL_REC_MSG0 + n  footswitch n (0-9): type (0 CC, 1 note, 2 program change), number,
+//                     on value, off value
+//   HAL_REC_SW1/SW2   relay SWITCH 1 / 2: follow mask low byte, high byte, pedal A
+//                     trigger, pedal B trigger
+//   HAL_REC_CAL       calibration: heel A, toe A, heel B, toe B (raw ADC readings)
+//   HAL_REC_CFG       MIDI channel, then the packed pedal modes (three bytes)
+#define HAL_REC_MSG0    0
+#define HAL_REC_SW1     10
+#define HAL_REC_SW2     11
+#define HAL_REC_CAL     12
+#define HAL_REC_CFG     13
+#define HAL_RECORDS     14
+extern IDATA uint8_t hal_rec[4];
+uint8_t hal_rec_load(uint8_t rec);
+uint8_t hal_rec_save(uint8_t rec);
 
 // Show 0..255 on the three-digit 7-segment display.
 void    hal_display(uint8_t value);
@@ -49,7 +70,11 @@ void    hal_display(uint8_t value);
 // "an", "n " (HAL_TEXT_SCROLL + 0..HAL_TEXT_SCROLL_FRAMES - 1).
 #define HAL_TEXT_SCROLL         3
 #define HAL_TEXT_SCROLL_FRAMES  6
-#define HAL_TEXT_COUNT          (HAL_TEXT_SCROLL + HAL_TEXT_SCROLL_FRAMES)
+// Footswitch message types: "CC", "nt" (note), "Pr" (program change), in that order.
+#define HAL_TEXT_CC             (HAL_TEXT_SCROLL + HAL_TEXT_SCROLL_FRAMES)
+#define HAL_TEXT_NOTE           (HAL_TEXT_CC + 1)
+#define HAL_TEXT_PROG           (HAL_TEXT_CC + 2)
+#define HAL_TEXT_COUNT          (HAL_TEXT_CC + 3)
 
 void    hal_display_text(uint8_t text);
 
@@ -82,17 +107,5 @@ void    hal_lamp_test(uint8_t how);
 // a set bit closes the relay.
 void    hal_relays(uint8_t mask);
 
-// Saved trigger settings for relay 0 (SWITCH 1) or 1 (SWITCH 2), four bytes each:
-// follow mask low byte, high byte, pedal A threshold, pedal B threshold. Load returns 1
-// and fills data[4] if a valid record was found; save returns 1 if it read back.
-uint8_t hal_sw_load(uint8_t relay, IDATA uint8_t *data);
-uint8_t hal_sw_save(uint8_t relay, const IDATA uint8_t *data);
-
-// Read saved pedal calibration. Returns 1 and fills heel[2], toe[2]
-// if valid data was found, otherwise returns 0 and leaves them alone.
-uint8_t hal_cal_load(IDATA uint8_t *heel, IDATA uint8_t *toe);
-
-// Store pedal calibration. Returns 1 if it read back correctly.
-uint8_t hal_cal_save(const IDATA uint8_t *heel, const IDATA uint8_t *toe);
 
 #endif
