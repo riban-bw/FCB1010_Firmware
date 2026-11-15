@@ -98,8 +98,9 @@ The program memory is a 28-pin chip in a socket. The EPROM used in my FCB1010 is
 |---|---|---|---|
 | 27C512 (for example HT27C512) | 64KB | `build/fcb1010_27c512.bin` | A 27C512-pinout part: W27C512 (electrically erasable, so it can be reprogrammed in the programmer), or a one-time programmable AT27C512R |
 | 27C256 | 32KB | `build/fcb1010_27c256.bin` | A 27C256-pinout part such as an AT27C256R, or an AT28C256 EEPROM on an adapter (see step 3) |
+| 27C128 | 16KB | `build/fcb1010_27c128.bin` | A 27C128-pinout part, or a larger chip of the socket's pinout with its image |
 
-The 27C512 image is the 32KB firmware twice, so it runs whether the socket drives the chip's top address line (pin 1, A15) high or low. Both images are built by `make` and offered by the GitHub build.
+The 27C512 image is the 32KB firmware twice, so it runs whether the socket drives the chip's top address line (pin 1, A15) high or low. All three images are built by `make` and offered by the GitHub build.
 
 1. **Identify the stock chip.** Open the case (16 screws on the underside). The program memory is the 28-pin socketed chip, often under a label or hot glue. Read the part number and find it in the table above; go by what is printed on yours. I recommend taking a photo of the original physical installation to have a record of what it looked like before you started to make changes.
 2. **Back up the original.** Read the stock chip with your programmer and save the file. Put a fresh label on it and keep it. This may allow you to flash the stock firmware to your new, target (E)EPROM to validate the flashing process. It is unlikely that the original chip is rewritable.
@@ -158,7 +159,7 @@ make emulator     # update emulator/index.html and run its checks (needs clang a
 test/sim_smoke.sh # runs the real image in the uCsim 8051 simulator (apt install sdcc-ucsim)
 ```
 
-The ROM images are `build/fcb1010_27c512.bin` (64KB, the 32KB image twice, for a 27C512) and `build/fcb1010_27c256.bin` (32KB, for a 27C256 or 28C256). The older names `fcb1010_64k_mirrored.bin` and `fcb1010_32k.bin` are built too, with the same contents. Unused space is filled with 0xFF. The code is linked for addresses below 32KB only, since how the FCB1010 wires the top address line of a 27C512 socket is not known.
+There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb1010_27c128.bin` (16KB), `build/fcb1010_27c256.bin` (32KB, also for a 28C256) and `build/fcb1010_27c512.bin` (64KB, the 32KB image twice). Each is the code padded with 0xFF and repeated to fill the chip; the build fails if the code outgrows a chip. The code is linked for addresses below 32KB only, since how the FCB1010 wires the top address line of a 27C512 socket is not known.
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 

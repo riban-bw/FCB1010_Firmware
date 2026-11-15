@@ -41,11 +41,11 @@ else
 EMU_PAGE := emu-skipped
 endif
 
-# ROM images named for the chip: 27C512 (64KB) and 27C256 (32KB). The old names are
-# kept as copies.
-ROMS := $(OUT)/fcb1010_27c512.bin $(OUT)/fcb1010_27c256.bin $(OUT)/fcb1010_64k_mirrored.bin
+# One ROM image per chip size (tools/rom_image.py): 27C128 (16KB), 27C256 (32KB) and
+# 27C512 (64KB), each the code padded with 0xFF and repeated to fill the chip.
+ROMS := $(OUT)/fcb1010_27c128.bin $(OUT)/fcb1010_27c256.bin $(OUT)/fcb1010_27c512.bin
 
-all: $(OUT)/fcb1010_32k.bin $(ROMS) $(EMU_PAGE)
+all: $(ROMS) $(EMU_PAGE)
 
 .PHONY: emu-skipped
 emu-skipped:
@@ -73,27 +73,22 @@ endif
 	$(SDCC) $(SDCCFLAGS) -c src/version.c -o $(OUT)/version.rel
 	$(SDCC) $(SDCCFLAGS) $(OBJS) $(OUT)/version.rel -o $@
 
-# 32KB image padded with 0xFF, for a 27C256 / 28C256 sized chip.
-# makebin only emits the used bytes, so pad explicitly.
-$(OUT)/fcb1010_32k.bin: $(OUT)/fcb1010.ihx
-	$(MAKEBIN) -p $< $(OUT)/fcb1010_raw.bin
-	python3 -I tools/check_size.py $(OUT)/fcb1010_raw.bin $(ROM_SIZE) README.md
+# The linked code as a binary (makebin only emits the used bytes), then the size check
+# and the README hooks.
+$(OUT)/fcb1010_raw.bin: $(OUT)/fcb1010.ihx
+	$(MAKEBIN) -p $< $@
+	python3 -I tools/check_size.py $@ $(ROM_SIZE) README.md
 	python3 -I tools/readme_version.py src/version.h src/version_build.inc README.md
 	python3 -I tools/readme_config.py src/config.h README.md
-	head -c $(ROM_SIZE) /dev/zero | tr '\000' '\377' > $@
-	dd if=$(OUT)/fcb1010_raw.bin of=$@ conv=notrunc 2>/dev/null
 
-# The same image twice, for a 64KB chip (27C512 type) sitting in a socket
-# where the top address line may be high or low.
-$(OUT)/fcb1010_64k_mirrored.bin: $(OUT)/fcb1010_32k.bin
-	cat $< $< > $@
+$(OUT)/fcb1010_27c128.bin: $(OUT)/fcb1010_raw.bin tools/rom_image.py
+	python3 -I tools/rom_image.py $< $(ROM_SIZE) 16384 $@
 
-# The same images under the chip names the README uses.
-$(OUT)/fcb1010_27c512.bin: $(OUT)/fcb1010_64k_mirrored.bin
-	cp $< $@
+$(OUT)/fcb1010_27c256.bin: $(OUT)/fcb1010_raw.bin tools/rom_image.py
+	python3 -I tools/rom_image.py $< $(ROM_SIZE) 32768 $@
 
-$(OUT)/fcb1010_27c256.bin: $(OUT)/fcb1010_32k.bin
-	cp $< $@
+$(OUT)/fcb1010_27c512.bin: $(OUT)/fcb1010_raw.bin tools/rom_image.py
+	python3 -I tools/rom_image.py $< $(ROM_SIZE) 65536 $@
 
 test: $(OUT)/test_ctl $(OUT)/test_keys
 	$(OUT)/test_ctl
