@@ -430,5 +430,126 @@ const wantPc = DEF_MODE === 2 ? [[pc(5), pc(6)], [pc(5), pc(6)]] :
                DEF_MODE === 3 ? [[pc(6), pc(5)], [pc(6), pc(5)]] : [[pc(5)], [pc(6)]];
 check("it toggles between programs 5 and 6 (following the default pedal mode)", twoPresses, wantPc);
 
+console.log("emulator: configuration over MIDI (the page's configurator, NRPN)");
+const conf = fcb.conf, NP = fcb.NP, NC = fcb.NC;
+const rec = () => JSON.parse(store["fcb1010-eeprom-v2"]);
+wait(100); sent();
+check("before any read the panel holds the emulator's settings from page load (the defaults here)",
+      [conf.known, conf.v[NP.NUM + 2], conf.v[NP.TYPE + 3], conf.v[NP.MODE + 4], typeof conf.v[NP.CHANNEL]], [false, STOMP_CC[2], 0, DEF_MODE, "number"]);
+conf.ch = 1 + ((fcb.state().midiChannel) % 16);    // the wrong channel: Find has to locate it
+fcb.confRead(true); wait(400);
+check("Find reads the pedal and learns its channel", [conf.waiting, conf.ch, !!conf.v], ["", fcb.state().midiChannel, true]);
+check("the dump has footswitch 3 (note 60, 100, 20) and 4 (programs 5 / 6)",
+      [conf.v[NP.TYPE + 2], conf.v[NP.NUM + 2], conf.v[NP.ON + 2], conf.v[NP.OFF + 2], conf.v[NP.TYPE + 3], conf.v[NP.NUM + 3], conf.v[NP.ON + 3]],
+      [1, 60, 100, 20, 2, 5, 6]);
+check("and the channel, a mode and a stomp CC", [conf.v[NP.CHANNEL], conf.v[NP.MODE], conf.v[NP.NUM + 9]], [fcb.state().midiChannel, DEF_MODE, STOMP_CC[9]]);
+const dumpMsgs = sent();
+check("the dump went out as NRPN controllers on the pedal's channel, ending with the end marker",
+      [dumpMsgs.length > 0, dumpMsgs.every((m) => new RegExp("^b" + chHex + " (63 46|62 [0-5][0-9a-f]|06 [0-7][0-9a-f]|26 [0-7][0-9a-f])$").test(m)),
+       dumpMsgs.slice(-2)], [true, true, ["b" + chHex + " 62 05", "b" + chHex + " 06 00"]]);
+fcb.confChanged(NP.NUM + 9, 99);
+fcb.confChanged(NP.TRIGGER + 2, 70);
+wait(20);
+check("a set applies at once, unsaved", [fcb.state().msgs[9].num, fcb.state().swThr[2], rec().fs9 === undefined || rec().fs9[1] !== 99], [99, 70, true]);
+fcb.confCommand(NC.SAVE, "saved"); wait(600);
+check("Save stores it and the configurator reads it back", [rec().fs9, rec().sw2[2], conf.waiting, conf.v[NP.NUM + 9]], [[0, 99, 127, 0], 70, "", 99]);
+fcb.confChanged(NP.NUM + 9, 98); wait(20);
+fcb.confCommand(NC.RELOAD, "dropped"); wait(600);
+check("Discard goes back to the saved settings", [fcb.state().msgs[9].num, conf.v[NP.NUM + 9]], [99, 99]);
+longChord();
+fcb.confRead(false); wait(2000);
+check("in config mode the pedal does not answer", [conf.waiting, fcb.state().mode], ["", 1]);
+press(DOWN, OVER_MS);
+
+console.log("emulator: settings files (save to file, load from file)");
+wait(200);
+fcb.confRead(false); wait(400);
+const file = JSON.parse(JSON.stringify(fcb.confToFile()));
+check("a saved file has the pedal's settings in readable form",
+      [file.format, file.channel, file.footswitches[2], file.footswitches[3].type, file.relays.length],
+      ["fcb1010-settings", fcb.state().midiChannel, { mode: ["stomp", "stomp + momentary", "momentary", "inverted momentary"][DEF_MODE], type: "note", number: 60, on: 100, off: 20 }, "program", 2]);
+const oldCh = file.channel;
+file.footswitches[1] = { mode: "momentary", type: "note", number: 77, on: 90, off: 10 };
+file.relays[0] = { follows: [3, 7], followsUpDown: true, pedalA: 0, pedalB: 64 };
+file.channel = oldCh % 16 + 1;
+check("loading it is accepted", fcb.confLoad(file), true);
+wait(600);
+const st = fcb.state();
+check("the pedal took the file's settings, the channel last",
+      [st.msgs[1], st.pedalModes[1], st.swMask[0], st.swThr[1], st.midiChannel, conf.ch, conf.unsaved],
+      [{ type: 1, num: 77, on: 90, off: 10 }, 2, (1 << 2) | (1 << 6) | (1 << 10), 64, file.channel, file.channel, true]);
+check("and reading it back gives the same file", fcb.confToFile(), file);
+check("an invalid file is refused and changes nothing",
+      [fcb.confLoad({ format: "fcb1010-settings", version: 1, channel: 1, footswitches: [], relays: [] }),
+       fcb.confLoad({ format: "other" }), fcb.state().midiChannel], [false, false, file.channel]);
+const bad = JSON.parse(JSON.stringify(file)); bad.footswitches[4].on = 200;
+check("a value out of range is refused", fcb.confLoad(bad), false);
+file.channel = oldCh; fcb.confLoad(file); wait(600);
+check("loading a file with only the channel different sends just that", [fcb.state().midiChannel, conf.ch], [oldCh, oldCh]);
+
+const el = (id) => sandbox.document.getElementById(id);
+conf.known = false; fcb.confRead(false); wait(400);
+check("the pedal, port and channel selectors are never disabled; the file and store buttons wait for a read",
+      [el("cfTarget").disabled, el("cfOut").disabled, el("cfIn").disabled, el("cfChannel").disabled, el("cfRead").disabled, el("cfFind").disabled],
+      [undefined, undefined, undefined, undefined, undefined, undefined]);
+
+console.log("emulator: configurator through Web MIDI (a fake USB interface wired to the emulated pedal)");
+// The interface's output feeds the pedal's MIDI IN at cable speed; the pedal's MIDI OUT reaches its input
+// as Web MIDI delivers it: one complete message per event, status byte included.
+const fakeIn = { id: "in1", name: "USB MIDI In", state: "connected", onmidimessage: null, open: () => Promise.resolve() };
+const fakeOut = { id: "out1", name: "USB MIDI Out", state: "connected", open: () => Promise.resolve(), send: (b) => fcb.wire(Array.from(b)) };
+sandbox.navigator = { requestMIDIAccess: () => Promise.resolve({ inputs: new Map([["in1", fakeIn]]), outputs: new Map([["out1", fakeOut]]), onstatechange: null }) };
+const delivered = new Set(fcb.hw.logLines);
+// Wall-clock time (performance.now), which the configurator uses for a real port, follows the test's clock.
+let wall = 0;
+sandbox.performance.now = () => wall;
+function waitMidi(n) {
+  for (let t = 0; t < n; t += 8) {
+    ms(8); wall += 8;
+    [...fcb.hw.logLines].reverse().forEach((l) => {
+      if (delivered.has(l)) return;
+      delivered.add(l);
+      if (l.raw && fakeIn.onmidimessage) fakeIn.onmidimessage({ data: Uint8Array.from(l.raw.split(" ").map((h) => parseInt(h, 16))) });
+    });
+  }
+}
+fcb.confTarget("midi");
+await new Promise((r) => setTimeout(r, 0));
+check("access granted: the only ports are chosen, and nothing is disabled",
+      [conf.out && conf.out.id, conf.inp && conf.inp.id, el("cfOut").value, el("cfIn").value, el("cfTarget").disabled, el("cfOut").disabled],
+      ["out1", "in1", "out1", "in1", undefined, undefined]);
+conf.ch = oldCh % 16 + 1;
+fcb.confRead(true); waitMidi(600);
+check("Find through the interface reads the pedal", [conf.waiting, conf.ch, !!conf.v, conf.v && conf.v[NP.NUM + 1]], ["", oldCh, true, 77]);
+fcb.confChanged(NP.ON + 1, 55); waitMidi(50);
+fcb.confCommand(NC.SAVE, "stored"); waitMidi(600);
+check("a change and Store reach the pedal", [fcb.state().msgs[1].on, rec().fs1, conf.v[NP.ON + 1]], [55, [1, 77, 55, 10], 55]);
+fakeIn.onmidimessage = null;
+const heardBefore = conf.heard;
+fcb.confRead(false); waitMidi(2000);
+check("with nothing coming back, it says so", [conf.waiting, /nothing at all came in/.test(el("confStatus").textContent) || heardBefore > 0], ["", true]);
+console.log("emulator: configurator with a MIDI output only (no input, so no reads)");
+conf.inp = null; conf.known = false;
+const st0 = JSON.stringify(fcb.state().msgs);
+fcb.confRead(false);
+check("Read says it needs an input", [conf.waiting, /need a MIDI input/.test(el("confStatus").textContent)], ["", true]);
+const oneWay = fcb.confToFile();
+oneWay.footswitches[5] = { mode: "stomp", type: "cc", number: 33, on: 100, off: 1 };
+oneWay.relays[1] = { follows: [10], followsUpDown: false, pedalA: 12, pedalB: 0 };
+check("a file loads with no read first", fcb.confLoad(oneWay), true);
+waitMidi(800);
+check("every setting was sent (no read, so nothing is assumed), and the pedal took them",
+      [fcb.state().msgs[5], fcb.state().pedalModes[5], fcb.state().swMask[1], fcb.state().swThr[2], JSON.stringify(fcb.state().msgs.filter((m, i) => i !== 5)) === JSON.stringify(JSON.parse(st0).filter((m, i) => i !== 5))],
+      [{ type: 0, num: 33, on: 100, off: 1 }, 0, 1 << 9, 12, true]);
+check("the status says it cannot read back", /cannot read it back/.test(el("confStatus").textContent), true);
+fcb.confChanged(NP.OFF + 5, 2); waitMidi(50);
+fcb.confCommand(NC.SAVE, "Stored."); waitMidi(600);
+check("a change and Store work without an input", [rec().fs5, rec().sw2[2]], [[0, 33, 100, 2], 12]);
+check("saving a file without a read leaves out the firmware version", [fcb.confToFile().firmware, fcb.confToFile().footswitches[5].off], [undefined, 2]);
+conf.out = null;
+check("with no output either, a load is refused", fcb.confLoad(oneWay), false);
+fcb.confTarget("emu");
+check("switching back to the emulator works", [conf.target, el("cfTarget").disabled], ["emu", undefined]);
+
 console.log(fail ? "emulator smoke test FAILED" : "emulator smoke test passed");
 process.exit(fail);

@@ -201,6 +201,50 @@ static BIT_T          mode_cycle_pending;
 
 // Settings are loaded and saved through the HAL's one record buffer, hal_rec.
 
+// Configuration over MIDI: NRPN numbers (described with the code, below).
+#define NRPN_MSB        0x46
+#define NRPN_NONE       0xFF
+
+// Parameters (the NRPN LSB). Gaps are reserved and ignored.
+#define NP_CHANNEL      0       // MIDI channel 1-16
+#define NP_VERSION      1       // 1-3: firmware major, minor, build (read only)
+#define NP_COMMAND      4       // a command (NC_*), never sent
+#define NP_DUMP_END     5       // sent (value 0) after the last parameter of a dump
+#define NP_MODE         8       // + switch 0-9: pedal mode 0-3
+#define NP_TYPE         20      // + switch: message type 0 CC, 1 note, 2 program change
+#define NP_NUM          30      // + switch: number
+#define NP_ON           40      // + switch: on value (a program change's second program)
+#define NP_OFF          50      // + switch: off value
+#define NP_FOLLOW1      60      // + switch 0-9 (+ 10: the UP + DOWN switch): SWITCH 1 follows it, 0 / 1
+#define NP_FOLLOW2      72      // the same for SWITCH 2
+#define NP_TRIGGER      84      // + relay * 2 + pedal: trigger value 1-127, 0 = off
+#define NP_CAL          88      // heel A, toe A, heel B, toe B: raw readings 0-255 (read only)
+#define NP_COUNT        92
+
+// Commands (values of NP_COMMAND).
+#define NC_DUMP         1       // send every parameter, then NP_DUMP_END
+#define NC_SAVE         2       // store the settings, as leaving configuration mode does
+#define NC_RELOAD       3       // drop unsaved changes: back to what the EEPROM holds
+#define NC_HEEL         4       // the pedals' positions now become the heel ...
+#define NC_TOE          5       // ... or the toe, if each is CAL_MIN_SPAN from the other end
+
+// Parameter kinds.
+#define NK_NONE         0
+#define NK_SET          1
+#define NK_READ         2
+
+// A dump in progress (midi_job, sent by ctl_tick): 0 none, else the next parameter + 1, and
+// NP_COUNT + 1 for the end marker.
+
+// Configuration over MIDI (see "Configuration over MIDI" below): CC 99 selected this
+// pedal's NRPN number. The parameter CC 98 selected (nrpn_lsb) and the dump position
+// (midi_job) are only used in run mode, so they share the configuration page and
+// selected switch (RAM): entering configuration mode sets those afresh, and leaving it
+// clears these two.
+static BIT_T          nrpn_msb_ok;
+#define nrpn_lsb      cfg_sel
+#define midi_job      cfg_page
+
 // Per stomp (one bit each): down = a press is in progress, held = it will be undone on
 // release (a long press, or a momentary pedal), revert = an undo is waiting for MIDI room,
 // prev = the state before the press.
@@ -1257,7 +1301,10 @@ static void enter_config(void)
     stomp_held = 0;
 
     cfg_dirty = 0;
+    // This also drops a dump over MIDI in progress (midi_job is cfg_page) and the
+    // selected NRPN parameter (nrpn_lsb is cfg_sel).
     cfg_sel   = 0;
+    nrpn_msb_ok = 0;
     cal_heel_taken = 0;
     edit_open = 0;
     cfg_check_due = 0;
@@ -1341,73 +1388,53 @@ static void load_settings(void)
     }
 }
 
-// Leave configuration mode. save = 1 (long UP) stores the settings and calibration;
-// save = 0 (long DOWN) drops every change by reloading what the EEPROM holds.
-static void exit_config(uint8_t save)
+// Store every setting and the calibration (i is the caller's loop variable). If a write
+// fails the new settings still apply until power-off. A macro, expanded in exit_config and
+// midi_save, so the EEPROM writes are no deeper than one call below either.
+#define SAVE_SETTINGS(i)                                                       \
+    do {                                                                       \
+        hal_rec[0] = midi_channel;                                             \
+        hal_rec[1] = pedal_modes[0];                                           \
+        hal_rec[2] = pedal_modes[1];                                           \
+        hal_rec[3] = pedal_modes[2];                                           \
+        hal_rec_save(HAL_REC_CFG);                                             \
+        hal_rec[0] = heel[0];                                                  \
+        hal_rec[1] = toe[0];                                                   \
+        hal_rec[2] = heel[1];                                                  \
+        hal_rec[3] = toe[1];                                                   \
+        hal_rec_save(HAL_REC_CAL);                                             \
+        for ((i) = 0; (i) < 2; (i)++)                                          \
+        {                                                                      \
+            hal_rec[0] = (uint8_t)sw_mask[i];                                  \
+            hal_rec[1] = (uint8_t)(sw_mask[i] >> 8);                           \
+            hal_rec[2] = sw_thr[(i) * 2];                                      \
+            hal_rec[3] = sw_thr[(i) * 2 + 1];                                  \
+            hal_rec_save((uint8_t)(HAL_REC_SW1 + (i)));                        \
+        }                                                                      \
+        for ((i) = 0; (i) < STOMP_COUNT; (i)++)                                \
+        {                                                                      \
+            hal_rec[0] = msg_type(i);                                          \
+            hal_rec[1] = (uint8_t)(msg[MSG_AT(i)] & 0x7F);                     \
+            hal_rec[2] = (uint8_t)(msg[MSG_AT(i) + 1] & 0x7F);                 \
+            hal_rec[3] = msg[MSG_AT(i) + 2];                                   \
+            hal_rec_save((uint8_t)(HAL_REC_MSG0 + (i)));                       \
+        }                                                                      \
+    } while (0)
+
+// Every switch whose mode or message changed (cfg_dirty) goes to its new mode's resting
+// state: on for inverted momentary, off for the others and for a single program. If that
+// changes its state its message is sent (through the revert queue, so as soon as MIDI OUT
+// has room, and the LED follows); if it is already there nothing is sent. Used when
+// configuration mode is left and after a change over MIDI.
+static void settle_dirty(void)
 {
     uint8_t  i;
     uint16_t bit;
-
-    // An open footswitch editor keeps its changes (UP + DOWN held saves and leaves).
-    if (edit_open)
-    {
-        edit_end(1);
-    }
-
-    // Stop a two-digit channel entry that could still take a second digit.
-    chan_digit_pending = 0;
-    // Leaving from page 7 ends the lamp test and its dots.
-    hal_lamp_test(HAL_LAMP_NORMAL);
-    hal_display_dots(0);
-
-    if (save)
-    {
-        hal_rec[0] = midi_channel;
-        hal_rec[1] = pedal_modes[0];
-        hal_rec[2] = pedal_modes[1];
-        hal_rec[3] = pedal_modes[2];
-
-        // If a write fails the new settings still apply until power-off.
-        hal_rec_save(HAL_REC_CFG);
-
-        hal_rec[0] = heel[0];
-        hal_rec[1] = toe[0];
-        hal_rec[2] = heel[1];
-        hal_rec[3] = toe[1];
-        hal_rec_save(HAL_REC_CAL);
-
-        for (i = 0; i < 2; i++)
-        {
-            hal_rec[0] = (uint8_t)sw_mask[i];
-            hal_rec[1] = (uint8_t)(sw_mask[i] >> 8);
-            hal_rec[2] = sw_thr[i * 2];
-            hal_rec[3] = sw_thr[i * 2 + 1];
-            hal_rec_save((uint8_t)(HAL_REC_SW1 + i));
-        }
-
-        for (i = 0; i < STOMP_COUNT; i++)
-        {
-            hal_rec[0] = msg_type(i);
-            hal_rec[1] = (uint8_t)(msg[MSG_AT(i)] & 0x7F);
-            hal_rec[2] = (uint8_t)(msg[MSG_AT(i) + 1] & 0x7F);
-            hal_rec[3] = msg[MSG_AT(i) + 2];
-            hal_rec_save((uint8_t)(HAL_REC_MSG0 + i));
-        }
-    }
-    else
-    {
-        load_settings();
-        cfg_dirty = 0;
-    }
 
     for (i = 0; i < STOMP_COUNT; i++)
     {
         bit = (uint16_t)((uint16_t)1 << i);
 
-        // A switch whose mode or message changed goes to its new mode's resting state: on
-        // for inverted momentary, off for the others and for a single program. If that
-        // changes its state its message is sent (through the revert queue, so as soon as
-        // MIDI OUT has room, and the LED follows); if it is already there nothing is sent.
         if (cfg_dirty & bit)
         {
             if (pedal_mode_get(i) == PM_MOM_INV && !prog_single(i))
@@ -1429,6 +1456,39 @@ static void exit_config(uint8_t save)
             }
         }
     }
+
+    cfg_dirty = 0;
+}
+
+// Leave configuration mode. save = 1 (long UP) stores the settings and calibration;
+// save = 0 (long DOWN) drops every change by reloading what the EEPROM holds.
+static void exit_config(uint8_t save)
+{
+    uint8_t i;
+
+    // An open footswitch editor keeps its changes (UP + DOWN held saves and leaves).
+    if (edit_open)
+    {
+        edit_end(1);
+    }
+
+    // Stop a two-digit channel entry that could still take a second digit.
+    chan_digit_pending = 0;
+    // Leaving from page 7 ends the lamp test and its dots.
+    hal_lamp_test(HAL_LAMP_NORMAL);
+    hal_display_dots(0);
+
+    if (save)
+    {
+        SAVE_SETTINGS(i);
+    }
+    else
+    {
+        load_settings();
+        cfg_dirty = 0;
+    }
+
+    settle_dirty();
 
     mode = MODE_RUN;
     // Stop the CONFIG LED flash; its timer goes back to the MIDI IN flash.
@@ -1455,6 +1515,9 @@ static void exit_config(uint8_t save)
 
     resync_pedals();
     show_program();
+    // cfg_page and cfg_sel become midi_job and nrpn_lsb again: no dump, no parameter.
+    midi_job = 0;
+    nrpn_lsb = NRPN_NONE;
 }
 
 // ---------------------------------------------------------------
@@ -1650,6 +1713,7 @@ void ctl_init(void)
     mode          = MODE_RUN;
     rx_status     = 0;
     rx_have_data1 = 0;
+    cfg_dirty     = 0;
     program       = 0;
     stomp_state   = 0;
     stomp_down    = 0;
@@ -1667,6 +1731,10 @@ void ctl_init(void)
     nav_ticks   = 0;
     cfg_page      = PAGE_MODES;
     cfg_sel       = 0;
+    // cfg_page and cfg_sel are midi_job and nrpn_lsb in run mode.
+    midi_job      = 0;
+    nrpn_lsb      = NRPN_NONE;
+    nrpn_msb_ok   = 0;
     cal_step      = CAL_DONE;
     cfg_dirty     = 0;
     chan_digit_pending = 0;
@@ -2098,6 +2166,312 @@ static void remote_cc(uint8_t cc, uint8_t value)
     }
 }
 
+// ---------------------------------------------------------------
+// Configuration over MIDI: NRPN on the pedal's channel
+// ---------------------------------------------------------------
+// CC 99 (NRPN MSB) = NRPN_MSB and CC 98 (NRPN LSB) = a parameter (either order) select it;
+// then CC 6 (data entry) sets it. CC 99 with any other value, or an RPN select (CC 101 or
+// 100), deselects, so other NRPN traffic on the channel is ignored. Run mode only, like the
+// other received messages. A set changes the setting at once (unsaved, as in configuration
+// mode); the save command stores everything. The pedal never answers a set, so a MIDI loop
+// cannot make it talk to itself: it sends parameters only for the dump command, each as
+// CC 99, 98 and 6 with running status. Read-only parameters that can be over 127 (version
+// and calibration) add CC 38: CC 6 holds bits 7 and up, CC 38 bits 0-6. A settable value
+// is always sent in CC 6 alone, so a dump fed back in changes nothing.
+// The parameter numbers and commands (NP_*, NC_*) are defined near the top.
+
+// The state (nrpn_msb_ok, nrpn_lsb, midi_job) is declared with the other state above.
+
+static uint8_t np_kind(uint8_t p)
+{
+    if (p == NP_CHANNEL || (p >= NP_MODE && p < NP_MODE + STOMP_COUNT) ||
+        (p >= NP_TYPE && p < NP_OFF + STOMP_COUNT) || (p >= NP_FOLLOW1 && p <= NP_FOLLOW1 + STOMP_COUNT) ||
+        (p >= NP_FOLLOW2 && p <= NP_FOLLOW2 + STOMP_COUNT) || (p >= NP_TRIGGER && p < NP_TRIGGER + 4))
+    {
+        return NK_SET;
+    }
+
+    if ((p >= NP_VERSION && p < NP_VERSION + 3) || (p >= NP_CAL && p < NP_CAL + 4))
+    {
+        return NK_READ;
+    }
+
+    return NK_NONE;
+}
+
+// The current value of known parameter p. A leaf function (no calls), so its locals cost
+// no fixed RAM.
+static uint8_t nrpn_get(uint8_t p)
+{
+    uint8_t q;
+
+    if (p == NP_CHANNEL)
+    {
+        return midi_channel;
+    }
+
+    if (p < NP_MODE)
+    {
+        return fw_version[(uint8_t)(p - NP_VERSION)];
+    }
+
+    if (p < NP_TYPE)
+    {
+        p = (uint8_t)(p - NP_MODE);
+        return (uint8_t)((pedal_modes[p >> 2] >> ((p & 3) * 2)) & 3);
+    }
+
+    if (p < NP_NUM)
+    {
+        q = MSG_AT(p - NP_TYPE);
+        return (uint8_t)((msg[q] >> 7) | ((msg[q + 1] >> 6) & 2));
+    }
+
+    if (p < NP_FOLLOW1)
+    {
+        // Number, on value or off value: msg[] byte 0, 1 or 2 of switch (p - NP_TYPE) % 10.
+        q = (uint8_t)(p - NP_TYPE);
+        return (uint8_t)(msg[(uint8_t)(MSG_AT(q % (uint8_t)STOMP_COUNT) + q / (uint8_t)STOMP_COUNT - 1)] & 0x7F);
+    }
+
+    if (p < NP_FOLLOW2)
+    {
+        return (uint8_t)((sw_mask[0] >> (p - NP_FOLLOW1)) & 1);
+    }
+
+    if (p < NP_TRIGGER)
+    {
+        return (uint8_t)((sw_mask[1] >> (p - NP_FOLLOW2)) & 1);
+    }
+
+    if (p < NP_CAL)
+    {
+        return sw_thr[(uint8_t)(p - NP_TRIGGER)];
+    }
+
+    p = (uint8_t)(p - NP_CAL);
+    return (p & 1) ? toe[p >> 1] : heel[p >> 1];
+}
+
+// Send the dump's next parameter (midi_job - 1), or its end marker once midi_job is past
+// the last. Reads midi_job instead of taking a parameter: no fixed RAM.
+static void nrpn_send(void)
+{
+    hal_midi_tx((uint8_t)(0xB0 | (midi_channel - 1)));
+    hal_midi_tx(99);
+    hal_midi_tx(NRPN_MSB);
+    hal_midi_tx(98);
+    hal_midi_tx((midi_job > NP_COUNT) ? NP_DUMP_END : (uint8_t)(midi_job - 1));
+    hal_midi_tx(6);
+
+    if (midi_job > NP_COUNT)
+    {
+        hal_midi_tx(0);
+    }
+    else if (np_kind((uint8_t)(midi_job - 1)) == NK_READ)
+    {
+        hal_midi_tx((uint8_t)(nrpn_get((uint8_t)(midi_job - 1)) >> 7));
+        hal_midi_tx(38);
+        hal_midi_tx((uint8_t)(nrpn_get((uint8_t)(midi_job - 1)) & 0x7F));
+    }
+    else
+    {
+        hal_midi_tx(nrpn_get((uint8_t)(midi_job - 1)));
+    }
+}
+
+// ctl_tick's share of MIDI configuration (run mode): the next step of a dump, one
+// parameter per tick once MIDI OUT has room for it.
+static void midi_job_run(void)
+{
+    // At most 9 bytes: CC 99, 98 and 6 with running status (7), plus CC 38 (2).
+    if (hal_midi_space() < 9)
+    {
+        return;
+    }
+
+    while (midi_job <= NP_COUNT && np_kind((uint8_t)(midi_job - 1)) == NK_NONE)
+    {
+        midi_job++;
+    }
+
+    nrpn_send();
+    midi_job = (midi_job > NP_COUNT) ? 0 : (uint8_t)(midi_job + 1);
+}
+
+// A command (in rx_data1). Save and reload run at once, so a command that follows (a dump,
+// say) cannot overtake them; the EEPROM access is still less deep on the stack than from
+// the key handlers. A dump starts on the next tick (and a new one restarts it).
+static void nrpn_command(void)
+{
+    if (rx_data1 == NC_DUMP)
+    {
+        midi_job = 1;
+    }
+    else if (rx_data1 == NC_SAVE)
+    {
+        // rx_data1 is free once the command is known (the parser sets it afresh for the
+        // next message), so it is the loop variable and no other RAM is used.
+        SAVE_SETTINGS(rx_data1);
+    }
+    else if (rx_data1 == NC_RELOAD)
+    {
+        load_settings();
+        // Every switch goes to its resting state under the reloaded settings (next tick).
+        cfg_dirty = (uint16_t)(SW_CC_BIT - 1);
+        resync_pedals();
+    }
+    else if (rx_data1 == NC_HEEL || rx_data1 == NC_TOE)
+    {
+        // Both pedals must be CAL_MIN_SPAN from the other end, as on the calibration pages.
+        if (span_of(last_raw[0], (rx_data1 == NC_HEEL) ? toe[0] : heel[0]) < CAL_MIN_SPAN ||
+            span_of(last_raw[1], (rx_data1 == NC_HEEL) ? toe[1] : heel[1]) < CAL_MIN_SPAN)
+        {
+            return;
+        }
+
+        if (rx_data1 == NC_HEEL)
+        {
+            heel[0] = last_raw[0];
+            heel[1] = last_raw[1];
+        }
+        else
+        {
+            toe[0] = last_raw[0];
+            toe[1] = last_raw[1];
+        }
+
+        resync_pedals();
+    }
+}
+
+// Write rx_data1 into footswitch i's message field for parameter nrpn_lsb (a leaf).
+static void msg_write(uint8_t i)
+{
+    uint8_t q = MSG_AT(i);
+
+    if (nrpn_lsb < NP_NUM)
+    {
+        msg[q]     = (uint8_t)((msg[q] & 0x7F) | ((rx_data1 & 1) << 7));
+        msg[q + 1] = (uint8_t)((msg[q + 1] & 0x7F) | ((rx_data1 & 2) << 6));
+        return;
+    }
+
+    q = (uint8_t)(q + (uint8_t)(nrpn_lsb - NP_TYPE) / (uint8_t)STOMP_COUNT - 1);
+    msg[q] = (uint8_t)((msg[q] & 0x80) | rx_data1);
+}
+
+// Set parameter nrpn_lsb to rx_data1 (the CC 6 value, put there by nrpn_cc, so this takes
+// no parameter). Values out of range, read-only parameters and unchanged values are
+// ignored. A changed pedal mode or message puts the switch in its resting state on the next
+// tick (cfg_dirty, settle_dirty), as leaving configuration mode does; a message change to
+// a switch that is on first sends the old message's off and turns it off, as the editor does.
+static void nrpn_set(void)
+{
+    uint8_t i;
+
+    if (nrpn_lsb == NP_COMMAND)
+    {
+        nrpn_command();
+        return;
+    }
+
+    if (np_kind(nrpn_lsb) != NK_SET || nrpn_get(nrpn_lsb) == rx_data1)
+    {
+        return;
+    }
+
+    if (nrpn_lsb == NP_CHANNEL)
+    {
+        if (rx_data1 >= 1 && rx_data1 <= 16)
+        {
+            midi_channel = rx_data1;
+        }
+
+        return;
+    }
+
+    if (nrpn_lsb < NP_TYPE)
+    {
+        if (rx_data1 < PM_COUNT)
+        {
+            i = (uint8_t)(nrpn_lsb - NP_MODE);
+            pedal_mode_set(i, rx_data1);
+            cfg_dirty |= (uint16_t)((uint16_t)1 << i);
+        }
+
+        return;
+    }
+
+    if (nrpn_lsb < NP_FOLLOW1)
+    {
+        if (nrpn_lsb < NP_NUM && rx_data1 > MT_PROG)
+        {
+            return;
+        }
+
+        i = (uint8_t)((uint8_t)(nrpn_lsb - NP_TYPE) % (uint8_t)STOMP_COUNT);
+
+        if ((stomp_state >> i) & 1)
+        {
+            if (hal_midi_space() >= 3 && msg_type(i) != MT_PROG)
+            {
+                send_switch(i, 0);
+            }
+
+            stomp_state &= (uint16_t)~((uint16_t)1 << i);
+            hal_stomp_led(i, 0);
+        }
+
+        msg_write(i);
+        cfg_dirty |= (uint16_t)((uint16_t)1 << i);
+        return;
+    }
+
+    if (nrpn_lsb < NP_TRIGGER)
+    {
+        // A follow flag: the value differs from the current one, so a 0 or 1 flips it.
+        if (rx_data1 <= 1)
+        {
+            if (nrpn_lsb < NP_FOLLOW2)
+            {
+                sw_mask[0] ^= (uint16_t)((uint16_t)1 << (nrpn_lsb - NP_FOLLOW1));
+            }
+            else
+            {
+                sw_mask[1] ^= (uint16_t)((uint16_t)1 << (nrpn_lsb - NP_FOLLOW2));
+            }
+        }
+
+        return;
+    }
+
+    sw_thr[(uint8_t)(nrpn_lsb - NP_TRIGGER)] = rx_data1;
+}
+
+// A received CC on the pedal's channel in run mode (number in rx_data1): the NRPN selects
+// and data entry.
+static void nrpn_cc(uint8_t value)
+{
+    if (rx_data1 == 99)
+    {
+        nrpn_msb_ok = (value == NRPN_MSB) ? 1 : 0;
+    }
+    else if (rx_data1 == 98)
+    {
+        nrpn_lsb = value;
+    }
+    else if (rx_data1 == 101 || rx_data1 == 100)
+    {
+        nrpn_msb_ok = 0;
+    }
+    else if (rx_data1 == 6 && nrpn_msb_ok && nrpn_lsb < NP_COUNT)
+    {
+        rx_data1 = value;
+        nrpn_set();
+    }
+}
+
 void ctl_midi_in(uint8_t byte)
 {
     // Real-time bytes (clock, start, stop...) can appear anywhere: skip them
@@ -2144,6 +2518,12 @@ void ctl_midi_in(uint8_t byte)
     // Running status: The next pair of data bytes is another message of the same kind.
     rx_have_data1 = 0;
     remote_cc(rx_data1, byte);
+
+    // Configuration over MIDI (after remote_cc: nrpn_cc may reuse rx_data1).
+    if ((rx_status & 0xF0) == 0xB0 && mode == MODE_RUN)
+    {
+        nrpn_cc(byte);
+    }
 }
 
 void ctl_pedal_sample(uint8_t channel, uint8_t raw)
@@ -2266,6 +2646,18 @@ void ctl_tick(void)
     if (mode == MODE_RUN)
     {
         relays_update();
+
+        // Configuration over MIDI: a dump step or deferred command, then any switch whose
+        // mode or message it changed goes to its resting state.
+        if (midi_job)
+        {
+            midi_job_run();
+        }
+
+        if (cfg_dirty)
+        {
+            settle_dirty();
+        }
     }
 
     if (mode == MODE_RUN)

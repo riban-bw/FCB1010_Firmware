@@ -14,6 +14,7 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 - Follows incoming MIDI, so its LEDs stay in step with your DAW or synth
 - Selectable MIDI channel
 - Simple configuration on the pedal, saved in its memory
+- Or configure it from a computer over MIDI, with a web page (no special software or SysEx)
 
 [Try the emulator in your browser](https://riban-bw.github.io/FCB1010_Firmware/emulator/). It runs this firmware's own control code, so you can try the footswitches, pedals and configuration pages before flashing a chip. Its on-screen hints explain each control as you use it.
 
@@ -92,7 +93,7 @@ Tap UP or DOWN to move to the next or previous page. To leave, hold UP (ENTER) f
 | 4. Toe calibration | EXP 1 and EXP 2 | `Hi`, then `0` once the reading is taken, or `Er` | Put both pedals at the toe and press any footswitch. `Er` means a pedal hardly moved between heel and toe; press a footswitch to try again. Calibrating with the heel and toe swapped reverses the pedal. |
 | 5. SWITCH 1 relay | SWITCH 1 | Blank, or the trigger point of the pedal last moved | Press footswitches to choose which ones the relay follows (their LEDs light). Tap UP + DOWN to follow the UP + DOWN switch (DIRECT SELECT lights). Move a pedal to the point where the relay should close; move it to the heel to stop following it (EXP 1 / EXP 2 light while a pedal is followed). |
 | 6. SWITCH 2 relay | SWITCH 2 | As page 5 | As page 5, for the SWITCH 2 relay. |
-| 7. Lamp test and version | All | "riban", then the firmware version | Every LED lights while "riban" scrolls, then the firmware version shows in three parts: major with a trailing dot (`00.`), minor with dots both sides (`.01.`), and build with a leading dot (`.0A`), then it repeats. Each of the ten steps (six scroll frames, the three version parts and a blank) blinks its own footswitch LED, 1 to 10 in turn. Hold a footswitch to show its step, for example 8 for the minor version; let go to carry on. |
+| 7. Lamp test and version | All | "riban", then the firmware version | Every LED lights while "riban" scrolls, then the firmware version shows in three parts: major with a trailing dot (`00.`), minor with dots both sides (`.01.`), and build with a leading dot (`.0B`), then it repeats. Each of the ten steps (six scroll frames, the three version parts and a blank) blinks its own footswitch LED, 1 to 10 in turn. Hold a footswitch to show its step, for example 8 for the minor version; let go to carry on. |
 
 #### Footswitch editor
 
@@ -108,6 +109,18 @@ On page 1, hold a footswitch to edit its message. That footswitch's LED stays li
 A number is complete once no more digits would fit (13 and up, or three digits), so the next digit you press starts a new number. Hold UP (ENTER) for 0.6 seconds to keep your changes and go back to page 1, or hold DOWN (ESCAPE) for 0.6 seconds to put the old values back. Like other settings, the message is only stored when you save and leave configuration mode. If the switch was on when you changed its message, the old message's "off" is sent and the switch turns off.
 
 When you save, each footswitch whose mode or message you changed is put in its new mode's resting state, so it does not carry a stale state into its new mode: on for inverted momentary, off for the other modes. If that changes the switch, its new value is sent, so the receiving device stays in step. If a save fails it is not reported: the new settings apply until power-off.
+
+### Configuring from a computer
+
+Every setting can also be changed over MIDI, from the "Configure over MIDI" panel on the [emulator page](https://riban-bw.github.io/FCB1010_Firmware/emulator/). Connect a MIDI interface: its output to the pedal's MIDI IN and, if you want to read the pedal's settings, its input from the pedal's MIDI OUT. Open the page in a browser with Web MIDI (Chrome or Edge), choose "Real pedal", allow MIDI access and pick the ports (with only one of each they are picked for you). The output alone is enough to change settings, load a file and store; the input is only needed for Read and Find. Without it, set "On channel" to the channel the pedal is on now; the panel starts with the emulator's settings until you read the pedal or load a file. The same panel can configure the emulated pedal instead, to try it out.
+
+- **Read** loads the pedal's settings into the panel (it needs the MIDI input). If you do not know which channel the pedal is on, press **Find**: it asks on every channel and only the pedal answers.
+- Change anything in the panel: footswitch modes and messages, the pedal's MIDI channel, the relays. Each change works on the pedal straight away, just as if you had made it in configuration mode, and a footswitch whose mode or message changes goes to its resting state.
+- **Store** keeps the changes in the pedal after power-off. **Discard changes** puts back what was last stored.
+- **Save to file** saves the settings to a file on your computer, and **Load from file** sends a saved file's settings to the pedal (press **Store** afterwards to keep them). Use it to keep a backup, or several setups to swap between. The file holds everything except the pedal calibration, which belongs to each pedal. It is a readable JSON file, so it can also be edited by hand.
+- **Set heel** and **Set toe** calibrate the expression pedals: put both pedals at the heel (or toe) and press the button.
+
+The pedal only listens for settings while it is playing (not in configuration mode) and only on its own channel. It never answers a change, only a Read, so it cannot get stuck in a loop if its MIDI OUT is wired back to its MIDI IN.
 
 ## Installing
 
@@ -157,6 +170,7 @@ The rest of this document is for building, changing or checking the firmware.
 | Control change, UP + DOWN switch | `CHORD_CC`, 127 / 0 | CC 20 sets the UP + DOWN toggle and DIRECT SELECT LED the same way |
 | Control change, pedals | CC 7 and CC 11 (`PEDAL_CC_LIST`), 0 to 127 | Ignored |
 | Program change | 0 to 127, on release of UP / DOWN; a program change footswitch sends its first program when it turns on and its second when it turns off (with both the same, that program on every press) | Ignored |
+| NRPN (CC 99, 98, 6, 38) | Every setting, when asked for a dump | Settings and commands (see [Configuration over MIDI](#configuration-over-midi)) |
 
 - Everything is on one channel: `MIDI_CHANNEL` until a channel is saved in configuration mode.
 - Received messages only set the pedal's own state and LEDs; nothing is echoed to MIDI OUT. The next footswitch press toggles from the received state: if CC 21 turned switch 1 on, pressing switch 1 sends CC 21 value 0.
@@ -164,6 +178,33 @@ The rest of this document is for building, changing or checking the firmware.
 - Pedal positions and the program number are not set by MIDI IN, and no state is remembered at power-off.
 - A pedal sends a new value only after its reading moves `PEDAL_HYST` counts, and readings near the calibrated ends snap to 0 and 127 (`PEDAL_END_SNAP`).
 - If MIDI OUT is full, a footswitch press is ignored rather than changing a state the receiver never hears about. A stomp with momentary revert that cannot be sent at release is sent as soon as there is room.
+
+### Configuration over MIDI
+
+Settings travel as NRPN controllers on the pedal's channel, so any MIDI tool can send them. CC 99 (NRPN MSB) with value 70 (0x46) and CC 98 (NRPN LSB) with the parameter number select a parameter, in either order; CC 6 (data entry) then sets it, and further CC 6 messages set it again. CC 99 with any other value, or CC 101 / 100 (RPN select), deselects, so other NRPN traffic on the channel is left alone. CC 38 is ignored when received.
+
+| Parameter (CC 98) | Setting | Values |
+|---|---|---|
+| 0 | MIDI channel | 1 to 16; the pedal listens on the new channel at once |
+| 1, 2, 3 | Firmware major, minor and build (read only) | 0 to 255, sent as CC 6 (bit 7) and CC 38 (bits 0 to 6) |
+| 4 | Command (never sent) | 1 dump, 2 save, 3 discard unsaved changes, 4 heel from the pedals' positions, 5 toe from the pedals' positions |
+| 5 | End of a dump (sent only) | 0 |
+| 8 to 17 | Footswitch 1 to 10 mode | 0 stomp, 1 stomp with momentary, 2 momentary, 3 inverted momentary |
+| 20 to 29 | Footswitch 1 to 10 message type | 0 CC, 1 note, 2 program change |
+| 30 to 39 | Footswitch 1 to 10 number | 0 to 127: controller, note, or the program sent on |
+| 40 to 49 | Footswitch 1 to 10 on value | 0 to 127: CC value, note on velocity, or the program sent off |
+| 50 to 59 | Footswitch 1 to 10 off value | 0 to 127: CC value or note off velocity |
+| 60 to 70 | SWITCH 1 follows footswitch 1 to 10, then the UP + DOWN switch | 0 / 1 |
+| 72 to 82 | SWITCH 2, the same | 0 / 1 |
+| 84, 85 | SWITCH 1 trigger, pedal A, pedal B | 1 to 127, 0 off |
+| 86, 87 | SWITCH 2 trigger, pedal A, pedal B | 1 to 127, 0 off |
+| 88 to 91 | Calibration: heel A, toe A, heel B, toe B (read only) | 0 to 255 raw readings, as CC 6 + CC 38 |
+
+- A set takes effect at once but is not saved; command 2 saves everything, as leaving configuration mode does, and command 3 reloads what is saved. Unknown parameters, read-only ones, out-of-range values and values equal to the current one are ignored.
+- A footswitch whose mode or message changes goes to its resting state on the next 2ms tick (as on a save in configuration mode). If it was on when its message changed, the old message's "off" is sent first (not for a program change).
+- Commands 4 and 5 take the pedals' current readings as the heel or toe, if both are at least `CAL_MIN_SPAN` from the other end; otherwise nothing changes. Read the calibration back to see whether it took.
+- The dump (command 1) sends every parameter except the command and the end marker, one per tick once MIDI OUT has room: CC 99, 98 and 6 with running status, plus CC 38 for the read-only ones, then parameter 5. It takes about 0.2 seconds. A settable value is sent in CC 6 alone, so a dump fed back to the pedal changes nothing. The pedal sends nothing else in reply.
+- Settings are taken in run mode only; in configuration mode they are ignored, and entering it cancels a dump in progress. A save over MIDI blocks the pedal for the EEPROM writes (tens of ms), so wait for it before sending more.
 
 ### Timing details
 
@@ -189,7 +230,7 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 10.8KB (11063 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 12.4KB (12685 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
 
 Each build also updates this README: the code size above, the firmware version on configuration page 7, and every value taken from `src/config.h` (the option table below and the numbers quoted elsewhere). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the README was not updated after a change to `src/config.h`.
 
@@ -266,7 +307,8 @@ The hardware map (latch addresses, LED and key wiring, ADC and EEPROM pins) come
 
 Tested:
 - The controller logic: stomp toggling, all four pedal modes, CC, note and program change footswitch messages and the footswitch editor (typed and pedal values, accept, revert, saved records), program change on release with auto-repeat, the UP + DOWN chord, every configuration page and its saved bytes, pedal scaling, hysteresis, calibration flow, a full MIDI buffer, bad input, and MIDI IN parsing including running status, split messages, real-time bytes, SysEx, other channels and the 63/64 threshold, plus the momentary long-press behaviour: every switch, two switches at once, duplicate or unmatched hold and release events, a full MIDI queue at press and at release, calibration, and incoming MIDI CC changes during a hold (`make test`).
-- The browser emulator, which runs the same control code, with a scripted smoke test (`make emulator`).
+- The browser emulator, which runs the same control code, with a scripted smoke test (`make emulator`), including its MIDI configuration panel driving the emulated pedal (Find, read, set, save, discard).
+- Configuration over MIDI in the controller logic: every parameter, the dump and its pacing, a dump fed back in, selection and deselection, the commands, and the run-mode-only rule (`make test`).
 - The real 8051 image in a simulator: key scan and debounce, toggle on and off, program change, MIDI UART output with the correct bytes, the UP + DOWN chord opening and closing configuration mode (read back from RAM, including the stack depth of the save path), the long-press behaviour just under (stays latched) and just over (reverts) the long-press time, the power-on and page 7 LEDs and display, and the stack under receive load (`test/sim_smoke.sh`).
 
 Not tested, because it needs real hardware:
@@ -274,13 +316,14 @@ Not tested, because it needs real hardware:
 - The pedal ADC reading and the EEPROM calibration and settings save and load. The settings records have host-level round-trip tests only, and the simulator does not model them. The code is adapted from the same library.
 - **MIDI IN on the real image.** The simulator's UART input would not deliver bytes to the firmware. The parser is tested on the host, and the simulator confirms the receive interrupt queues and drains bytes without disturbing key handling or the stack, but the step from a received byte to a lit LED has not been run end to end on the 8051 image. The FCB1010's MIDI IN feeds the same UART, per the reference code, which receives SysEx through it.
 - **The 0.6 second long-press threshold on real hardware.** It is counted from the 2ms scan timer, which assumes a 12MHz crystal. The simulator measures it correctly in simulated time, but a different crystal speed or a slower scan would shift it.
+- The configuration panel with a real pedal and MIDI interface. Its emulator target is tested, and so is its Web MIDI code against a simulated interface, but not with a real one.
 - The 31250 baud MIDI rate on real silicon. It is computed for a 12MHz crystal; the simulator confirms the bytes but not the timing.
 
 A wrong LED or key map does no electrical harm, but it will look wrong.
 
 ### Memory
 
-The 8032 has only 256 bytes of internal RAM and this firmware uses almost all of the directly addressable part. To make room for configuration mode the MIDI OUT queue is 16 bytes, the MIDI IN queue 8 and the key event queue 8. The simulator shows the stack peaking 22 bytes below the end of RAM (0xE9, during configuration save, with both interrupts nested on top). If you add features, check `build/fcb1010.mem` for the stack headroom and run `test/sim_smoke.sh`, which fails if the stack gets too close to the end.
+The 8032 has only 256 bytes of internal RAM and this firmware uses almost all of the directly addressable part. To make room for configuration mode the MIDI OUT queue is 16 bytes, the MIDI IN queue 8 and the key event queue 8. The simulator shows the stack peaking 18 bytes below the end of RAM (0xED, in configuration mode, with both interrupts nested on top). If you add features, check `build/fcb1010.mem` for the stack headroom and run `test/sim_smoke.sh`, which fails if the stack gets too close to the end.
 
 ### Source layout
 
