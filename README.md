@@ -57,7 +57,7 @@ Each footswitch sends one of three kinds of message, set in the footswitch edito
 |---|---|---|---|
 | CC | `CC` | The controller number with the on value | The controller number with the off value |
 | Note | `nt` | Note on: the note number, with the on value as velocity | Note off: the note number, with the off value as velocity |
-| Prog | `Pr` | Program change: the first program | Program change: the second program |
+| Prog | `Pr` | Program change: the on value | Program change: the off value |
 
 Every type works in any of the footswitch modes. A program change switch has two programs and toggles between them: for example, in stomp mode one press sends program 5 and lights the LED, and the next sends program 6 and turns it off. If you give it the same program twice, it sends that program on every press and nothing when you let go, whatever its mode, and its LED lights only while you hold it. Whenever a footswitch sends a program, the display shows it and UP and DOWN step on from it.
 
@@ -102,9 +102,9 @@ On page 1, hold a footswitch to edit its message. That footswitch's LED stays li
 | Setting | Panel LED | Display | How to set it |
 |---|---|---|---|
 | Message type | SELECT | `CC`, `nt` (note) or `Pr` (program change) | Footswitch 1 for CC, 2 for note, 3 for program change. Or move either expression pedal: the bottom third is CC, the middle third note, the top third program change. |
-| Number | NUMBER | 0 to 127 | The controller number, note number, or a program change's first program (sent when the switch turns on). Type it with the footswitches (1 to 9 are digits 1 to 9, 10 is 0), for example 6 then 10 for 60, or move either expression pedal. |
-| On value | VALUE 1 | 0 to 127 | The value a CC sends when the switch turns on, or the note on velocity. For a program change, its second program (sent when it turns off; the same as the first for a single program). Set it the same way. |
-| Off value | VALUE 2 | 0 to 127 | The value a CC sends when the switch turns off, or the note off velocity. Set it the same way. A program change has no off value, so UP stops at its second program. |
+| Number | NUMBER | 0 to 127 | The controller number or note number. A program change has no number, so UP and DOWN skip it. Type it with the footswitches (1 to 9 are digits 1 to 9, 10 is 0), for example 6 then 10 for 60, or move either expression pedal. |
+| On value | VALUE 1 | 0 to 127 | The value a CC sends when the switch turns on, or the note on velocity. For a program change, the program sent when it turns on. Set it the same way. |
+| Off value | VALUE 2 | 0 to 127 | The value a CC sends when the switch turns off, or the note off velocity. For a program change, the program sent when it turns off (the same as the on value for a single program). Set it the same way. |
 
 A number is complete once no more digits would fit (13 and up, or three digits), so the next digit you press starts a new number. Hold UP (ENTER) for 0.6 seconds to keep your changes and go back to page 1, or hold DOWN (ESCAPE) for 0.6 seconds to put the old values back. Like other settings, the message is only stored when you save and leave configuration mode. If the switch was on when you changed its message, the old message's "off" is sent and the switch turns off.
 
@@ -169,7 +169,7 @@ The rest of this document is for building, changing or checking the firmware.
 | Note on / off, footswitches | Note switches: note on (0x9n) with the on value as velocity when on, note off (0x8n) with the off value as velocity when off | A note on with velocity 1 to 127 sets a note switch with that note on; a note off, or a note on with velocity 0, sets it off |
 | Control change, UP + DOWN switch | `CHORD_CC`, 127 / 0 | CC 20 sets the UP + DOWN toggle and DIRECT SELECT LED the same way |
 | Control change, pedals | CC 7 and CC 11 (`PEDAL_CC_LIST`), 0 to 127 | Ignored |
-| Program change | 0 to 127, on release of UP / DOWN; a program change footswitch sends its first program when it turns on and its second when it turns off (with both the same, that program on every press) | Ignored |
+| Program change | 0 to 127, on release of UP / DOWN; a program change footswitch sends its on value as the program when it turns on and its off value when it turns off (with both the same, that program on every press) | Ignored |
 | NRPN (CC 99, 98, 6, 38) | Every setting, when asked for a dump | Settings and commands (see [Configuration over MIDI](#configuration-over-midi)) |
 
 - Everything is on one channel: `MIDI_CHANNEL` until a channel is saved in configuration mode.
@@ -191,9 +191,9 @@ Settings travel as NRPN controllers on the pedal's channel, so any MIDI tool can
 | 5 | End of a dump (sent only) | 0 |
 | 8 to 17 | Footswitch 1 to 10 mode | 0 stomp, 1 stomp with momentary, 2 momentary, 3 inverted momentary |
 | 20 to 29 | Footswitch 1 to 10 message type | 0 CC, 1 note, 2 program change |
-| 30 to 39 | Footswitch 1 to 10 number | 0 to 127: controller, note, or the program sent on |
-| 40 to 49 | Footswitch 1 to 10 on value | 0 to 127: CC value, note on velocity, or the program sent off |
-| 50 to 59 | Footswitch 1 to 10 off value | 0 to 127: CC value or note off velocity |
+| 30 to 39 | Footswitch 1 to 10 number | 0 to 127: controller or note (not used by a program change) |
+| 40 to 49 | Footswitch 1 to 10 on value | 0 to 127: CC value, note on velocity, or the program sent on |
+| 50 to 59 | Footswitch 1 to 10 off value | 0 to 127: CC value, note off velocity, or the program sent off |
 | 60 to 70 | SWITCH 1 follows footswitch 1 to 10, then the UP + DOWN switch | 0 / 1 |
 | 72 to 82 | SWITCH 2, the same | 0 / 1 |
 | 84, 85 | SWITCH 1 trigger, pedal A, pedal B | 1 to 127, 0 off |
@@ -230,7 +230,7 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 12.4KB (12685 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 12.4KB (12706 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
 
 Each build also updates this README: the code size above, the firmware version on configuration page 7, and every value taken from `src/config.h` (the option table below and the numbers quoted elsewhere). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the README was not updated after a change to `src/config.h`.
 
@@ -289,7 +289,7 @@ Settings are stored in the 24C16 EEPROM (2KB, addresses 0x000-0x7FF) as fourteen
 - **Checksum:** the XOR of bytes 0-4 and the record's salt.
 - **Pedal modes:** 2 bits per footswitch, the lowest-numbered switch in the lowest bits (switch 1 in bits 0-1 of byte 2, switch 2 in bits 2-3, and so on). The values are 0 stomp, 1 stomp with momentary, 2 momentary and 3 inverted momentary.
 - **Calibration:** the readings are the raw 8-bit ADC values.
-- **Footswitch messages:** the type is 0 CC, 1 note, 2 program change; type 3 is unused and loads as CC with the same values. Values over 127 lose bit 7. A program change sends the number when on and the on value when off (both the same: a single program, sent on every press); it ignores the off value. (Earlier development builds kept two switches per record at 0x7B8-0x7DF with magics 0xC5-0xC9; those no longer match and load as the defaults.)
+- **Footswitch messages:** the type is 0 CC, 1 note, 2 program change; type 3 is unused and loads as CC with the same values. Values over 127 lose bit 7. A program change sends the on value as the program when on and the off value when off (both the same: a single program, sent on every press); it ignores the number. (Builds before this change used the number and the on value; a program change record saved by one now sends its old second program when on and its old off value, normally 0, when off, so set it again.) (Earlier development builds kept two switches per record at 0x7B8-0x7DF with magics 0xC5-0xC9; those no longer match and load as the defaults.)
 - **Missing or invalid records:** a record with the wrong magic or checksum loads as the defaults:
   - footswitch messages are CC `STOMP_CC_LIST` with on value 127 and off value 0;
   - relays follow nothing and have no triggers;
@@ -323,7 +323,7 @@ A wrong LED or key map does no electrical harm, but it will look wrong.
 
 ### Memory
 
-The 8032 has only 256 bytes of internal RAM and this firmware uses almost all of the directly addressable part. To make room for configuration mode the MIDI OUT queue is 16 bytes, the MIDI IN queue 8 and the key event queue 8. The simulator shows the stack peaking 18 bytes below the end of RAM (0xED, in configuration mode, with both interrupts nested on top). If you add features, check `build/fcb1010.mem` for the stack headroom and run `test/sim_smoke.sh`, which fails if the stack gets too close to the end.
+The 8032 has only 256 bytes of internal RAM and this firmware uses almost all of the directly addressable part. To make room for configuration mode the MIDI OUT queue is 16 bytes, the MIDI IN queue 8 and the key event queue 8. The simulator shows the stack peaking 21 bytes below the end of RAM (0xEA, in configuration mode, with both interrupts nested on top). If you add features, check `build/fcb1010.mem` for the stack headroom and run `test/sim_smoke.sh`, which fails if the stack gets too close to the end.
 
 ### Source layout
 

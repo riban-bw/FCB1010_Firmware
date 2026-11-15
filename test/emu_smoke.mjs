@@ -413,11 +413,13 @@ console.log("emulator: program change toggle");
 longChord();
 press(3, OVER_MS);                     // footswitch 4's editor
 press(2, 100);                         // type: program change
-press(UP, 100); press(4, 100);         // first program 5
-press(UP, 100); press(6, 100);         // second program 6
-check("UP stops at the second program (VALUE 1)", [fcb.state().edit, editLeds()], [3, [0, 0, 1, 0]]);
 press(UP, 100);
-check("still on the second program", fcb.state().edit, 3);
+check("UP skips NUMBER: a program change starts at VALUE 1", [fcb.state().edit, editLeds()], [3, [0, 0, 1, 0]]);
+press(4, 100);                         // program sent on: 5
+press(UP, 100); press(6, 100);         // program sent off: 6
+check("VALUE 2 is the second program", [fcb.state().edit, editLeds(), fcb.state().msgs[3].on, fcb.state().msgs[3].off], [4, [0, 0, 0, 1], 5, 6]);
+press(UP, 100);
+check("UP stops there", fcb.state().edit, 4);
 press(UP, OVER_MS);
 check("footswitch 4's label shows both programs", label(3), "PC 5/6");
 press(UP, OVER_MS);
@@ -440,7 +442,7 @@ conf.ch = 1 + ((fcb.state().midiChannel) % 16);    // the wrong channel: Find ha
 fcb.confRead(true); wait(400);
 check("Find reads the pedal and learns its channel", [conf.waiting, conf.ch, !!conf.v], ["", fcb.state().midiChannel, true]);
 check("the dump has footswitch 3 (note 60, 100, 20) and 4 (programs 5 / 6)",
-      [conf.v[NP.TYPE + 2], conf.v[NP.NUM + 2], conf.v[NP.ON + 2], conf.v[NP.OFF + 2], conf.v[NP.TYPE + 3], conf.v[NP.NUM + 3], conf.v[NP.ON + 3]],
+      [conf.v[NP.TYPE + 2], conf.v[NP.NUM + 2], conf.v[NP.ON + 2], conf.v[NP.OFF + 2], conf.v[NP.TYPE + 3], conf.v[NP.ON + 3], conf.v[NP.OFF + 3]],
       [1, 60, 100, 20, 2, 5, 6]);
 check("and the channel, a mode and a stomp CC", [conf.v[NP.CHANNEL], conf.v[NP.MODE], conf.v[NP.NUM + 9]], [fcb.state().midiChannel, DEF_MODE, STOMP_CC[9]]);
 const dumpMsgs = sent();

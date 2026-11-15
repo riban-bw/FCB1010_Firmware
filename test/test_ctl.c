@@ -2705,7 +2705,7 @@ static void test_switch_messages(void)
     // Program change with two programs: a toggle between them, following its pedal mode.
     // The LED shows the state, the display the program sent, and UP / DOWN step from it.
     set_mode(4, PM_STOMP);
-    set_msg(4, MT_PROG, 10, 11, 0);
+    set_msg(4, MT_PROG, 0, 10, 11);
     clear_log();
     tap(sw_code(5));
     CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 10 && leds[4] == 1);
@@ -2730,7 +2730,7 @@ static void test_switch_messages(void)
     // Two program change switches are independent (no radio behaviour).
     set_mode(4, PM_STOMP);
     set_mode(5, PM_STOMP);
-    set_msg(5, MT_PROG, 20, 21, 0);
+    set_msg(5, MT_PROG, 0, 20, 21);
     tap(sw_code(5));
     tap(sw_code(6));
     CHECK(leds[4] == 1 && leds[5] == 1 && program == 20);
@@ -2738,7 +2738,7 @@ static void test_switch_messages(void)
     // A single program (both programs the same): sent on every press, nothing on release,
     // whatever the pedal mode; its LED is lit only while held.
     set_mode(6, PM_STOMP);
-    set_msg(6, MT_PROG, 30, 30, 0);
+    set_msg(6, MT_PROG, 99, 30, 30);
     clear_log();
     ctl_key_press(sw_code(7));
     CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 30 && leds[6] == 1 && program == 30);
@@ -2785,7 +2785,7 @@ static void test_switch_messages(void)
     ctl_midi_in((uint8_t)(0x80 | (MIDI_CHANNEL % 16))); ctl_midi_in(60); ctl_midi_in(0);
     CHECK(leds[1] == 1);
     set_mode(2, PM_STOMP);
-    set_msg(2, MT_PROG, 5, 0, 0);
+    set_msg(2, MT_PROG, 0, 5, 6);
     ctl_midi_in(PROG_CHG); ctl_midi_in(5);
     CHECK(leds[2] == 0 && midi_len == 0);
 
@@ -2811,9 +2811,9 @@ static void test_switch_messages(void)
     reset_world();
     msg_stored_valid[0] = 1;
     stored_msg[0][0] = MT_PROG;         // a single program: rests off in any mode
-    stored_msg[0][1] = 5;
+    stored_msg[0][1] = 0;
     stored_msg[0][2] = 5;
-    stored_msg[0][3] = 0;
+    stored_msg[0][3] = 5;
     msg_stored_valid[1] = 1;
     stored_msg[1][0] = MT_NOTE;
     stored_msg[1][1] = 60;
@@ -2826,7 +2826,7 @@ static void test_switch_messages(void)
     stored_cfg[3] = 0;
     ctl_init();
     boot_end();
-    CHECK(msg_type(0) == MT_PROG && MSG_NUM(0) == 5 && msg_type(1) == MT_NOTE && MSG_NUM(1) == 60 &&
+    CHECK(msg_type(0) == MT_PROG && MSG_ON(0) == 5 && MSG_OFF(0) == 5 && prog_single(0) && msg_type(1) == MT_NOTE && MSG_NUM(1) == 60 &&
           MSG_ON(1) == 100 && MSG_OFF(1) == 30);
     CHECK(leds[0] == 0 && leds[1] == 1 && midi_len == 0);
     // The other records were missing: defaults.
@@ -2837,9 +2837,9 @@ static void test_switch_messages(void)
     reset_world();
     msg_stored_valid[0] = 1;
     stored_msg[0][0] = MT_PROG;
-    stored_msg[0][1] = 5;
-    stored_msg[0][2] = 6;
-    stored_msg[0][3] = 0;
+    stored_msg[0][1] = 0;
+    stored_msg[0][2] = 5;
+    stored_msg[0][3] = 6;
     cfg_stored_valid = 1;
     stored_cfg[0] = MIDI_CHANNEL;
     stored_cfg[1] = 0x03;               // switch 1 inverted momentary
@@ -2857,9 +2857,10 @@ static void test_switch_messages(void)
     clear_log();
     long_press(sw_code(1));
     tap(CTL_KEY_UP);
+    CHECK(edit_param == EP_ON);
     tap(sw_code(9));
     long_nav(CTL_KEY_UP);
-    CHECK(midi_len == 0 && (stomp_state & 1) == 0 && MSG_NUM(0) == 9);
+    CHECK(midi_len == 0 && (stomp_state & 1) == 0 && MSG_ON(0) == 9);
     cancel_exit();
     cfg_stored_valid = 0;
 
@@ -2973,14 +2974,24 @@ static void test_config_editor(void)
     tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN);
     tap(sw_code(3));
     CHECK(msg_type(2) == MT_PROG && display == SHOWN_TEXT(HAL_TEXT_PROG));
-    // A program change has two programs: the number (NUMBER) and the on value (VALUE 1);
-    // UP stops there.
+    // A program change's two programs are VALUE 1 (sent on) and VALUE 2 (sent off); UP and
+    // DOWN skip NUMBER.
     tap(CTL_KEY_UP);
-    CHECK(edit_param == EP_NUM && param_leds(EP_NUM));
-    tap(sw_code(5));
-    CHECK(MSG_NUM(2) == 5);
-    tap(CTL_KEY_UP); tap(CTL_KEY_UP);
     CHECK(edit_param == EP_ON && param_leds(EP_ON));
+    tap(sw_code(5));
+    CHECK(MSG_ON(2) == 5);
+    tap(CTL_KEY_UP);
+    CHECK(edit_param == EP_OFF && param_leds(EP_OFF));
+    tap(sw_code(6));
+    CHECK(MSG_OFF(2) == 6);
+    tap(CTL_KEY_UP);
+    CHECK(edit_param == EP_OFF);
+    tap(CTL_KEY_DOWN);
+    CHECK(edit_param == EP_ON);
+    tap(CTL_KEY_DOWN);
+    CHECK(edit_param == EP_TYPE && param_leds(EP_TYPE));
+    tap(CTL_KEY_UP);
+    CHECK(edit_param == EP_ON);
     long_nav(CTL_KEY_DOWN);
     CHECK(!edit_open && mode == MODE_CONFIG && msg_type(2) == MT_NOTE && MSG_NUM(2) == 100 &&
           MSG_ON(2) == 90 && MSG_OFF(2) == 35);
@@ -3323,13 +3334,13 @@ static void test_midi_config(void)
     // A program change switch can be set up too, and sends nothing when changed while on.
     set_mode(5, PM_STOMP);
     nrpn(NP_TYPE + 5, MT_PROG);
-    nrpn(NP_NUM + 5, 7);
-    nrpn(NP_ON + 5, 8);
+    nrpn(NP_ON + 5, 7);
+    nrpn(NP_OFF + 5, 8);
     ticks(1);
     clear_log();
     tap(sw_code(6));
     CHECK(midi_len == 2 && midi_log[1] == 7 && leds[5] == 1);
-    nrpn(NP_NUM + 5, 9);
+    nrpn(NP_ON + 5, 9);
     CHECK(midi_len == 2 && leds[5] == 0);
 
     // Relays: follow flags (0 / 1, flipping only on a change) and trigger values.

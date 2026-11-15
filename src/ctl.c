@@ -70,15 +70,15 @@
 #define MT_CC           0
 #define MT_NOTE         1
 #define MT_PROG         2
-// Program change switches have two programs: the number, sent when the switch turns on,
-// and the on value, sent when it turns off, so it toggles between them (following its
-// pedal mode). With both the same it is a single program, sent on every press and
+// Program change switches have two programs, in the on and off values (as a CC's two
+// values): the on value is sent when the switch turns on and the off value when it turns
+// off, so it toggles between them (following its pedal mode). The number is not used. With both the same it is a single program, sent on every press and
 // nothing on release, whatever the pedal mode; its LED is lit only while held.
 
 // Parameters in the footswitch editor, each marked by its panel LED: message type
 // (SELECT), number (NUMBER: the CC, note or program number), on value (VALUE 1: the CC
 // value or note velocity sent when on) and off value (VALUE 2: sent when off). A program
-// change has two: the number (sent on) and the on value (sent off). The parameter is
+// change uses VALUE 1 and VALUE 2 for its two programs and skips NUMBER. The parameter is
 // also the msg[] byte it edits, plus one.
 #define EP_TYPE         0
 #define EP_NUM          1
@@ -173,9 +173,9 @@ static IDATA uint16_t stomp_state;
 // Settings that can be changed in configuration mode and are saved in the EEPROM.
 static uint8_t        midi_channel;
 static IDATA uint8_t  pedal_modes[3];
-// Footswitch messages, three bytes per switch: msg[i * 3] is the number (CC, note or
-// program) with type bit 0 in bit 7, msg[i * 3 + 1] the on value (CC value or note
-// velocity) with type bit 1 in bit 7, msg[i * 3 + 2] the off value. Each switch has its
+// Footswitch messages, three bytes per switch: msg[i * 3] is the number (CC or note;
+// unused for a program change) with type bit 0 in bit 7, msg[i * 3 + 1] the on value (CC
+// value, note velocity or program) with type bit 1 in bit 7, msg[i * 3 + 2] the off value. Each switch has its
 // own EEPROM record (type, number, on value, off value).
 #define MSG_BYTES       3
 // Index of switch i's first msg[] byte, i * 3 as 8-bit shift and add: SDCC would compute
@@ -212,9 +212,9 @@ static BIT_T          mode_cycle_pending;
 #define NP_DUMP_END     5       // sent (value 0) after the last parameter of a dump
 #define NP_MODE         8       // + switch 0-9: pedal mode 0-3
 #define NP_TYPE         20      // + switch: message type 0 CC, 1 note, 2 program change
-#define NP_NUM          30      // + switch: number
-#define NP_ON           40      // + switch: on value (a program change's second program)
-#define NP_OFF          50      // + switch: off value
+#define NP_NUM          30      // + switch: number (CC or note; unused for a program change)
+#define NP_ON           40      // + switch: on value (a program change's program sent on)
+#define NP_OFF          50      // + switch: off value (a program change's program sent off)
 #define NP_FOLLOW1      60      // + switch 0-9 (+ 10: the UP + DOWN switch): SWITCH 1 follows it, 0 / 1
 #define NP_FOLLOW2      72      // the same for SWITCH 2
 #define NP_TRIGGER      84      // + relay * 2 + pedal: trigger value 1-127, 0 = off
@@ -460,14 +460,15 @@ static uint8_t msg_type(uint8_t index)
     return (uint8_t)((msg[MSG_AT(index)] >> 7) | ((msg[MSG_AT(index) + 1] >> 6) & 2));
 }
 
-// 1 if footswitch index is a single-program switch: a program change whose two programs
-// are the same (type bits: bit 7 clear in its first byte, set in its second). A leaf
-// function, so it costs no fixed RAM.
+// 1 if footswitch index is a single-program switch: a program change (type bits: bit 7
+// clear in its first byte, set in its second) whose two programs, the on and off values,
+// are the same. A leaf function, so it costs no fixed RAM.
 static uint8_t prog_single(uint8_t index)
 {
     index = MSG_AT(index);
 
-    return (uint8_t)(((uint8_t)(msg[index] ^ msg[index + 1]) == 0x80 && (msg[index + 1] & 0x80)) ? 1 : 0);
+    return (uint8_t)((!(msg[index] & 0x80) && (msg[index + 1] & 0x80) &&
+                      (uint8_t)(msg[index + 1] & 0x7F) == msg[index + 2]) ? 1 : 0);
 }
 
 static void show_program(void)
@@ -477,16 +478,16 @@ static void show_program(void)
 
 // Send footswitch index's message for the state on: a CC with the on or off value, a note
 // on with the on value as velocity (on) or a note off with the off value (off), or a
-// program change, the number (on) or the on value (off; a single-program switch sends
-// nothing). A program sent becomes the current program, so UP / DOWN step from it and the
-// run-mode display shows it. The caller has checked there is room for three bytes.
+// program change, the on value (on) or the off value (off; a single-program switch sends
+// nothing), like a CC's two values; its number is not used. A program sent becomes the
+// current program, so UP / DOWN step from it and the run-mode display shows it. The caller has checked there is room for three bytes.
 static void send_switch(uint8_t index, uint8_t on)
 {
     if (msg_type(index) == MT_PROG)
     {
         if (on || !prog_single(index))
         {
-            program = (uint8_t)(msg[(uint8_t)(MSG_AT(index) + (on ? 0 : 1))] & 0x7F);
+            program = (uint8_t)(msg[(uint8_t)(MSG_AT(index) + (on ? 1 : 2))] & 0x7F);
             send_program(program);
             program_moved   = 0;
             program_pending = 0;
@@ -1124,13 +1125,13 @@ static void edit_end(uint8_t accept)
     config_show();
 }
 
-// Short UP / DOWN in the editor: the next / previous parameter, not wrapping (a program
-// change stops at its number).
+// Short UP / DOWN in the editor: the next / previous parameter, not wrapping. A program
+// change has no number (its programs are the on and off values), so it is skipped.
 static void edit_step(uint8_t code)
 {
     if (code == CTL_KEY_UP)
     {
-        if (edit_param >= ((msg_type(cfg_sel) == MT_PROG) ? EP_ON : EP_OFF))
+        if (edit_param == EP_OFF)
         {
             return;
         }
@@ -1145,6 +1146,11 @@ static void edit_step(uint8_t code)
         }
 
         edit_param--;
+    }
+
+    if (edit_param == EP_NUM && msg_type(cfg_sel) == MT_PROG)
+    {
+        edit_param = (code == CTL_KEY_UP) ? EP_ON : EP_TYPE;
     }
 
     edit_typing = 0;
