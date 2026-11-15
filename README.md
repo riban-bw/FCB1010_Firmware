@@ -1,8 +1,19 @@
-# FCB1010 stomp-box firmware
+# riban FCB1010 stomp-box firmware
 
 The Behringer FCB1010 MIDI foot controller's stock firmware does not work well as a simple stomp-box. This is firmware implements behaviour that one may expect from a stomp-box.
 
-[Try the emulator in your browser](https://riban-bw.github.io/FCB1010_Firmware/emulator/). It runs this firmware's own control code, so you can try the footswitches, pedals and configuration pages before flashing a chip.
+## Core Features
+
+- 10 CC stomp foot pedals, each with various modes of operation
+- Program Change sent from UP/DOWN footswitches with accelerated scroll when held
+- 2 expression pedals
+- 2 relay switched outputs triggered by any footswitch or pedal
+- Extra CC toggle
+- State set by incoming MIDI CC for sync to DAW
+- Configurable MIDI channel
+- Simple, on-device configuration
+
+[Try the emulator in your browser](https://riban-bw.github.io/FCB1010_Firmware/emulator/). It runs this firmware's own control code, so you can try the footswitches, pedals and configuration pages before flashing a chip. Dynamic on-screen labels can help understand usage.
 
 | Control | Behaviour |
 |---|---|
