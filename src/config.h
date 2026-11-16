@@ -37,10 +37,13 @@
 #define MIDI_RX_FLASH_MS          60
 
 // Power-on and configuration page 7: every LED lights (once, and stays lit) while
-// "riban" scrolls across the display, one frame per VERSION_SHOW_MS / 2. Power-on then
+// ". ribAn ." scrolls across the display, one frame per SCROLL_FRAME_MS (ten frames, so
+// power-on takes 10 x SCROLL_FRAME_MS, the start-up settling included). Power-on then
 // goes to run mode. Page 7 then shows the firmware version, each part (major, minor,
 // build) for VERSION_SHOW_MS, then a blank display for the same time, and repeats.
-// VERSION_SHOW_MS must be a multiple of 200, at most 3600.
+// Both are multiples of 100; 10 x SCROLL_FRAME_MS + 4 x VERSION_SHOW_MS must be at most
+// 25500, and SCROLL_FRAME_MS more than the start-up settling (STARTUP_TICKS x 2ms).
+#define SCROLL_FRAME_MS           300
 #define VERSION_SHOW_MS           1000
 
 // Number of footswitches acting as stomp switches (switches 1..10).

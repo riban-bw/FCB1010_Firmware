@@ -70,8 +70,8 @@ void    hal_display(uint8_t value);
 #define HAL_TEXT_ER  0
 #define HAL_TEXT_LO  1
 #define HAL_TEXT_HI  2
-// "riban" scrolling across the two digits, one frame each: " r", "ri", "ib", "ba",
-// "an", "n " (HAL_TEXT_SCROLL + 0..HAL_TEXT_SCROLL_FRAMES - 1).
+// "riban" scrolling across the two digits, one frame each: " r", "ri", "ib", "bA",
+// "An", "n " (HAL_TEXT_SCROLL + 0..HAL_TEXT_SCROLL_FRAMES - 1).
 #define HAL_TEXT_SCROLL         3
 #define HAL_TEXT_SCROLL_FRAMES  6
 // Footswitch message types: "CC", "nt" (note), "Pr" (program change), in that order.
@@ -89,8 +89,9 @@ void    hal_display_blank(uint8_t mask);
 // Two hex digits (0-9, A b C d E F) on the tens and units, the leftmost position blank.
 void    hal_display_hex(uint8_t value);
 
-// Decimal points, same bits as hal_display_blank: bit 0 after the units, bit 1 after
-// the tens, bit 2 after the leftmost position. They stay until changed here.
+// Decimal points ("+1.8.8."): bit 0 after the units, bit 1 after the tens, bit 2 after
+// the leftmost position's "1" (the same bits as hal_display_blank). There is a hole
+// between the "+" and the "1" but no LED. They stay until changed here.
 void    hal_display_dots(uint8_t mask);
 
 #define HAL_LAMP_NORMAL   0

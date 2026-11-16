@@ -20,7 +20,7 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 14.7KB (15014 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 14.8KB (15179 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
 
 Each build also updates the documentation: the code size above, the firmware version on configuration page 7 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
@@ -54,7 +54,8 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `CHANNEL_DIGIT_TIMEOUT_MS` | 5000 | How long (ms) the channel page waits for a second digit after switch 10 |
 | `CONFIG_CHANGED_FLASH_MS` | 250 | CONFIG LED flash half-period (ms) while a change is unsaved |
 | `MIDI_RX_FLASH_MS` | 60 | How long (ms) the MIDI CHAN LED lights for each received byte |
-| `VERSION_SHOW_MS` | 1000 | Time (ms) each version part shows on page 7; each "riban" frame shows for half of it. A multiple of 200, at most 3600 |
+| `SCROLL_FRAME_MS` | 300 | Time (ms) each frame of the "riban" scroll shows; power-on is ten frames (3 seconds at 300). A multiple of 100, longer than the start-up settling |
+| `VERSION_SHOW_MS` | 1000 | Time (ms) each version part shows on page 7. A multiple of 100; 10 x `SCROLL_FRAME_MS` + 4 x `VERSION_SHOW_MS` must be at most 25500 |
 | `DEBOUNCE_SAMPLES` | 3 | Consecutive key scans (12ms apart) that must agree before a press or release counts |
 | `KEY_ACTIVE_LEVEL` | 1 | Input level of a pressed key. Change it if every key reads inverted |
 | `STARTUP_TICKS` | 100 | 2ms ticks to settle at power-on; key events in this time are discarded |

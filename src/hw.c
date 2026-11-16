@@ -156,13 +156,13 @@ void hal_display(uint8_t value)
 // Segment patterns for the HAL_TEXT_* words, tens then units, same bit order as
 // digit_segments: "Er" = E (A D E F G), r (E G); "Lo" = L (D E F), o (C D E G);
 // "Hi" = H (B C E F G), i (C).
-// Then the "riban" frames: " r", "ri", "ib", "ba", "an", "n " (space = 0x00;
-// b = C D E F G, a = A B C D E G, n = C E G).
+// Then the "riban" frames: " r", "ri", "ib", "bA", "An", "n " (space = 0x00;
+// b = C D E F G, A = A B C E F G, n = C E G).
 // Then the footswitch message types: "CC" = C (A D E F) twice; "nt" = n, t (D E F G);
 // "Pr" = P (A B E F G), r.
 static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
     0x9E, 0x0A, 0x1C, 0x3A, 0x6E, 0x20,
-    0x00, 0x0A, 0x0A, 0x20, 0x20, 0x3E, 0x3E, 0xFA, 0xFA, 0x2A, 0x2A, 0x00,
+    0x00, 0x0A, 0x0A, 0x20, 0x20, 0x3E, 0x3E, 0xEE, 0xEE, 0x2A, 0x2A, 0x00,
     0x9C, 0x9C, 0x2A, 0x1E, 0xCE, 0x0A
 };
 

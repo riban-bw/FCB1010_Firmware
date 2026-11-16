@@ -319,9 +319,9 @@ check "ten stomp taps and nothing else, no program change" \
 echo "scenario 10: config page 7 lights every LED, scrolls riban, then shows the major version"
 # Into config mode, then six taps of row 2 (UP, plus switches 6-10, which only edit
 # settings on the way) reach page 7.
-# About 0.1 s in, led_map (units, tens, left) holds the first "riban" frame " r" (no
-# dots); about 3.5 s in (after the 3 s scroll) the major version with the dot after
-# the units.
+# About 0.1 s in, led_map (units, tens, left) holds the scroll's lead-in: digits blank,
+# the units' dot lit; about 3.5 s in (after the ten scroll frames, 3 s with the default
+# SCROLL_FRAME_MS) the major version with the dot after the units.
 LED_MAP=$((16#$(awk '/_led_map:/ {print $1}' build/hw.rst | head -1)))
 VER_EXPECT=$(python3 -I -c '
 import re
@@ -331,8 +331,8 @@ seg = [0xFC, 0x60, 0xDA, 0xF2, 0x66, 0xB6, 0xBE, 0xE0, 0xFE, 0xF6, 0xEE, 0x3E, 0
 units = (~seg[v & 15]) & 0xFE
 tens = ((~seg[v >> 4]) & 0xFE) | 1
 print("%02x %02x ff" % (units, tens))')
-# " r": units r (segments E G = 0x0A), tens blank, left blank; no dots.
-SCROLL_EXPECT="$(printf '%02x' $(( (~0x0A & 0xFE) | 1 ))) ff ff"
+# The lead-in: units blank with its dot (bit 0, lit low), tens and left blank.
+SCROLL_EXPECT="fe ff ff"
 {
     echo "set hardware port[1] 0x9f"; echo "step 800000"
     echo "set hardware port[1] 0xff"; echo "step 900000"
@@ -350,7 +350,7 @@ SCROLL_EXPECT="$(printf '%02x' $(( (~0x0A & 0xFE) | 1 ))) ff ff"
 } > "$TMP/s10.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s10.out" "$IHX" < "$TMP/s10.txt" > "$TMP/s10.console" 2>&1
 # Each address is dumped twice: the first is the scroll, the last the major version.
-check "at once the display shows the first riban frame (units, tens, left: $SCROLL_EXPECT)" \
+check "at once the display shows the scroll's lead-in dot (units, tens, left: $SCROLL_EXPECT)" \
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | head -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$SCROLL_EXPECT"
 check "after the scroll the display shows the major version (units, tens, left: $VER_EXPECT)" \
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | tail -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$VER_EXPECT"

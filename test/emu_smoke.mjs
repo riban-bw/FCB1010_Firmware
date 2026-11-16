@@ -81,21 +81,36 @@ console.log("emulator: power-on and idle");
 // Times from config.h; the scan starts after STARTUP_TICKS of settling.
 const cfgMs = (k) => Number(cfgText.match(new RegExp("#define " + k + "\\s+(\\d+)"))[1]);
 const BOOT_SHOW = cfgMs("VERSION_SHOW_MS"), BOOT_SETTLE = cfgMs("STARTUP_TICKS") * cfgMs("TICK_MS");
-// The "riban" frames as hw.text values (HAL_TEXT_SCROLL + 1 onwards), and what the page
-// draws for each: " r" = 2 segments, "ri" 3, "ib" 6, "ba" 11, "an" 9, "n " 3.
-const SCROLL = [" r", "ri", "ib", "ba", "an", "n "], SCROLL_TEXT = SCROLL.map((w, i) => 4 + i);
-const SCROLL_SEGS = [2, 3, 6, 11, 9, 3];
+// One scroll frame; power-on is ten of them, the start-up settling included.
+const FRAME = cfgMs("SCROLL_FRAME_MS");
+// The "riban" frames as hw.text values (HAL_TEXT_SCROLL + 1 onwards), the dot of each as
+// the strip ". ribAn ." scrolls across the three dots (hw.dots; bit 2 is after the "1"),
+// and what the page draws for each, its dot included: " r" = 2 segments + dot, "ri" 3,
+// "ib" 6, "bA" 11, "An" 9, "n " 3 + dot. Before " r" a lead-in (blank, the dot far right
+// then between the digits, a frame each), after "n " the dot running off (blank, between
+// the digits, then after the "1").
+const SCROLL = [" r", "ri", "ib", "bA", "An", "n "], SCROLL_TEXT = SCROLL.map((w, i) => 4 + i);
+const SCROLL_DOTS = [4, 0, 0, 0, 0, 1];
+const SCROLL_SEGS = [3, 3, 6, 11, 9, 4];
 const litSegs = () => (sandbox.document.getElementById("display").innerHTML.match(/var\(--seg-on\)/g) || []).length;
 // Sampled every 8 ms (wait() runs in 8 ms steps) until it ends: frames in order, LEDs lit.
-const bootFrames = [], bootLamps = new Set(), bootSegs = new Set();
-for (let t = 0; t < BOOT_SETTLE + BOOT_SHOW * 3 - 48; t += 8) {
+const bootFrames = [], bootLamps = new Set(), bootSegs = new Set(), bootDots = [], bootSeq = [];
+const dispKey = () => fcb.hw.text + ":" + fcb.hw.dots;
+bootSeq.push(dispKey());
+// Lead-in 2 frames, text 6, tail 2: ten frames in all, the settling included.
+for (let t = 0; t < FRAME * 10 - 48; t += 8) {
   wait(8);
+  if (bootSeq[bootSeq.length - 1] !== dispKey()) bootSeq.push(dispKey());
+  if (fcb.hw.text && bootFrames[bootFrames.length - 1] !== fcb.hw.text) bootDots.push(fcb.hw.dots);
   if (fcb.hw.text) bootLamps.add(fcb.hw.lamp);
   if (fcb.hw.text && bootFrames[bootFrames.length - 1] !== fcb.hw.text) bootFrames.push(fcb.hw.text);
   if (fcb.hw.text) bootSegs.add(fcb.hw.text + ":" + litSegs());
 }
 check("at power-on \"riban\" scrolls: " + SCROLL.map((w) => '"' + w + '"').join(", "), bootFrames, SCROLL_TEXT);
 check("drawn with the right segments", [...bootSegs], SCROLL_TEXT.map((t, i) => t + ":" + SCROLL_SEGS[i]));
+check("each text frame's dot, as \". ribAn .\" scrolls across the three dots", bootDots, SCROLL_DOTS);
+check("the whole sequence (text:dots): lead-in dot, the text, the trailing dot running off", bootSeq,
+      ["0:1", "0:2"].concat(SCROLL_TEXT.map((t, i) => t + ":" + SCROLL_DOTS[i]), ["0:2", "0:4"]));
 check("every LED lit throughout (no blinking), no version shown", [[...bootLamps], fcb.hw.hex], [[3], -1]);
 wait(100);
 check("then run mode: normal LEDs, no dots, program 0", [fcb.hw.lamp, fcb.hw.hex, fcb.hw.text, fcb.hw.dots, fcb.hw.display, fcb.state().mode], [0, -1, 0, 0, 0, 0]);
@@ -246,12 +261,13 @@ const verText = readFileSync(new URL("../src/version.h", import.meta.url), "utf8
 const verText2 = verText + readFileSync(new URL("../src/version_build.inc", import.meta.url), "utf8");
 const VER = ["MAJOR", "MINOR", "BUILD"].map((k) => Number(verText2.match(new RegExp("#define FW_VERSION_" + k + " (0x[0-9A-Fa-f]+)"))[1]));
 fcb.down(UP); wait(60); fcb.up(UP); wait(40);
-check("UP goes to page 7: every LED lit at once, \"riban\" starts", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text], [6, 4, SCROLL_TEXT[0]]);
-// Page 7 opened at most 40 ms ago; each frame is half a version part's time.
+check("UP goes to page 7: every LED lit at once, the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [6, 4, 0, 7, 1]);
+// Page 7 opened at most 40 ms ago; the lead-in and the text are eight frames.
 const pageFrames = [];
-for (let t = 0; t < BOOT_SHOW * 3 - 104; t += 8) { wait(8); if (fcb.hw.text && pageFrames[pageFrames.length - 1] !== fcb.hw.text) pageFrames.push(fcb.hw.text); }
+for (let t = 0; t < FRAME * 8 - 104; t += 8) { wait(8); if (fcb.hw.text && pageFrames[pageFrames.length - 1] !== fcb.hw.text) pageFrames.push(fcb.hw.text); }
 check("the scroll runs through every frame", pageFrames, SCROLL_TEXT);
-wait(560);
+// The trailing dot (two frames), then halfway into major.
+wait(FRAME * 2 + 64 + BOOT_SHOW / 2);
 check("major version with a trailing dot", [fcb.hw.hex, fcb.hw.dots, fcb.hw.lamp], [VER[0], 1, 4]);
 wait(1000);
 check("then minor with leading and trailing dots", [fcb.hw.hex, fcb.hw.dots], [VER[1], 5]);
@@ -265,9 +281,15 @@ check("and sends nothing", sent(), []);
 // Then a blank display, LEDs still lit, before major again.
 wait(1000);
 check("then the display is blank (no dots), LEDs still lit", [fcb.hw.hex, fcb.hw.blank, fcb.hw.dots, fcb.hw.lamp, litNow()], [-1, 7, 0, 4, 0]);
-wait(1000);
-check("then the scroll again", [fcb.hw.text, fcb.hw.dots], [SCROLL_TEXT[0], 0]);
-wait(BOOT_SHOW * 3);
+// From halfway into the blank to halfway into the lead-in's first frame.
+wait(BOOT_SHOW / 2 + FRAME / 2);
+check("then the lead-in: the leading dot alone, far right", [fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [0, 7, 1]);
+wait(FRAME);
+check("then the leading dot between the digits", [fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [0, 7, 2]);
+wait(FRAME);
+check("then the scroll again", [fcb.hw.text, fcb.hw.dots], [SCROLL_TEXT[0], SCROLL_DOTS[0]]);
+// Halfway into " r": the rest of the text and the trailing dot, then halfway into major.
+wait(FRAME * 7.5 + BOOT_SHOW / 2);
 check("then major again", [fcb.hw.hex, fcb.hw.dots], [VER[0], 1]);
 // It keeps repeating while the page is open, the LEDs lit all along.
 // Over two more cycles every part (and the blank, -1) shows again.
@@ -296,8 +318,8 @@ check("and keeps it while held", [fcb.hw.hex, fcb.hw.dots, darkNow()], [VER[1], 
 fcb.up(8); wait(BOOT_SHOW + 600);
 check("released: it carries on to the build (its LED lit again after its flash)", [fcb.hw.hex, fcb.hw.dots, darkNow()], [VER[2], 4, []]);
 fcb.down(0); wait(60);
-check("footswitch 1 shows \" r\", its LED dark", [fcb.hw.text, fcb.hw.dots, darkNow()], [SCROLL_TEXT[0], 0, [0]]);
-fcb.up(0); wait(BOOT_SHOW / 2 + 100);
+check("footswitch 1 shows \" r\", its LED dark", [fcb.hw.text, fcb.hw.dots, darkNow()], [SCROLL_TEXT[0], SCROLL_DOTS[0], [0]]);
+fcb.up(0); wait(FRAME + 100);
 check("then \"ri\"", fcb.hw.text, SCROLL_TEXT[1]);
 check("and nothing is sent", sent(), []);
 press(UP, 100);

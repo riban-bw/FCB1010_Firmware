@@ -86,4 +86,4 @@ The pedal never sends these back out, so it is safe to connect MIDI OUT and MIDI
 
 ## Power-on
 
-At power-on every LED lights and "riban" scrolls across the display. Then the display shows the program number and the pedal is ready, in footswitch bank 1. Pressing any switch skips this, and the press works as usual. Stomp states are OFF, except switches in inverted momentary mode, which start ON.
+At power-on every LED lights and "riban" scrolls across the display, as ". ribAn .", the dots running in from the right and off at the left, for 3 seconds. Then the display shows the program number and the pedal is ready, in footswitch bank 1. Pressing any switch skips this, and the press works as usual. Stomp states are OFF, except switches in inverted momentary mode, which start ON.

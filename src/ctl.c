@@ -95,6 +95,14 @@
 static const CODE uint8_t stomp_cc[STOMP_COUNT] = { STOMP_CC_LIST };
 static const CODE uint8_t pedal_cc[2]           = { PEDAL_CC_LIST };
 static const CODE uint8_t fw_version_dots[3]    = { 0x01, 0x05, 0x04 };
+// The "riban" scroll moves the strip ". ribAn ." (user's design) one place left per frame
+// across the display's three dots, left to right "+1.8.8.": bit 2 after the "1", bit 1
+// between the digits, bit 0 after the units. The leading dot comes in alone (two lead-in
+// frames, far right then between the digits), so " r" has it after the "1", and it is
+// gone from "ri"; the trailing dot follows "n " at the far right, then runs off through
+// the other two (two tail frames, display blank).
+// The dot of each text frame:
+static const CODE uint8_t scroll_dots[HAL_TEXT_SCROLL_FRAMES] = { 0x04, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
 // Scan ticks for the timed gestures.
 #define REPEAT_DELAY_TICKS   (PROGRAM_REPEAT_DELAY_MS / TICK_MS)
@@ -133,19 +141,29 @@ static const CODE uint8_t fw_version_dots[3]    = { 0x01, 0x05, 0x04 };
 #error CONFIG_CHANGED_FLASH_MS is out of range
 #endif
 
-// Page 7 runs in 100 ms steps: the "riban" scroll (HAL_TEXT_SCROLL_FRAMES frames of
-// VER_SCROLL_STEPS, twice the version speed), then VER_ITEM_STEPS steps for each of major,
-// minor, build and a blank display, then the scroll again. Every LED is lit throughout.
+// Page 7 runs in 100 ms steps, in ten segments, one per footswitch (user's design), each
+// shown from its start by a footswitch press:
+//   0-4  the scroll frames " r", "ri", "ib", "bA", "An" (VER_SCROLL_STEPS each)
+//   5    "n ", then the trailing dot running off (VER_TAIL_FRAMES more frames)
+//   6-8  major, minor, build (VER_ITEM_STEPS each)
+//   9    a blank (VER_ITEM_STEPS), then the lead-in (VER_LEAD_FRAMES frames)
+// then the scroll again. Every LED is lit throughout.
 #define VER_STEP_MS          100
 #define VER_STEP_TICKS       (VER_STEP_MS / TICK_MS)
 #define VER_ITEM_STEPS       (VERSION_SHOW_MS / VER_STEP_MS)
-#define VER_SCROLL_STEPS     (VER_ITEM_STEPS / 2)
-#define VER_SCROLL_END       (HAL_TEXT_SCROLL_FRAMES * VER_SCROLL_STEPS)
-#define VER_END_STEP         (VER_SCROLL_END + 4 * VER_ITEM_STEPS)
-// At power-on only the scroll runs, once, then run mode.
+#define VER_SCROLL_STEPS     (SCROLL_FRAME_MS / VER_STEP_MS)
+#define VER_TAIL_FRAMES      2
+#define VER_LEAD_FRAMES      2
+// Start of segment 5 ("n "), end of its tail (the scroll), start of the blank, the end.
+#define VER_LAST_TEXT        ((HAL_TEXT_SCROLL_FRAMES - 1) * VER_SCROLL_STEPS)
+#define VER_SCROLL_END       (VER_LAST_TEXT + (1 + VER_TAIL_FRAMES) * VER_SCROLL_STEPS)
+#define VER_BLANK_START      (VER_SCROLL_END + 3 * VER_ITEM_STEPS)
+#define VER_END_STEP         (VER_BLANK_START + VER_ITEM_STEPS + VER_LEAD_FRAMES * VER_SCROLL_STEPS)
+// Power-on and page 7 start at the lead-in.
+#define VER_START_STEP       (VER_END_STEP - VER_LEAD_FRAMES * VER_SCROLL_STEPS)
+// At power-on only the lead-in and the scroll run, once, then run mode.
 #define VER_BOOT_END_STEP    VER_SCROLL_END
-// Page 7 has one segment per footswitch: the six scroll frames, then major, minor, build
-// and the blank. Footswitch N's LED is dark for the first VER_FLASH_STEPS of segment N.
+// Footswitch N's LED is dark for the first VER_FLASH_STEPS of segment N.
 #define VER_SEGMENTS         (HAL_TEXT_SCROLL_FRAMES + 4)
 #define VER_FLASH_STEPS      ((VER_SCROLL_STEPS + 1) / 2)
 
@@ -154,8 +172,9 @@ static const CODE uint8_t fw_version_dots[3]    = { 0x01, 0x05, 0x04 };
 #endif
 
 #if VER_STEP_TICKS < 1 || VER_STEP_TICKS > 255 || VER_SCROLL_STEPS < 1 || \
-    VERSION_SHOW_MS % (2 * VER_STEP_MS) != 0 || VER_END_STEP > 255
-#error VERSION_SHOW_MS is out of range (a multiple of 200, at most 3600)
+    VERSION_SHOW_MS % VER_STEP_MS != 0 || SCROLL_FRAME_MS % VER_STEP_MS != 0 || \
+    VER_END_STEP > 255 || STARTUP_TICKS / VER_STEP_TICKS >= VER_SCROLL_STEPS
+#error VERSION_SHOW_MS or SCROLL_FRAME_MS is out of range (see config.h)
 #endif
 
 #if REPEAT_DELAY_TICKS < 1 || REPEAT_PERIOD_TICKS < 1 || CHORD_TICKS < 1
@@ -706,16 +725,26 @@ static void version_show(void)
     hal_lamp_test(boot_anim ? HAL_LAMP_LEDS_ON : HAL_LAMP_LEDS_STOMPS);
 
     // g = the segment (0-9), s = the step within it.
-    if (s < VER_SCROLL_END)
+    if (s < VER_LAST_TEXT)
     {
         g = (uint8_t)(s / VER_SCROLL_STEPS);
         s = (uint8_t)(s % VER_SCROLL_STEPS);
     }
-    else
+    else if (s < VER_SCROLL_END)
+    {
+        g = HAL_TEXT_SCROLL_FRAMES - 1;
+        s = (uint8_t)(s - VER_LAST_TEXT);
+    }
+    else if (s < VER_BLANK_START)
     {
         s = (uint8_t)(s - VER_SCROLL_END);
         g = (uint8_t)(HAL_TEXT_SCROLL_FRAMES + s / VER_ITEM_STEPS);
         s = (uint8_t)(s % VER_ITEM_STEPS);
+    }
+    else
+    {
+        g = VER_SEGMENTS - 1;
+        s = (uint8_t)(s - VER_BLANK_START);
     }
 
     // Page 7 (not power-on): segment g's footswitch LED goes dark at its start (the one
@@ -733,23 +762,51 @@ static void version_show(void)
         }
     }
 
+    // The trailing dot running off after "n " (display blank), one frame each.
+    if (g == HAL_TEXT_SCROLL_FRAMES - 1 && s >= VER_SCROLL_STEPS)
+    {
+        if (s % VER_SCROLL_STEPS == 0)
+        {
+            hal_display(0);
+            hal_display_blank(7);
+            hal_display_dots((uint8_t)(1 << (s / VER_SCROLL_STEPS)));
+        }
+
+        return;
+    }
+
+    // The lead-in after the blank: the leading dot far right, then between the digits.
+    if (g == VER_SEGMENTS - 1 && s >= VER_ITEM_STEPS)
+    {
+        s = (uint8_t)(s - VER_ITEM_STEPS);
+
+        if (s % VER_SCROLL_STEPS == 0)
+        {
+            hal_display(0);
+            hal_display_blank(7);
+            hal_display_dots((uint8_t)(1 << (s / VER_SCROLL_STEPS)));
+        }
+
+        return;
+    }
+
     if (s != 0)
     {
         return;
     }
 
-    // First the scroll, no dots.
+    // The text frames, each with its dot (after the text, which clears the left position).
     if (g < HAL_TEXT_SCROLL_FRAMES)
     {
-        hal_display_dots(0);
         hal_display_text((uint8_t)(HAL_TEXT_SCROLL + g));
+        hal_display_dots(scroll_dots[g]);
         return;
     }
 
     {
         s = (uint8_t)(g - HAL_TEXT_SCROLL_FRAMES);
 
-        // Step 3 is the blank between build and the major
+        // Step 3 is the blank between build and the lead-in.
         if (s == 3)
         {
             hal_display_dots(0);
@@ -764,7 +821,6 @@ static void version_show(void)
     }
 }
 
-// End the power-on lamp test and version: normal LEDs, no dots, the program number.
 // ver_step / ver_ticks go back to their idle values (cal_step / chan_flash_ticks).
 static void boot_end(void)
 {
@@ -787,6 +843,7 @@ static void version_jump(uint8_t index)
         hal_stomp_led(i, 1);
     }
 
+    // Segments 0-5 start a scroll frame apart; 6-9 a version part apart from the scroll's end.
     ver_step   = (uint8_t)((index < HAL_TEXT_SCROLL_FRAMES) ? index * VER_SCROLL_STEPS :
                            VER_SCROLL_END + (index - HAL_TEXT_SCROLL_FRAMES) * VER_ITEM_STEPS);
     ver_ticks  = VER_STEP_TICKS;
@@ -811,8 +868,9 @@ static void version_tick(void)
     ver_ticks = VER_STEP_TICKS;
     ver_step++;
 
-    // At power-on, stop after the build number and go to run mode.
-    if (boot_anim && ver_step >= VER_BOOT_END_STEP)
+    // At power-on, stop once the trailing dot has gone and go to run mode (it starts at the
+    // lead-in, VER_START_STEP, before wrapping to 0).
+    if (boot_anim && ver_step >= VER_BOOT_END_STEP && ver_step < VER_START_STEP)
     {
         boot_end();
         return;
@@ -977,10 +1035,10 @@ static void config_goto_page(uint8_t page)
     {
         resync_pedals();
     }
-    // Page 7 starts with the "riban" scroll.
+    // Page 7 starts with the "riban" scroll's lead-in.
     else if (page == PAGE_VERSION)
     {
-        ver_step  = 0;
+        ver_step  = VER_START_STEP;
         ver_ticks = VER_STEP_TICKS;
     }
 
@@ -1868,9 +1926,13 @@ void ctl_init(void)
     // Power-on: every LED lit while "riban" scrolls once (as page 7 starts), then run
     // mode. A key press ends it early and then acts as usual.
     boot_anim = 1;
-    ver_step  = 0;
-    ver_ticks = VER_STEP_TICKS;
+    ver_step  = VER_START_STEP;
     version_show();
+
+    // The first frame shows through the start-up settling (STARTUP_TICKS, no ctl_tick),
+    // so that time comes off it and power-on takes ten frames in all.
+    ver_step  = (uint8_t)(VER_START_STEP + STARTUP_TICKS / VER_STEP_TICKS);
+    ver_ticks = (uint8_t)(VER_STEP_TICKS - STARTUP_TICKS % VER_STEP_TICKS);
 }
 
 // Stomp number 0..9 for a key code, or 0xFF for UP / DOWN / invalid codes.
