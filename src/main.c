@@ -23,6 +23,8 @@ void main(void)
         {
         }
 
+        ctl_settle_tick();
+
         if (hw_poll_pedals())
         {
             ctl_pedal_sample(0, hw_pedal[0]);

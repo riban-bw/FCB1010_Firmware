@@ -261,6 +261,16 @@ static void reset_world(void)
     boot_end();
 }
 
+// Program mode (DIRECT SELECT lit), as after a short UP + DOWN: UP / DOWN step the program.
+// Power-on is bank mode. Nothing is sent for it.
+static void program_mode(void)
+{
+    if (!pc_mode)
+    {
+        pc_mode_toggle();
+    }
+}
+
 static void clear_log(void)
 {
     midi_len = 0;
@@ -699,7 +709,7 @@ static void test_stomp_modes(void)
     // A stomp press does not change the displayed program number.
     reset_world();
     tap(0);
-    CHECK(display == 0);
+    CHECK(display == 1);
 
     // A release without a press (for example after a mode change) does nothing.
     clear_log();
@@ -741,6 +751,7 @@ static void test_program_change(void)
 
     printf("program change\n");
     reset_world();
+    program_mode();
     CHECK(display == 0);
 
     // Nothing happens on press; a tap sends one change on release.
@@ -787,6 +798,7 @@ static void test_program_change(void)
 
     // Just before the delay nothing repeats; at the delay the display steps, MIDI stays silent.
     reset_world();
+    program_mode();
     clear_log();
     ctl_key_press(CTL_KEY_UP);
     ticks(REPEAT_DELAY_TICKS - 1);
@@ -812,6 +824,7 @@ static void test_program_change(void)
 
     // DOWN repeats the other way: wrapping to 127, 126, or staying at 0.
     reset_world();
+    program_mode();
     clear_log();
     ctl_key_press(CTL_KEY_DOWN);
     ticks(REPEAT_DELAY_TICKS);
@@ -826,6 +839,7 @@ static void test_program_change(void)
     CHECK((REPEAT_DELAY_TICKS + REPEAT_PERIOD_TICKS * (REPEAT_FAST_STEPS - 1)) * TICK_MS >= PROGRAM_REPEAT_FAST_AFTER_MS);
     CHECK((REPEAT_DELAY_TICKS + REPEAT_PERIOD_TICKS * (REPEAT_FAST_STEPS - 2)) * TICK_MS < PROGRAM_REPEAT_FAST_AFTER_MS);
     reset_world();
+    program_mode();
     clear_log();
     ctl_key_press(CTL_KEY_UP);
     ticks(REPEAT_DELAY_TICKS);
@@ -863,6 +877,7 @@ static void test_program_change(void)
 
     // Without wrap a long DOWN hold stops at 0.
     reset_world();
+    program_mode();
     clear_log();
     ctl_key_press(CTL_KEY_DOWN);
     // REPEAT_FAST_STEPS slow steps, then 50 fast ones.
@@ -873,6 +888,7 @@ static void test_program_change(void)
 
     // A hold that reaches the end does send it, once.
     reset_world();
+    program_mode();
     for (i = 0; i < 3; i++)
     {
         tap(CTL_KEY_UP);
@@ -885,6 +901,7 @@ static void test_program_change(void)
 
     // A release at exactly the delay (repeating started) does not add a step.
     reset_world();
+    program_mode();
     ctl_key_press(CTL_KEY_UP);
     ticks(REPEAT_DELAY_TICKS);
     clear_log();
@@ -893,6 +910,7 @@ static void test_program_change(void)
 
     // A release just under the delay is an ordinary tap.
     reset_world();
+    program_mode();
     ctl_key_press(CTL_KEY_UP);
     ticks(REPEAT_DELAY_TICKS - 1);
     clear_log();
@@ -906,6 +924,7 @@ static void test_program_change(void)
 
     // If MIDI OUT is full at release, the change goes out from the tick, once, with the final value.
     reset_world();
+    program_mode();
     ctl_key_press(CTL_KEY_UP);
     midi_space = 1;
     clear_log();
@@ -921,6 +940,7 @@ static void test_program_change(void)
 
     // The pending change is held back while the next press is being repeated.
     reset_world();
+    program_mode();
     ctl_key_press(CTL_KEY_UP);
     midi_space = 1;
     ctl_key_release(CTL_KEY_UP);
@@ -952,12 +972,12 @@ static void test_chord_and_config_entry(void)
     CHECK(mode == MODE_CONFIG && status_led == 1);
     CHECK(midi_len == 0);
 
-    // A chord that is let go early in run mode only toggles bank mode (see
-    // test_bank_mode_toggle): nothing is sent, and the display shows bank 1.
+    // A chord that is let go early in run mode only toggles program mode (see
+    // test_bank_mode_toggle): nothing is sent, and the display shows the program.
     reset_world();
     clear_log();
     chord_short();
-    CHECK(mode == MODE_RUN && midi_len == 0 && bank_mode && display == 1 && program == 0);
+    CHECK(mode == MODE_RUN && midi_len == 0 && pc_mode && display == DISPLAY_PROGRAM_OFFSET && program == 0);
 
     // Once the chord has opened config mode, UP and DOWN stay quiet until both are let go.
     reset_world();
@@ -983,6 +1003,7 @@ static void test_chord_and_config_entry(void)
     // If the first key had already started repeating, the number on the display is sent
     // so the synth is not left behind it.
     reset_world();
+    program_mode();
     ctl_key_press(CTL_KEY_UP);
     ticks(REPEAT_DELAY_TICKS + REPEAT_PERIOD_TICKS);
     CHECK(display == 2);
@@ -1059,7 +1080,7 @@ static void test_config_channel(void)
     // A long UP saves and leaves. The CONFIG and page LEDs go out and the display
     // shows the program number again; UP did not step the program.
     save_exit();
-    CHECK(mode == MODE_RUN && status_led == 0 && display == 0);
+    CHECK(mode == MODE_RUN && status_led == 0 && display == 1);
     CHECK(cfg_saved == 1 && saved_cfg[0] == 4);
     CHECK(aux[0] == 0 && aux[1] == 0 && aux[2] == 0 && aux[3] == 0);
     CHECK(cal_saved == 1);
@@ -1072,6 +1093,7 @@ static void test_config_channel(void)
     tap(0);
     CHECK(midi_len == 3 && cc_status(0) == 0xB3);
     clear_log();
+    program_mode();
     tap(CTL_KEY_UP);
     CHECK(midi_len == 2 && midi_log[0] == 0xC3);
 
@@ -1138,14 +1160,14 @@ static void test_config_channel(void)
     ticks(CHORD_TICKS - 1);
     CHECK(mode == MODE_CONFIG && cfg_saved == 0);
     ticks(1);
-    CHECK(mode == MODE_RUN && status_led == 0 && display == 0);
+    CHECK(mode == MODE_RUN && status_led == 0 && display == 1);
     CHECK(cfg_saved == 1 && saved_cfg[0] == 5 && cal_saved == 1 && midi_channel == 5);
     CHECK(aux[HAL_LED_MIDI_CHAN] == 0 && aux[HAL_LED_MIDI_FUNC] == 0);
     ctl_key_hold(CTL_KEY_UP);
     ctl_key_hold(CTL_KEY_DOWN);
     ticks(CHORD_TICKS);
     chord_up();
-    CHECK(mode == MODE_RUN && midi_len == 0 && program == 0 && bank_mode == 0);
+    CHECK(mode == MODE_RUN && midi_len == 0 && program == 0 && pc_mode == 0);
     // The next long chord opens config mode again.
     chord_long();
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_MODES);
@@ -1177,7 +1199,7 @@ static void test_config_cancel(void)
     CHECK(heel[0] == 20 && toe[0] == 220);
     clear_log();
     cancel_exit();
-    CHECK(mode == MODE_RUN && status_led == 0 && display == 0 && program == 0);
+    CHECK(mode == MODE_RUN && status_led == 0 && display == 1 && program == 0);
     CHECK(cfg_saved == 0 && cal_saved == 0);
     CHECK(midi_channel == MIDI_CHANNEL && heel[0] == 0 && toe[0] == 255);
     CHECK(aux[0] == 0 && aux[1] == 0 && aux[2] == 0 && aux[3] == 0);
@@ -1525,9 +1547,9 @@ static void test_config_channel_digits(void)
     // Leaving keeps it too: 10 is saved and the program number shows normally.
     tap(sw_code(10));
     save_exit();
-    CHECK(mode == MODE_RUN && saved_cfg[0] == 10 && display == 0 && blank == 0);
+    CHECK(mode == MODE_RUN && saved_cfg[0] == 10 && display == 1 && blank == 0);
     ticks(CHAN_FLASH_TICKS * 2);
-    CHECK(display == 0 && blank == 0);
+    CHECK(display == 1 && blank == 0);
 
     // Nothing was sent, and a typed two-digit channel is saved and used.
     CHECK(midi_len == 0);
@@ -1568,7 +1590,7 @@ static void test_config_page_leds(void)
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_TOE && aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 1);
     CHECK(display == SHOWN_HI);
-    // Pages 5 and 6 light SWITCH 1 / SWITCH 2; page 7 is the last (no wrap).
+    // Pages 5 and 6 light SWITCH 1 / SWITCH 2; page 8 is the last (no wrap).
     CHECK(aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 0);
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_SW1 && aux[HAL_LED_SWITCH_1] == 1 && aux[HAL_LED_SWITCH_2] == 0);
@@ -1577,9 +1599,14 @@ static void test_config_page_leds(void)
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_SW2 && aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 1);
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_VERSION && aux[HAL_LED_SWITCH_2] == 0 && lamp == HAL_LAMP_LEDS_STOMPS);
+    CHECK(cfg_page == PAGE_BANK_PC && aux[HAL_LED_SWITCH_2] == 0 && aux[HAL_LED_DIRECT_SELECT] == 1 && lamp == HAL_LAMP_NORMAL && dots == 0);
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_VERSION && aux[HAL_LED_DIRECT_SELECT] == 0 && lamp == HAL_LAMP_LEDS_STOMPS);
+    // UP on page 8 stays on page 8 (no wrap).
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_VERSION);
+    tap(CTL_KEY_DOWN);
+    CHECK(cfg_page == PAGE_BANK_PC && aux[HAL_LED_DIRECT_SELECT] == 1 && lamp == HAL_LAMP_NORMAL && dots == 0);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_SW2 && aux[HAL_LED_SWITCH_2] == 1 && lamp == HAL_LAMP_NORMAL && dots == 0);
     tap(CTL_KEY_DOWN);
@@ -1601,11 +1628,11 @@ static void test_config_page_leds(void)
     CHECK(aux[HAL_LED_SWITCH_2] == 0 && leds[0] == 1);
     save_exit();
     CHECK(mode == MODE_RUN && aux[HAL_LED_MIDI_CHAN] == 0 && aux[HAL_LED_MIDI_FUNC] == 0);
-    CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0 && display == 0);
+    CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0 && display == 1);
 }
 
-// From the first step of page 7 or power-on: every tick of the "riban" scroll, each frame
-// (" r", "ri", "ib", "bA", "An", "n ") for VERSION_SHOW_MS / 2, no dots, every LED lit.
+// From the first step of page 8 or power-on: every tick of the "riban" scroll, each frame
+// (" r", "ri", "ib", "ba", "an", "n ") for SCROLL_FRAME_MS each, no dots, every LED lit.
 // Returns with the scroll's time used up exactly.
 // Footswitch LEDs: every one lit except index off (-1: none).
 static int stomp_leds_but(int off)
@@ -1623,12 +1650,12 @@ static int stomp_leds_but(int off)
     return 1;
 }
 
-// The "riban" scroll moves ". ribAn ." across the three dots (bit 2 after the "1", bit 0
+// The "riban" scroll moves ". riban ." across the three dots (bit 2 after the "1", bit 0
 // far right): the dot of each text frame.
 static const uint8_t scroll_dot_of[HAL_TEXT_SCROLL_FRAMES] = { 0x04, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
 // One scroll frame for its full time: text (HAL_TEXT_* value, or -1 for a blank display)
-// and dots. On page 7 footswitch LED dark_led is dark for the first VER_FLASH_STEPS (-1:
+// and dots. On page 8 footswitch LED dark_led is dark for the first VER_FLASH_STEPS (-1:
 // all lit); at power-on HAL_LAMP_LEDS_ON lights them all (not checked here).
 static void expect_frame(int text, int dot_mask, int dark_led)
 {
@@ -1644,7 +1671,7 @@ static void expect_frame(int text, int dot_mask, int dark_led)
     }
 }
 
-// The lead-in (power-on and page 7 start here; it ends the blank segment): the display
+// The lead-in (power-on and page 8 start here; it ends the blank segment): the display
 // blank, the leading dot far right, then between the digits.
 static void expect_lead(void)
 {
@@ -1667,19 +1694,19 @@ static void expect_scroll(void)
     expect_frame(-1, 0x04, -1);
 }
 
-// Page 7: every LED lights at once (no blinking) and stays lit while "riban" scrolls,
+// Page 8: every LED lights at once (no blinking) and stays lit while "riban" scrolls,
 // then the version shows as "major." / ".minor." / ".build", VERSION_SHOW_MS each, then a
 // blank, repeating from the scroll.
 static void test_config_version(void)
 {
     int k;
 
-    printf("config: page 7 lamp test and version\n");
+    printf("config: page 8 lamp test and version\n");
     reset_world();
     chord_long();
     CHECK(lamp == HAL_LAMP_NORMAL && dots == 0);
 
-    for (k = 0; k < 6; k++)
+    for (k = 0; k < 7; k++)
     {
         tap(CTL_KEY_UP);
     }
@@ -1696,7 +1723,7 @@ static void test_config_version(void)
     CHECK(stomp_leds_but(-1));
 
     // At once: LEDs lit and the scroll, each frame half a version part's time.
-    CHECK(VER_STEP_TICKS * TICK_MS == 100 && VER_ITEM_STEPS * VER_STEP_TICKS * TICK_MS == VERSION_SHOW_MS);
+    CHECK(VER_STEP_TICKS * TICK_MS == VER_STEP_MS && VER_ITEM_STEPS * VER_STEP_TICKS * TICK_MS == VERSION_SHOW_MS);
     CHECK(VER_SCROLL_STEPS * VER_STEP_MS == SCROLL_FRAME_MS && HAL_TEXT_SCROLL_FRAMES == 6);
     clear_log();
     expect_lead();
@@ -1725,8 +1752,7 @@ static void test_config_version(void)
     CHECK(display == SHOWN_HEX(fw_version[0]) && dots == 0x01 && lamp == HAL_LAMP_LEDS_STOMPS);
     CHECK(midi_len == 0);
 
-    // UP on the last page does nothing; a footswitch runs it all again, sending nothing.
-    tap(CTL_KEY_UP);
+    // A footswitch runs it all again, sending nothing.
     CHECK(cfg_page == PAGE_VERSION && display == SHOWN_HEX(fw_version[0]));
     ticks(VER_STEP_TICKS * VER_ITEM_STEPS);
     CHECK(display == SHOWN_HEX(fw_version[1]));
@@ -1750,31 +1776,31 @@ static void test_config_version(void)
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_VERSION && midi_len == 0);
     CHECK(sw_thr[0] == 0 && sw_thr[1] == 0 && sw_thr[2] == 0 && sw_thr[3] == 0 && sw_mask[1] == 0);
 
-    // DOWN during the lamp test: page 6, LEDs back to normal, and no more steps.
+    // DOWN during the lamp test: page 7, LEDs back to normal, and no more steps.
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_SW2 && lamp == HAL_LAMP_NORMAL && dots == 0 && aux[HAL_LED_SWITCH_2] == 1);
+    CHECK(cfg_page == PAGE_BANK_PC && lamp == HAL_LAMP_NORMAL && dots == 0 && aux[HAL_LED_DIRECT_SELECT] == 1);
     ticks(VER_STEP_TICKS * 20);
-    CHECK(lamp == HAL_LAMP_NORMAL && blank == 7);
+    CHECK(lamp == HAL_LAMP_NORMAL && display == SHOWN_TEXT(HAL_TEXT_DASHES));
 
-    // Leaving from page 7 (long UP, or a long UP + DOWN) ends the lamp test and dots.
+    // Leaving from page 8 (long UP, or a long UP + DOWN) ends the lamp test and dots.
     tap(CTL_KEY_UP);
     CHECK(lamp == HAL_LAMP_LEDS_STOMPS);
     save_exit();
-    CHECK(mode == MODE_RUN && lamp == HAL_LAMP_NORMAL && dots == 0 && display == 0);
+    CHECK(mode == MODE_RUN && lamp == HAL_LAMP_NORMAL && dots == 0 && display == 1);
     ticks(VER_STEP_TICKS * 2);
     CHECK(lamp == HAL_LAMP_NORMAL);
     chord_long();
-    for (k = 0; k < 6; k++)
+    for (k = 0; k < 7; k++)
     {
         tap(CTL_KEY_UP);
     }
     ticks(VER_STEP_TICKS * (VER_LEAD_FRAMES * VER_SCROLL_STEPS + VER_SCROLL_END) + 1);
     CHECK(display == SHOWN_HEX(fw_version[0]) && dots == 0x01);
     chord_long();
-    CHECK(mode == MODE_RUN && lamp == HAL_LAMP_NORMAL && dots == 0 && display == 0);
+    CHECK(mode == MODE_RUN && lamp == HAL_LAMP_NORMAL && dots == 0 && display == 1);
 }
 
-// Page 7's ten segments, one per footswitch: the scroll frames " r" to "n " (switches
+// Page 8's ten segments, one per footswitch: the scroll frames " r" to "n " (switches
 // 1-6), major, minor, build (7-9) and the blank (10). Each segment flashes its footswitch
 // LED dark then lit; pressing a footswitch shows its segment and holds it until release,
 // then it carries on from there. Nothing is sent and no setting changes.
@@ -1782,11 +1808,11 @@ static void test_config_version_jump(void)
 {
     int k;
 
-    printf("config: page 7 footswitch LEDs mark the segments; a footswitch holds its segment\n");
+    printf("config: page 8 footswitch LEDs mark the segments; a footswitch holds its segment\n");
     reset_world();
     chord_long();
 
-    for (k = 0; k < 6; k++)
+    for (k = 0; k < 7; k++)
     {
         tap(CTL_KEY_UP);
     }
@@ -1801,7 +1827,7 @@ static void test_config_version_jump(void)
     // Each segment's LED: dark for VER_FLASH_STEPS from its start, then lit.
     for (k = 0; k < STOMP_COUNT; k++)
     {
-        // " r" to "An" one frame; "n " and its tail; major, minor, build; blank and lead-in.
+        // " r" to "an" one frame; "n " and its tail; major, minor, build; blank and lead-in.
         int len = (k < HAL_TEXT_SCROLL_FRAMES - 1) ? VER_SCROLL_STEPS :
                   (k == HAL_TEXT_SCROLL_FRAMES - 1) ? (1 + VER_TAIL_FRAMES) * VER_SCROLL_STEPS :
                   (k < STOMP_COUNT - 1) ? VER_ITEM_STEPS : VER_ITEM_STEPS + VER_LEAD_FRAMES * VER_SCROLL_STEPS;
@@ -1872,12 +1898,12 @@ static void test_config_version_jump(void)
     CHECK(display == SHOWN_TEXT(HAL_TEXT_SCROLL) && stomp_leds_but(0));
     CHECK(midi_len == 0 && cfg_changed == 0 && mode == MODE_CONFIG && cfg_page == PAGE_VERSION);
 
-    // DOWN while a switch is held leaves page 7; the release then does nothing.
+    // DOWN while a switch is held leaves page 8; the release then does nothing.
     ctl_key_press(sw_code(5));
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_SW2 && ver_paused == 0 && lamp == HAL_LAMP_NORMAL);
+    CHECK(cfg_page == PAGE_BANK_PC && ver_paused == 0 && lamp == HAL_LAMP_NORMAL);
     ctl_key_release(sw_code(5));
-    CHECK(cfg_page == PAGE_SW2 && sw_mask[1] == 0 && midi_len == 0);
+    CHECK(cfg_page == PAGE_BANK_PC && bank_pc == 0 && midi_len == 0);
 
     // Leaving config mode while a switch is held: run mode works as usual afterwards.
     tap(CTL_KEY_UP);
@@ -1901,11 +1927,11 @@ static void test_bank_mode_toggle(void)
     CHECK(aux[HAL_LED_DIRECT_SELECT] == 0);
     clear_log();
     chord_short();
-    CHECK(mode == MODE_RUN && midi_len == 0 && bank_mode == 1);
-    // The display shows the bank (bank 1) while DIRECT SELECT is lit.
-    CHECK(aux[HAL_LED_DIRECT_SELECT] == 1 && display == 1 && program == 0);
+    CHECK(mode == MODE_RUN && midi_len == 0 && pc_mode == 1);
+    // The display shows the program while DIRECT SELECT is lit, the bank (1) otherwise.
+    CHECK(aux[HAL_LED_DIRECT_SELECT] == 1 && display == DISPLAY_PROGRAM_OFFSET && program == 0);
     chord_short();
-    CHECK(midi_len == 0 && bank_mode == 0 && aux[HAL_LED_DIRECT_SELECT] == 0 && display == 0);
+    CHECK(midi_len == 0 && pc_mode == 0 && aux[HAL_LED_DIRECT_SELECT] == 0 && display == 1);
 
     // The second key pressed late still makes a chord; nothing is stepped.
     ctl_key_press(CTL_KEY_DOWN);
@@ -1914,14 +1940,14 @@ static void test_bank_mode_toggle(void)
     ticks(10);
     ctl_key_release(CTL_KEY_DOWN);
     ctl_key_release(CTL_KEY_UP);
-    CHECK(midi_len == 0 && bank_mode == 1 && program == 0);
+    CHECK(midi_len == 0 && pc_mode == 1 && program == 0);
 
     // It does not wait for MIDI OUT room, since it sends nothing.
     midi_space = 0;
     chord_short();
-    CHECK(bank_mode == 0);
+    CHECK(pc_mode == 0);
     chord_short();
-    CHECK(bank_mode == 1);
+    CHECK(pc_mode == 1);
     midi_space = 15;
 
     // Opening and leaving config mode sends nothing. DIRECT SELECT is dark while
@@ -1929,9 +1955,9 @@ static void test_bank_mode_toggle(void)
     // tap in config mode does not toggle it either.
     clear_log();
     chord_long();
-    CHECK(mode == MODE_CONFIG && aux[HAL_LED_DIRECT_SELECT] == 0 && bank_mode == 1);
+    CHECK(mode == MODE_CONFIG && aux[HAL_LED_DIRECT_SELECT] == 0 && pc_mode == 1);
     chord_short();
-    CHECK(mode == MODE_CONFIG && bank_mode == 1 && aux[HAL_LED_DIRECT_SELECT] == 0);
+    CHECK(mode == MODE_CONFIG && pc_mode == 1 && aux[HAL_LED_DIRECT_SELECT] == 0);
     tap(CTL_KEY_UP);
     CHECK(aux[HAL_LED_DIRECT_SELECT] == 0);
     save_exit();
@@ -1943,17 +1969,17 @@ static void test_bank_mode_toggle(void)
 
     // With bank mode off, the LED stays dark after leaving.
     chord_short();
-    CHECK(bank_mode == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
+    CHECK(pc_mode == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
     chord_long();
     save_exit();
     CHECK(aux[HAL_LED_DIRECT_SELECT] == 0);
     // Back on for the checks below.
     chord_short();
-    CHECK(bank_mode == 1 && aux[HAL_LED_DIRECT_SELECT] == 1);
+    CHECK(pc_mode == 1 && aux[HAL_LED_DIRECT_SELECT] == 1);
 
     // A power-on starts with it off.
     ctl_init();
-    CHECK(aux[HAL_LED_DIRECT_SELECT] == 0 && bank_mode == 0);
+    CHECK(aux[HAL_LED_DIRECT_SELECT] == 0 && pc_mode == 0);
 }
 
 // Open a SWITCH page: 1 (page 5) or 2 (page 6).
@@ -1989,9 +2015,9 @@ static void test_relays(void)
     chord_short();
     ticks(2);
     CHECK(relays == 0 && aux[HAL_LED_SWITCH_1] == 0);
-    tap(2);
     chord_short();
-    CHECK(leds[2] == 0 && bank_mode == 0);
+    tap(2);
+    CHECK(leds[2] == 0 && pc_mode == 0);
 
     // Page 5: footswitch 3 and bank mode, all LEDs showing the settings.
     goto_switch_page(1);
@@ -2008,7 +2034,7 @@ static void test_relays(void)
     tap(2);
     chord_short();
     CHECK(sw_mask[0] == (4 | SW_CC_BIT) && aux[HAL_LED_DIRECT_SELECT] == 1);
-    CHECK(mode == MODE_CONFIG && cfg_page == PAGE_SW1 && bank_mode == 0 && midi_len == 0);
+    CHECK(mode == MODE_CONFIG && cfg_page == PAGE_SW1 && pc_mode == 0 && midi_len == 0);
 
     // Pedal A sets the trigger value: the first reading is only a reference, small
     // wobble is ignored, a real move sets it, shows it and lights EXP 1.
@@ -2045,7 +2071,8 @@ static void test_relays(void)
     CHECK(saved_sw[1][0] == 0 && saved_sw[1][1] == 2 && saved_sw[1][2] == 0 && saved_sw[1][3] == ctl_scale(64, 0, 255));
     CHECK(aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
 
-    // Run mode, relay 1: footswitch 3 OR bank mode OR pedal A at v and up.
+    // Run mode, relay 1: footswitch 3 OR program mode (DIRECT SELECT lit) OR pedal A at v
+    // and up.
     pedal(0, 0);
     pedal(1, 0);
     ticks(1);
@@ -2053,12 +2080,12 @@ static void test_relays(void)
     tap(2);
     ticks(1);
     CHECK(relays == 1 && aux[HAL_LED_SWITCH_1] == 1 && aux[HAL_LED_SWITCH_2] == 0);
-    chord_short();
-    ticks(1);
-    CHECK(relays == 1 && bank_mode == 1);
     tap(2);
     ticks(1);
-    CHECK(relays == 1);
+    CHECK(relays == 0);
+    chord_short();
+    ticks(1);
+    CHECK(relays == 1 && pc_mode == 1);
     chord_short();
     ticks(1);
     CHECK(relays == 0 && aux[HAL_LED_SWITCH_1] == 0);
@@ -2358,7 +2385,7 @@ static void test_midi_in(void)
     // touch bank mode.
     clear_log();
     ctl_midi_in(CC_STATUS); ctl_midi_in(20); ctl_midi_in(127);
-    CHECK(bank_mode == 0 && aux[HAL_LED_DIRECT_SELECT] == 0 && midi_len == 0);
+    CHECK(pc_mode == 0 && aux[HAL_LED_DIRECT_SELECT] == 0 && midi_len == 0);
 
     // Running status: One status byte, two pairs.
     reset_world();
@@ -2524,40 +2551,55 @@ static void test_boot_animation(void)
     clear_log();
     ctl_init();
     CHECK(boot_anim == 1 && mode == MODE_RUN);
-    // The lead-in, every frame for its full time, then (on the last tick of the trailing
-    // dot) run mode. The first frame is short by the start-up settling (STARTUP_TICKS,
-    // during which main() does not call ctl_tick; the tests start straight away), so with
-    // it power-on takes ten frames: 10 x SCROLL_FRAME_MS.
+    // Tick by tick from power-on: the start-up settling (STARTUP_TICKS, during which main()
+    // calls ctl_settle_tick, not ctl_tick), then ctl_tick. Power-on takes ten frames,
+    // 10 x SCROLL_FRAME_MS, every frame its full time with the settling counted, then (on
+    // the last tick of the trailing dot) run mode. Holds whatever the frame length,
+    // including frames shorter than the settling.
     {
-        int k, n = 0;
+        static const uint8_t lead_tail[4] = { 0x01, 0x02, 0x02, 0x04 };
+        int k, f, n = 0, bad = 0;
+        int frame_ticks = VER_STEP_TICKS * VER_SCROLL_STEPS;
 
-        for (k = 0; k < VER_STEP_TICKS * VER_SCROLL_STEPS - STARTUP_TICKS; k++)
+        CHECK(display == 0 && blank == 7 && dots == 0x01 && lamp == HAL_LAMP_LEDS_ON);
+
+        for (k = 0; k < 10 * frame_ticks && boot_anim; k++)
         {
-            CHECK(display == 0 && blank == 7 && dots == 0x01 && lamp == HAL_LAMP_LEDS_ON);
-            ticks(1);
+            f = k / frame_ticks;
+
+            if (f < 2 || f >= 8)
+            {
+                bad += !(display == 0 && blank == 7 && dots == lead_tail[f < 2 ? f : f - 6]);
+            }
+            else
+            {
+                bad += !(display == SHOWN_TEXT(HAL_TEXT_SCROLL + f - 2) && blank == 0 && dots == scroll_dot_of[f - 2]);
+            }
+
+            // Every LED lit for BOOT_LAMP_MS from power-on, then the normal LEDs.
+            bad += (lamp != ((k * TICK_MS < BOOT_LAMP_MS) ? HAL_LAMP_LEDS_ON : HAL_LAMP_NORMAL) || midi_len != 0);
+
+            // The settling, then one ctl_tick per 2ms.
+            if (k < STARTUP_TICKS)
+            {
+                ctl_settle_tick();
+            }
+            else
+            {
+                ticks(1);
+                n++;
+            }
         }
 
-        CHECK(dots == 0x02);
-        ctl_init();
-
-        while (boot_anim && n < 10000)
-        {
-            ticks(1);
-            n++;
-        }
-
-        CHECK((n + STARTUP_TICKS) * TICK_MS == 10 * SCROLL_FRAME_MS);
-        ctl_init();
-        ticks(VER_STEP_TICKS * VER_SCROLL_STEPS - STARTUP_TICKS);
+        CHECK(bad == 0);
+        CHECK(!boot_anim && (n + STARTUP_TICKS) * TICK_MS == 10 * SCROLL_FRAME_MS);
     }
-    expect_frame(-1, 0x02, -1);
-    expect_scroll();
-    // Then run mode (the version never shows): normal LEDs, no dots, program 0, steps
+    // Then run mode (the version never shows): normal LEDs, no dots, bank 1 on the display (bank mode), steps
     // back to their idle values.
-    CHECK(boot_anim == 0 && lamp == HAL_LAMP_NORMAL && dots == 0 && display == program + DISPLAY_PROGRAM_OFFSET);
+    CHECK(boot_anim == 0 && lamp == HAL_LAMP_NORMAL && dots == 0 && display == 1 && !pc_mode && aux[HAL_LED_DIRECT_SELECT] == 0);
     CHECK(cal_step == CAL_DONE && chan_flash_ticks == 0 && mode == MODE_RUN && midi_len == 0);
     ticks(VER_STEP_TICKS * VER_END_STEP);
-    CHECK(lamp == HAL_LAMP_NORMAL && display == program + DISPLAY_PROGRAM_OFFSET && midi_len == 0);
+    CHECK(lamp == HAL_LAMP_NORMAL && display == 1 && midi_len == 0);
 
     // A footswitch during the animation ends it and then works as usual.
     reset_world();
@@ -2565,10 +2607,10 @@ static void test_boot_animation(void)
     ctl_init();
     set_mode(0, PM_STOMP);
     clear_log();
-    ticks(VER_STEP_TICKS * ((VER_LEAD_FRAMES + 1) * VER_SCROLL_STEPS + 1) - STARTUP_TICKS);
-    CHECK(boot_anim == 1 && lamp == HAL_LAMP_LEDS_ON && display == SHOWN_TEXT(HAL_TEXT_SCROLL + 1) && dots == scroll_dot_of[1]);
+    ticks(VER_STEP_TICKS * ((VER_LEAD_FRAMES + 1) * VER_SCROLL_STEPS + 1));
+    CHECK(boot_anim == 1 && display == SHOWN_TEXT(HAL_TEXT_SCROLL + 1) && dots == scroll_dot_of[1]);
     tap(0);
-    CHECK(boot_anim == 0 && lamp == HAL_LAMP_NORMAL && dots == 0 && display == program + DISPLAY_PROGRAM_OFFSET);
+    CHECK(boot_anim == 0 && lamp == HAL_LAMP_NORMAL && dots == 0 && display == 1);
     CHECK(midi_len == 3 && cc_number(0) == stomp_cc[0] && cc_value(0) == 127 && leds[0] == 1);
     ticks(VER_STEP_TICKS * VER_END_STEP);
     CHECK(lamp == HAL_LAMP_NORMAL && midi_len == 3);
@@ -2579,7 +2621,7 @@ static void test_boot_animation(void)
     clear_log();
     ticks(VER_STEP_TICKS);
     tap(CTL_KEY_UP);
-    CHECK(boot_anim == 0 && program == 1 && midi_len == 2 && display == 1 + DISPLAY_PROGRAM_OFFSET);
+    CHECK(boot_anim == 0 && bank_next == 1 && bank_busy && program == 0 && midi_len == 0 && display == 2);
 
     // MIDI IN during the animation sets the stomp state under it (shown afterwards).
     reset_world();
@@ -2590,7 +2632,7 @@ static void test_boot_animation(void)
     ctl_midi_in(stomp_cc[0]);
     ctl_midi_in(127);
     CHECK(boot_anim == 1 && leds[0] == 1 && lamp == HAL_LAMP_LEDS_ON);
-    ticks(VER_STEP_TICKS * (VER_LEAD_FRAMES * VER_SCROLL_STEPS + VER_BOOT_END_STEP) - STARTUP_TICKS);
+    ticks(VER_STEP_TICKS * (VER_LEAD_FRAMES * VER_SCROLL_STEPS + VER_BOOT_END_STEP));
     CHECK(boot_anim == 0 && lamp == HAL_LAMP_NORMAL && leds[0] == 1);
 }
 
@@ -2671,7 +2713,7 @@ static void test_config_led_flash(void)
     ticks(RX_FLASH_TICKS);
     CHECK(aux[HAL_LED_MIDI_CHAN] == 0 && status_led == 0);
 
-    // Page 7 with an unsaved change: the CONFIG LED flashes through the version display
+    // Page 8 with an unsaved change: the CONFIG LED flashes through the version display
     // (the HAL keeps it out of the lamp test's LEDs-on mode); with none it stays lit.
     {
     int k;
@@ -2680,21 +2722,21 @@ static void test_config_led_flash(void)
     chord_long();
     tap(1);
     tap(1);
-    for (k = 0; k < 6; k++)
+    for (k = 0; k < 7; k++)
     {
         tap(CTL_KEY_UP);
     }
     CHECK(cfg_page == PAGE_VERSION && cfg_changed == 1);
     CHECK(lamp == HAL_LAMP_LEDS_STOMPS && status_toggles(CFG_FLASH_TICKS * 4) == 4);
     // Putting the change back elsewhere and returning: steady.
-    for (k = 0; k < 6; k++)
+    for (k = 0; k < 7; k++)
     {
         tap(CTL_KEY_DOWN);
     }
     tap(1);
     tap(1);
     tap(1);
-    for (k = 0; k < 6; k++)
+    for (k = 0; k < 7; k++)
     {
         tap(CTL_KEY_UP);
     }
@@ -2827,25 +2869,29 @@ static void test_switch_messages(void)
     CHECK(midi_len == 6 && cc_number(0) == 70 && cc_value(0) == 10 && cc_value(1) == 90 && leds[7] == 1);
 
     // Program change with two programs: a toggle between them, following its pedal mode.
-    // The LED shows the state, the display the program sent, and UP / DOWN step from it.
+    // The LED shows the state; the program sent becomes the current program, so in
+    // program mode UP / DOWN step from it (the display shows the bank until then).
     set_mode(4, PM_STOMP);
     set_msg(4, MT_PROG, 0, 10, 11);
     clear_log();
     tap(sw_code(5));
     CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 10 && leds[4] == 1);
-    CHECK(program == 10 && display == 10 + DISPLAY_PROGRAM_OFFSET);
+    CHECK(program == 10 && display == 1);
     tap(sw_code(5));
     CHECK(midi_len == 4 && midi_log[2] == PROG_CHG && midi_log[3] == 11 && leds[4] == 0 && program == 11);
     clear_log();
+    program_mode();
+    CHECK(display == 11 + DISPLAY_PROGRAM_OFFSET);
     tap(CTL_KEY_UP);
     CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 12);
+    pc_mode_toggle();
     // Momentary: the first program while held, the second on release.
     set_mode(4, PM_MOMENTARY);
     clear_log();
     ctl_key_press(sw_code(5));
     CHECK(midi_len == 2 && midi_log[1] == 10 && leds[4] == 1);
     ctl_key_release(sw_code(5));
-    CHECK(midi_len == 4 && midi_log[3] == 11 && leds[4] == 0 && display == 11 + DISPLAY_PROGRAM_OFFSET);
+    CHECK(midi_len == 4 && midi_log[3] == 11 && leds[4] == 0 && display == 1);
     // Stomp with momentary: a long press goes back on release.
     set_mode(4, PM_STOMP_MOM);
     clear_log();
@@ -3369,8 +3415,9 @@ static void test_midi_config(void)
     clear_log();
     dump_run(1000);
     n = parse_dump(0);
-    CHECK(n == 1 + 3 + 2 + 10 + 40 + 11 + 11 + 4 + 4 && dump_end && midi_job == 0);
+    CHECK(n == 1 + 3 + 2 + 10 + 40 + 11 + 11 + 4 + 4 + 2 && dump_end && midi_job == 0);
     CHECK(dump_values[NP_BANK] == 1 && dump_values[NP_BANKS] == BANK_COUNT);
+    CHECK(dump_values[NP_BANK_PC] == 127 && dump_values[NP_BANK_PC_ON] == 0);
     CHECK(dump_values[NP_CHANNEL] == MIDI_CHANNEL);
     CHECK(dump_values[NP_VERSION] == fw_version[0] && dump_values[NP_VERSION + 1] == fw_version[1] &&
           dump_values[NP_VERSION + 2] == fw_version[2]);
@@ -3611,6 +3658,295 @@ static void stomp_banks(int n)
 // footswitch messages and modes instead of a program; the bank stays when DIRECT SELECT
 // goes out. Leaving a bank turns its switches off (sending their off), then the new bank's
 // switches go to their resting states.
+// Bank mode is the default (DIRECT SELECT dark: UP / DOWN choose banks, the footswitches
+// are stomps). A short UP + DOWN toggles program mode (DIRECT SELECT lit; user's design):
+// UP / DOWN step the program as before, and the footswitches choose a program by number
+// (as the display shows it): 1-9 at once; 10 shows "--", then digits (10 = 0), sent once
+// complete, with UP (ENTER) when shorter, or dropped with DOWN (ESCAPE).
+#define SHOWN_PC(t) ((t) - DISPLAY_PROGRAM_OFFSET)
+static void pc_digits(const char *d)
+{
+    for (; *d; d++)
+    {
+        tap(sw_code(*d == '0' ? 10 : *d - '0'));
+    }
+}
+
+static void test_pc_mode(void)
+{
+    int i;
+
+    printf("program mode: programs chosen with the footswitches\n");
+    reset_world();
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        set_mode((uint8_t)i, PM_STOMP);
+    }
+    CHECK(!pc_mode && aux[HAL_LED_DIRECT_SELECT] == 0 && display == 1 && stomp_state == 0);
+    clear_log();
+    chord_short();
+    CHECK(pc_mode && aux[HAL_LED_DIRECT_SELECT] == 1 && display == DISPLAY_PROGRAM_OFFSET && midi_len == 0);
+
+    // Switches 1-9: that program at once; the stomps are untouched.
+    tap(sw_code(3));
+    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == SHOWN_PC(3) && display == 3 && program == SHOWN_PC(3));
+    CHECK(stomp_state == 0 && leds[2] == 0);
+    clear_log();
+    tap(sw_code(9));
+    CHECK(midi_len == 2 && midi_log[1] == SHOWN_PC(9) && display == 9);
+
+    // Switch 10: "--", nothing sent; 1, 2 show 1, 12 (not complete); 3 makes 123, sent.
+    clear_log();
+    tap(sw_code(10));
+    CHECK(pc_typing && display == SHOWN_TEXT(HAL_TEXT_DASHES) && midi_len == 0);
+    pc_digits("12");
+    CHECK(pc_typing && display == 12 && midi_len == 0 && program == SHOWN_PC(9));
+    pc_digits("3");
+    CHECK(!pc_typing && midi_len == 2 && midi_log[1] == SHOWN_PC(123) && display == 123 && program == SHOWN_PC(123));
+    // 5, 6: 56 is complete (no third digit fits), sent at once.
+    clear_log();
+    pc_digits("056");
+    CHECK(!pc_typing && midi_len == 2 && midi_log[1] == SHOWN_PC(56) && display == 56);
+    // 1 then UP (ENTER): 1.
+    clear_log();
+    pc_digits("01");
+    CHECK(pc_typing && midi_len == 0 && display == 1);
+    tap(CTL_KEY_UP);
+    CHECK(!pc_typing && midi_len == 2 && midi_log[1] == SHOWN_PC(1) && display == 1);
+    // 4 then DOWN (ESCAPE): nothing sent, back to the current program.
+    clear_log();
+    pc_digits("04");
+    tap(CTL_KEY_DOWN);
+    CHECK(!pc_typing && midi_len == 0 && display == 1 && program == SHOWN_PC(1));
+    // UP with no digit typed: nothing sent, back to the current program.
+    tap(sw_code(10));
+    tap(CTL_KEY_UP);
+    CHECK(!pc_typing && midi_len == 0 && display == 1);
+#if DISPLAY_PROGRAM_OFFSET == 0
+    // 0, 0 then UP: program 0. 1, 2, 8: 128 is too big, so 8 starts a new number.
+    pc_digits("000");
+    CHECK(pc_typing && display == 0 && midi_len == 0);
+    tap(CTL_KEY_UP);
+    CHECK(midi_len == 2 && midi_log[1] == 0 && display == 0);
+    clear_log();
+    pc_digits("0128");
+    CHECK(pc_typing && display == 8 && midi_len == 0);
+    tap(CTL_KEY_UP);
+    CHECK(midi_len == 2 && midi_log[1] == 8);
+    // 13 is complete.
+    clear_log();
+    pc_digits("013");
+    CHECK(!pc_typing && midi_len == 2 && midi_log[1] == 13);
+#endif
+
+    // While typing UP does not step or repeat; it acts on release.
+    clear_log();
+    pc_digits("07");
+    ctl_key_press(CTL_KEY_UP);
+    ticks(REPEAT_DELAY_TICKS + 4 * REPEAT_PERIOD_TICKS);
+    CHECK(pc_typing && display == 7 && midi_len == 0);
+    ctl_key_release(CTL_KEY_UP);
+    CHECK(!pc_typing && midi_len == 2 && midi_log[1] == SHOWN_PC(7));
+
+    // UP / DOWN step the program as before, from the one chosen.
+    clear_log();
+    tap(CTL_KEY_UP);
+    CHECK(midi_len == 2 && midi_log[1] == SHOWN_PC(8) && display == 8);
+
+    // No room in MIDI OUT: the program goes when there is.
+    clear_log();
+    midi_space = 1;
+    tap(sw_code(2));
+    CHECK(midi_len == 0 && display == 2 && program == SHOWN_PC(2));
+    midi_space = 15;
+    ticks(1);
+    CHECK(midi_len == 2 && midi_log[1] == SHOWN_PC(2));
+
+    // A short UP + DOWN while typing drops the number and goes back to bank mode, where
+    // the footswitches are stomps again; nothing is sent for either.
+    clear_log();
+    pc_digits("01");
+    chord_short();
+    CHECK(!pc_mode && !pc_typing && display == 1 && aux[HAL_LED_DIRECT_SELECT] == 0 && midi_len == 0);
+    tap(0);
+    CHECK(midi_len == 3 && cc_number(0) == stomp_cc[0] && leds[0] == 1);
+
+    // Config mode drops a number being typed; leaving it keeps program mode.
+    chord_short();
+    pc_digits("05");
+    chord_long();
+    CHECK(mode == MODE_CONFIG && !pc_typing);
+    cancel_exit();
+    CHECK(mode == MODE_RUN && pc_mode && aux[HAL_LED_DIRECT_SELECT] == 1 && display == SHOWN_PC(2) + DISPLAY_PROGRAM_OFFSET);
+
+    // Power-on is bank mode.
+    ctl_init();
+    boot_end();
+    CHECK(!pc_mode && !pc_typing && aux[HAL_LED_DIRECT_SELECT] == 0 && display == 1);
+}
+
+// Page 7: each bank's program change, sent when the bank is chosen in bank mode (user's
+// request). Footswitches type it, a pedal sets it, a short UP + DOWN turns it off ("--").
+// Saved in the top nibbles of the bank's first two footswitch records.
+static void test_bank_pc(void)
+{
+    int k, n;
+
+    printf("footswitch banks: program change per bank\n");
+    reset_world();
+    stomp_banks(3);
+    ctl_init();
+    boot_end();
+    CHECK(bank_pc == 0 && midi_len == 0);
+
+    // Page 7 (UP from page 6): DIRECT SELECT lit, "--", footswitch LEDs dark.
+    chord_long();
+    for (k = 0; k < 6; k++)
+    {
+        tap(CTL_KEY_UP);
+    }
+    CHECK(mode == MODE_CONFIG && cfg_page == PAGE_BANK_PC && aux[HAL_LED_DIRECT_SELECT] == 1 &&
+          aux[HAL_LED_MIDI_FUNC] == 0 && aux[HAL_LED_EXP_1] == 0 && lamp == HAL_LAMP_NORMAL &&
+          display == SHOWN_TEXT(HAL_TEXT_DASHES) && stomp_state == 0);
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_VERSION);
+    tap(CTL_KEY_DOWN);
+    CHECK(cfg_page == PAGE_BANK_PC && lamp == HAL_LAMP_NORMAL);
+
+    // Digits as in the editor: 1, 2, 3 make 123; 10 then starts a new number (0), and 5
+    // follows it (5).
+    clear_log();
+    tap(sw_code(1));
+    CHECK(bank_pc == 2 && display == 1 && cfg_changed == 1);
+    tap(sw_code(2));
+    tap(sw_code(3));
+    CHECK(bank_pc == 124 && display == 123);
+    tap(sw_code(10));
+    CHECK(bank_pc == 1 && display == 0);
+    tap(sw_code(5));
+    CHECK(bank_pc == 6 && display == 5 && midi_len == 0);
+
+    // A short UP + DOWN: none.
+    chord_short();
+    CHECK(bank_pc == 0 && display == SHOWN_TEXT(HAL_TEXT_DASHES) && mode == MODE_CONFIG && cfg_page == PAGE_BANK_PC);
+
+    // A pedal, once moved, sets its CC value; the next digit starts a new number.
+    pedal(0, 0);
+    pedal(0, 128);
+    CHECK(sent[0] > 50 && sent[0] < 80 && bank_pc == sent[0] + 1 && display == sent[0]);
+    tap(sw_code(4));
+    CHECK(bank_pc == 5 && display == 4);
+
+    // To page 8 and back again: still 4. Then save: bank 1's first record holds the low
+    // nibble of 5 (program 4 + 1), the second the high nibble, the rest nothing.
+    tap(CTL_KEY_UP);
+    tap(CTL_KEY_DOWN);
+    CHECK(cfg_page == PAGE_BANK_PC && display == 4 && lamp == HAL_LAMP_NORMAL && dots == 0);
+    long_press(CTL_KEY_UP);
+    CHECK(mode == MODE_RUN && midi_len == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
+    CHECK((saved_msg[0][0] >> 4) == 5 && (saved_msg[1][0] & 0xF0) == 0 && (saved_msg[2][0] & 0xF0) == 0);
+    CHECK((saved_msg[0][0] & 0x0F) == (uint8_t)(MT_CC | (PM_STOMP << 2)));
+    keep_saved_msgs();
+
+    // Bank 2: program 100 (101 = 0x65); bank 3: none. Power-on (bank 1) sends nothing.
+    stored_msg[HAL_REC_SW1][0]     |= 0x50;
+    stored_msg[HAL_REC_SW1 + 1][0] |= 0x60;
+    ctl_init();
+    boot_end();
+    CHECK(bank_pc == 5 && midi_len == 0 && program == 0);
+
+    // Config mode with nothing changed: no flash (the saved nibbles match).
+    chord_long();
+    CHECK(mode == MODE_CONFIG && cfg_changed == 0);
+    long_press(CTL_KEY_DOWN);
+    CHECK(mode == MODE_RUN && bank_pc == 5);
+
+    // Bank mode (the default): UP to bank 2 sends program 100, which becomes the program;
+    // the display keeps showing the bank. UP to bank 3 sends nothing.
+    clear_log();
+    tap(CTL_KEY_UP);
+    ticks(1);
+    CHECK(hal_bank == 1 && bank_pc == 101 && midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 100);
+    CHECK(program == 100 && display == 2);
+    clear_log();
+    tap(CTL_KEY_UP);
+    ticks(1);
+    CHECK(hal_bank == 2 && bank_pc == 0 && midi_len == 0 && program == 100 && display == 3);
+
+    // Back down to bank 1 one step at a time: bank 2's program, then bank 1's (4).
+    tap(CTL_KEY_DOWN);
+    ticks(1);
+    tap(CTL_KEY_DOWN);
+    ticks(1);
+    CHECK(hal_bank == 0 && midi_len == 4 && midi_log[1] == 100 && midi_log[2] == PROG_CHG && midi_log[3] == 4);
+
+    // In program mode the display shows that program; UP steps on from it.
+    chord_short();
+    CHECK(pc_mode && program == 4 && display == 4 + DISPLAY_PROGRAM_OFFSET);
+    clear_log();
+    tap(CTL_KEY_UP);
+    CHECK(midi_len == 2 && midi_log[1] == 5);
+
+    // A bank chosen over MIDI (NRPN bank parameter) sends its program change too.
+    clear_log();
+    ctl_midi_in((uint8_t)(0xB0 | (MIDI_CHANNEL - 1)));
+    ctl_midi_in(99);
+    ctl_midi_in(NRPN_MSB);
+    ctl_midi_in(98);
+    ctl_midi_in(NP_BANK);
+    ctl_midi_in(6);
+    ctl_midi_in(2);
+    ticks(1);
+    CHECK(hal_bank == 1 && midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 100);
+
+    // Over MIDI (parameters 92 and 93, the bank in use): the dump has program 100, on.
+    clear_log();
+    dump_run(1000);
+    CHECK(parse_dump(0) > 0 && dump_values[NP_BANK_PC] == 100 && dump_values[NP_BANK_PC_ON] == 1);
+    // Off: none, and the program then reads 127; an unchanged off does nothing.
+    nrpn(NP_BANK_PC_ON, 0);
+    CHECK(bank_pc == 0 && nrpn_get(NP_BANK_PC) == 127 && nrpn_get(NP_BANK_PC_ON) == 0);
+    nrpn(NP_BANK_PC_ON, 0);
+    CHECK(bank_pc == 0);
+    // On again: the program it reads, 127. Values over 1 are ignored.
+    nrpn(NP_BANK_PC_ON, 1);
+    CHECK(bank_pc == 128 && nrpn_get(NP_BANK_PC) == 127);
+    nrpn(NP_BANK_PC_ON, 0);
+    nrpn(NP_BANK_PC_ON, 2);
+    CHECK(bank_pc == 0);
+    // Setting the program turns it on, even to the 127 it reads while off.
+    nrpn(NP_BANK_PC, 127);
+    CHECK(bank_pc == 128);
+    nrpn(NP_BANK_PC, 7);
+    CHECK(bank_pc == 8 && nrpn_get(NP_BANK_PC) == 7 && nrpn_get(NP_BANK_PC_ON) == 1);
+    // A dump fed back in changes nothing, whether on or off.
+    clear_log();
+    dump_run(1000);
+    k = midi_len;
+    bank_pc = 0;
+    for (n = 0; n < k; n++)
+    {
+        ctl_midi_in(midi_log[n]);
+    }
+    CHECK(bank_pc == 8);
+    nrpn(NP_BANK_PC_ON, 0);
+    clear_log();
+    dump_run(1000);
+    k = midi_len;
+    bank_pc = 50;
+    for (n = 0; n < k; n++)
+    {
+        ctl_midi_in(midi_log[n]);
+    }
+    CHECK(bank_pc == 0);
+    // Nothing is sent for a set, and the save command stores it with the bank.
+    clear_log();
+    nrpn(NP_BANK_PC, 33);
+    nrpn(NP_COMMAND, NC_SAVE);
+    CHECK(midi_len == 0 && hal_bank == 1 && (saved_msg[HAL_REC_SW1][0] >> 4) == (34 & 0x0F) &&
+          (saved_msg[HAL_REC_SW1 + 1][0] & 0xF0) == (34 & 0xF0));
+}
+
 static void test_banks(void)
 {
     const uint8_t cc[10] = { STOMP_CC_LIST };
@@ -3628,12 +3964,11 @@ static void test_banks(void)
     boot_end();
     CHECK(hal_bank == 0 && bank_next == 0 && msg_type(0) == MT_CC && MSG_NUM(0) == cc[0] && pedal_mode_get(0) == PM_STOMP);
 
-    // Switch 3 on, then into bank mode: the display shows bank 1, nothing is sent.
+    // Bank mode is the default (DIRECT SELECT dark): the display shows bank 1. Switch 3 on.
+    CHECK(!pc_mode && aux[HAL_LED_DIRECT_SELECT] == 0 && display == 1);
     tap(sw_code(3));
     CHECK(leds[2] == 1);
     clear_log();
-    chord_short();
-    CHECK(bank_mode && aux[HAL_LED_DIRECT_SELECT] == 1 && display == 1 && midi_len == 0);
 
     // UP: bank 2 on the display, nothing sent. Bank 2's switch 3 has the same CC as bank
     // 1's (the default), so it stays on; switch 1 is an inverted momentary note no switch
@@ -3660,22 +3995,23 @@ static void test_banks(void)
     tap(sw_code(3));
     CHECK(leds[2] == 1);
 
-    // Out of bank mode: the display shows the program again and UP sends a program change;
-    // bank 2 stays.
+    // Program mode (DIRECT SELECT lit): the display shows the program and UP sends a
+    // program change; bank 2 stays.
     clear_log();
     chord_short();
-    CHECK(!bank_mode && aux[HAL_LED_DIRECT_SELECT] == 0 && display == 0 && hal_bank == 1 && midi_len == 0);
+    CHECK(pc_mode && aux[HAL_LED_DIRECT_SELECT] == 1 && display == DISPLAY_PROGRAM_OFFSET && hal_bank == 1 && midi_len == 0);
     tap(CTL_KEY_UP);
-    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 1 && display == 1 && hal_bank == 1);
+    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 1 && display == 1 + DISPLAY_PROGRAM_OFFSET && hal_bank == 1);
+
+    // Back to bank mode: the bank (2) is shown, not the program; the footswitches are
+    // bank 2's stomps again. DOWN to bank 1, sending nothing. Switch 3's CC is still on;
+    // switch 1 is a CC no switch of bank 2 has, off.
     clear_log();
+    chord_short();
+    CHECK(!pc_mode && aux[HAL_LED_DIRECT_SELECT] == 0 && display == 2 && program == 1);
     tap(sw_code(2));
     CHECK(midi_len == 3 && cc_number(0) == 70 && cc_value(0) == 10 && leds[1] == 0);
-
-    // Back into bank mode: the bank (2) is shown, not the program; DOWN to bank 1, sending
-    // nothing. Switch 3's CC is still on; switch 1 is a CC no switch of bank 2 has, off.
     clear_log();
-    chord_short();
-    CHECK(bank_mode && display == 2 && program == 1);
     tap(CTL_KEY_DOWN);
     ticks(3);
     CHECK(hal_bank == 0 && display == 1 && midi_len == 0 && leds[0] == 0 && leds[2] == 1 && stomp_state == 0x004);
@@ -3734,7 +4070,6 @@ static void test_banks(void)
     store_bank_mode(0, 0, PM_STOMP_MOM);
     store_bank_msg(1, 0, MT_CC, 71, 127, 0, PM_STOMP);
     tap(sw_code(5));
-    chord_short();
     ctl_key_press(sw_code(1));
     ctl_key_hold(sw_code(1));
     clear_log();
@@ -3775,7 +4110,6 @@ static void test_banks(void)
         set_mode((uint8_t)i, PM_STOMP);
     }
     CHECK(msg_type(0) == MT_PROG && pedal_mode_get(1) == PM_MOMENTARY);
-    chord_short();
     clear_log();
     tap(sw_code(1));
     CHECK(midi_len == 2 && midi_log[1] == 5 && program == 5 && display == 1 && leds[0] == 1);
@@ -3789,14 +4123,13 @@ static void test_banks(void)
     ticks(2);
     CHECK(midi_len == 0 && leds[1] == 1);
     chord_short();
-    CHECK(display == 5);
+    CHECK(display == 5 + DISPLAY_PROGRAM_OFFSET);
 
     // Configuration mode edits the current bank: a save writes bank 2's records (with the
     // modes) and leaves bank 1's alone; the CONFIG LED compares with bank 2.
     reset_world();
     stomp_banks(2);
     store_bank_msg(1, 3, MT_CC, 44, 127, 0, PM_MOMENTARY);
-    chord_short();
     tap(CTL_KEY_UP);
     ticks(3);
     CHECK(hal_bank == 1 && pedal_mode_get(3) == PM_MOMENTARY);
@@ -3806,7 +4139,7 @@ static void test_banks(void)
     tap(sw_code(4));
     CHECK(pedal_mode_get(3) == PM_MOM_INV && status_led == 0);
     save_exit();
-    CHECK(mode == MODE_RUN && hal_bank == 1 && display == 2 && aux[HAL_LED_DIRECT_SELECT] == 1);
+    CHECK(mode == MODE_RUN && hal_bank == 1 && display == 2 && aux[HAL_LED_DIRECT_SELECT] == 0);
     CHECK(msg_was_saved[HAL_REC_SW1 + 3] && saved_msg[HAL_REC_SW1 + 3][0] == (MT_CC | (PM_MOM_INV << 2)) &&
           saved_msg[HAL_REC_SW1 + 3][1] == 44);
     for (i = 0; i < STOMP_COUNT; i++)
@@ -3837,7 +4170,7 @@ static void test_banks(void)
     clear_log();
     nrpn(NP_BANK, 3);
     nrpn(NP_COMMAND, NC_DUMP);
-    CHECK(bank_busy && display == 0);
+    CHECK(bank_busy && display == 3);
     ticks(1);
     // Switch 1 was on (a CC); bank 3's switch 1 is a note, so it is off. Nothing is sent
     // but the dump, which starts once the change is done.
@@ -3945,7 +4278,6 @@ static void test_cc_memory(void)
     // Switch 1 (CC 26) on lights switch 6 too (also CC 26 in bank 1).
     tap(sw_code(1));
     CHECK(leds[0] == 1 && leds[5] == 1);
-    chord_short();
     clear_log();
     tap(CTL_KEY_UP);
     ticks(2);
@@ -4022,6 +4354,8 @@ int main(void)
     test_config_editor();
     test_midi_config();
     test_banks();
+    test_bank_pc();
+    test_pc_mode();
     test_shared_state();
     test_cc_memory();
     test_scaling();

@@ -70,15 +70,17 @@ void    hal_display(uint8_t value);
 #define HAL_TEXT_ER  0
 #define HAL_TEXT_LO  1
 #define HAL_TEXT_HI  2
-// "riban" scrolling across the two digits, one frame each: " r", "ri", "ib", "bA",
-// "An", "n " (HAL_TEXT_SCROLL + 0..HAL_TEXT_SCROLL_FRAMES - 1).
+// "riban" scrolling across the two digits, one frame each: " r", "ri", "ib", "ba",
+// "an", "n " (HAL_TEXT_SCROLL + 0..HAL_TEXT_SCROLL_FRAMES - 1).
 #define HAL_TEXT_SCROLL         3
 #define HAL_TEXT_SCROLL_FRAMES  6
 // Footswitch message types: "CC", "nt" (note), "Pr" (program change), in that order.
 #define HAL_TEXT_CC             (HAL_TEXT_SCROLL + HAL_TEXT_SCROLL_FRAMES)
 #define HAL_TEXT_NOTE           (HAL_TEXT_CC + 1)
 #define HAL_TEXT_PROG           (HAL_TEXT_CC + 2)
-#define HAL_TEXT_COUNT          (HAL_TEXT_CC + 3)
+// "--": no value (page 7, a bank with no program change).
+#define HAL_TEXT_DASHES         (HAL_TEXT_CC + 3)
+#define HAL_TEXT_COUNT          (HAL_TEXT_CC + 4)
 
 void    hal_display_text(uint8_t text);
 

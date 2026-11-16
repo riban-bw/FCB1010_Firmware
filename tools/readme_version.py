@@ -1,5 +1,5 @@
 # Build hook: put the firmware version that was just linked into the documentation's
-# "7. Lamp test and version" table row. Usage:
+# "8. Lamp test and version" table row. Usage:
 #   readme_version.py <version.h> <version_build.inc> <docs/configuration.md>
 # In that row it rewrites the three display examples: major with a trailing dot (`MM.`),
 # minor with dots both sides (`.mm.`) and build with a leading dot (`.bb`), in hex as
@@ -25,10 +25,10 @@ minor = number(version_h, "FW_VERSION_MINOR")
 build = number(build_inc, "FW_VERSION_BUILD")
 
 text = open(readme).read()
-row = re.search(r"^\| *7\. Lamp test and version *\|.*$", text, re.M)
+row = re.search(r"^\| *8\. Lamp test and version *\|.*$", text, re.M)
 
 if not row:
-    print("note: %s has no '| 7. Lamp test and version |' table row; version not recorded" % readme)
+    print("note: %s has no '| 8. Lamp test and version |' table row; version not recorded" % readme)
     sys.exit(0)
 
 line = row.group(0)

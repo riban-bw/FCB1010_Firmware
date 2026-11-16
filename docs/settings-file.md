@@ -2,7 +2,7 @@
 
 [Back to the README](../README.md)
 
-**Save to file** in the "Configure over MIDI" panel of the [emulator page](https://riban-bw.github.io/FCB1010_Firmware/emulator/) writes the pedal's settings to `fcb1010-settings.json`, and **Load from file** sends a file's settings to the pedal (see [Configuring from a computer](configuration.md#configuring-from-a-computer)). The file is plain JSON, so it can be written or edited by hand or by another program.
+**Save to file** in the "Configure over MIDI" panel of the [emulator page](https://riban-bw.github.io/FCB1010_Firmware/emulator/) writes the pedal's settings to a file. Type the file name in the **File** box (default `fcb1010-settings.json`; `.json` is added if the name has no extension). In Chrome, Edge and Opera a save dialog opens, starting with that name, so you can choose the folder and change the name there. Other browsers (Firefox, Safari) download the file under that name, into the downloads folder, or ask where if the browser is set to ask where to save downloads. **Load from file** opens the browser's file chooser and **Load from file** sends a file's settings to the pedal (see [Configuring from a computer](configuration.md#configuring-from-a-computer)). The file is plain JSON, so it can be written or edited by hand or by another program.
 
 A file holds the shared settings and the footswitches of one bank: the bank that was in use when it was saved. Loading it fills the bank in use now, so the same file can set up any bank. The pedal calibration is not in the file, since it belongs to one pedal and cannot be set over MIDI.
 
@@ -25,6 +25,7 @@ The settings out of the box (footswitches 3 to 9 left out here; a real file alwa
     { "follows": [], "followsUpDown": false, "pedalA": 0, "pedalB": 0 },
     { "follows": [], "followsUpDown": false, "pedalA": 0, "pedalB": 0 }
   ],
+  "bankProgram": null,
   "firmware": "00.02.01"
 }
 ```
@@ -38,6 +39,7 @@ The settings out of the box (footswitches 3 to 9 left out here; a real file alwa
 | `channel` | The pedal's MIDI channel, 1 to 16 |
 | `footswitches` | Exactly 10 entries, footswitch 1 first (see below) |
 | `relays` | Exactly 2 entries, SWITCH 1 then SWITCH 2 (see below) |
+| `bankProgram` | The program change (0 to 127) the bank sends when it is chosen with UP / DOWN (configuration page 7), or `null` for none. Optional: a file without it leaves the bank's setting as it is (files saved before it existed, or from firmware without it) |
 | `firmware` | The firmware version the settings were read from, as major.minor.build in hex (`"00.02.01"`). Only written when the settings came from a Read of the pedal; ignored when loading |
 
 Each footswitch:
@@ -55,7 +57,7 @@ Each relay:
 | Field | Value |
 |---|---|
 | `follows` | The footswitches (1 to 10) the relay follows, in any order, for example `[1, 4]`; `[]` for none |
-| `followsUpDown` | `true` if the relay follows bank select (DIRECT SELECT) |
+| `followsUpDown` | `true` if the relay follows program mode (DIRECT SELECT lit) |
 | `pedalA`, `pedalB` | The pedal's trigger value, 1 to 127 (the relay closes from that value up), or 0 for not followed |
 
 Numbers must be whole numbers. Other fields are ignored.

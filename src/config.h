@@ -36,15 +36,23 @@
 // Real-time bytes (clock, active sensing...) do not light it.
 #define MIDI_RX_FLASH_MS          60
 
-// Power-on and configuration page 7: every LED lights (once, and stays lit) while
-// ". ribAn ." scrolls across the display, one frame per SCROLL_FRAME_MS (ten frames, so
+// Power-on and configuration page 8: every LED lights (once, and stays lit) while
+// ". riban ." scrolls across the display, one frame per SCROLL_FRAME_MS (ten frames, so
 // power-on takes 10 x SCROLL_FRAME_MS, the start-up settling included). Power-on then
-// goes to run mode. Page 7 then shows the firmware version, each part (major, minor,
+// goes to run mode. Page 8 then shows the firmware version, each part (major, minor,
 // build) for VERSION_SHOW_MS, then a blank display for the same time, and repeats.
-// Both are multiples of 100; 10 x SCROLL_FRAME_MS + 4 x VERSION_SHOW_MS must be at most
-// 25500, and SCROLL_FRAME_MS more than the start-up settling (STARTUP_TICKS x 2ms).
-#define SCROLL_FRAME_MS           300
+// Both are multiples of 50, SCROLL_FRAME_MS at least 100, and 10 x SCROLL_FRAME_MS +
+// 4 x VERSION_SHOW_MS at most 12750. Smaller SCROLL_FRAME_MS scrolls faster (200:
+// power-on in 2 seconds).
+#ifndef SCROLL_FRAME_MS
+#define SCROLL_FRAME_MS           200
+#endif
 #define VERSION_SHOW_MS           1000
+// At power-on every LED lights for BOOT_LAMP_MS (from power-on, a multiple of 50), then
+// shows its normal state while the scroll finishes. Page 8 keeps them lit throughout.
+#ifndef BOOT_LAMP_MS
+#define BOOT_LAMP_MS              1000
+#endif
 
 // Number of footswitches acting as stomp switches (switches 1..10).
 #define STOMP_COUNT 10

@@ -249,7 +249,10 @@ void emu_tick(void)
 
     if (startup_left)
     {
-        // Start-up: Pedals are averaged but nothing else runs, and key events are discarded.
+        // Start-up: Pedals are averaged and the power-on scroll moves, but nothing else
+        // runs, and key events are discarded.
+        ctl_settle_tick();
+
         if (poll_pedals(&a, &b))
         {
             ctl_pedal_sample(0, a);

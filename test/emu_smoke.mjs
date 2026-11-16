@@ -25,10 +25,13 @@ function fakeElement() {
   };
 }
 const elements = {};
+let lastBlob = null, lastDownload = null;
 const store = {};
 const sandbox = {
   document: {
     getElementById: (id) => (elements[id] ||= fakeElement()),
+    createElement: () => Object.assign(fakeElement(), { click() { lastDownload = this.download; }, remove() {} }),
+    body: { appendChild() {} },
     querySelectorAll: () => [],
     addEventListener() {}
   },
@@ -38,7 +41,12 @@ const sandbox = {
     removeItem: (k) => { delete store[k]; }
   },
   performance: { now: () => 0 },
+  // Save to file: the download path (an <a download> clicked) and, when a test sets it,
+  // window.showSaveFilePicker.
+  Blob: class { constructor(parts) { this.text = parts.join(""); } },
+  URL: { createObjectURL: (b) => { lastBlob = b; return "blob:1"; }, revokeObjectURL() {} },
   setInterval: () => 0,
+  setTimeout: () => 0,
   atob: (s) => Buffer.from(s, "base64").toString("binary"),
   WebAssembly, Promise, console
 };
@@ -71,7 +79,7 @@ const cc = (ch, sw, v) => "b" + ch + " " + hex(STOMP_CC[sw]) + " " + hex(v);
 function chordTap() { fcb.down(UP); fcb.down(DOWN); wait(100); fcb.up(UP); fcb.up(DOWN); wait(200); }
 // MIDI CHANNEL, MIDI FUNCTION, EXP 1, EXP 2.
 const pageLeds = () => [fcb.hw.aux[0], fcb.hw.aux[1], fcb.hw.aux[2], fcb.hw.aux[3]];
-const TEXT_ER = 1, TEXT_LO = 2, TEXT_HI = 3;   // hw.text is HAL_TEXT_* + 1
+const TEXT_ER = 1, TEXT_LO = 2, TEXT_HI = 3, TEXT_DASHES = 13;   // hw.text is HAL_TEXT_* + 1
 
 await fcb.ready;
 
@@ -80,18 +88,19 @@ console.log("emulator: power-on and idle");
 // then run mode with program 0.
 // Times from config.h; the scan starts after STARTUP_TICKS of settling.
 const cfgMs = (k) => Number(cfgText.match(new RegExp("#define " + k + "\\s+(\\d+)"))[1]);
-const BOOT_SHOW = cfgMs("VERSION_SHOW_MS"), BOOT_SETTLE = cfgMs("STARTUP_TICKS") * cfgMs("TICK_MS");
+const BOOT_LAMP = cfgMs("BOOT_LAMP_MS"), BOOT_SHOW = cfgMs("VERSION_SHOW_MS"), BOOT_SETTLE = cfgMs("STARTUP_TICKS") * cfgMs("TICK_MS");
 // One scroll frame; power-on is ten of them, the start-up settling included.
 const FRAME = cfgMs("SCROLL_FRAME_MS");
 // The "riban" frames as hw.text values (HAL_TEXT_SCROLL + 1 onwards), the dot of each as
-// the strip ". ribAn ." scrolls across the three dots (hw.dots; bit 2 is after the "1"),
-// and what the page draws for each, its dot included: " r" = 2 segments + dot, "ri" 3,
-// "ib" 6, "bA" 11, "An" 9, "n " 3 + dot. Before " r" a lead-in (blank, the dot far right
+// the strip ". riban ." scrolls across the three dots (hw.dots; bit 2 is after the "1"),
+// and what the page draws for each, its dot included (full-height letters: the scroll's
+// r 4 segments, i 2, b 5, a 6, n 5): " r" = 4 + dot, "ri" 6, "ib" 7, "ba" 11, "an" 11,
+// "n " 5 + dot. Before " r" a lead-in (blank, the dot far right
 // then between the digits, a frame each), after "n " the dot running off (blank, between
 // the digits, then after the "1").
-const SCROLL = [" r", "ri", "ib", "bA", "An", "n "], SCROLL_TEXT = SCROLL.map((w, i) => 4 + i);
+const SCROLL = [" r", "ri", "ib", "ba", "an", "n "], SCROLL_TEXT = SCROLL.map((w, i) => 4 + i);
 const SCROLL_DOTS = [4, 0, 0, 0, 0, 1];
-const SCROLL_SEGS = [3, 3, 6, 11, 9, 4];
+const SCROLL_SEGS = [5, 6, 7, 11, 11, 6];
 const litSegs = () => (sandbox.document.getElementById("display").innerHTML.match(/var\(--seg-on\)/g) || []).length;
 // Sampled every 8 ms (wait() runs in 8 ms steps) until it ends: frames in order, LEDs lit.
 const bootFrames = [], bootLamps = new Set(), bootSegs = new Set(), bootDots = [], bootSeq = [];
@@ -102,18 +111,21 @@ for (let t = 0; t < FRAME * 10 - 48; t += 8) {
   wait(8);
   if (bootSeq[bootSeq.length - 1] !== dispKey()) bootSeq.push(dispKey());
   if (fcb.hw.text && bootFrames[bootFrames.length - 1] !== fcb.hw.text) bootDots.push(fcb.hw.dots);
-  if (fcb.hw.text) bootLamps.add(fcb.hw.lamp);
+  // Every LED lit for BOOT_LAMP_MS from power-on, then the normal LEDs (8ms either side).
+  if (t + 8 < BOOT_LAMP - 8) bootLamps.add("lit:" + fcb.hw.lamp);
+  if (t + 8 > BOOT_LAMP + 8) bootLamps.add("after:" + fcb.hw.lamp);
   if (fcb.hw.text && bootFrames[bootFrames.length - 1] !== fcb.hw.text) bootFrames.push(fcb.hw.text);
   if (fcb.hw.text) bootSegs.add(fcb.hw.text + ":" + litSegs());
 }
 check("at power-on \"riban\" scrolls: " + SCROLL.map((w) => '"' + w + '"').join(", "), bootFrames, SCROLL_TEXT);
 check("drawn with the right segments", [...bootSegs], SCROLL_TEXT.map((t, i) => t + ":" + SCROLL_SEGS[i]));
-check("each text frame's dot, as \". ribAn .\" scrolls across the three dots", bootDots, SCROLL_DOTS);
+check("each text frame's dot, as \". riban .\" scrolls across the three dots", bootDots, SCROLL_DOTS);
 check("the whole sequence (text:dots): lead-in dot, the text, the trailing dot running off", bootSeq,
       ["0:1", "0:2"].concat(SCROLL_TEXT.map((t, i) => t + ":" + SCROLL_DOTS[i]), ["0:2", "0:4"]));
-check("every LED lit throughout (no blinking), no version shown", [[...bootLamps], fcb.hw.hex], [[3], -1]);
+check("every LED lit for BOOT_LAMP_MS, then the normal LEDs; no version shown", [[...bootLamps], fcb.hw.hex],
+      [BOOT_LAMP < FRAME * 10 - 40 ? ["lit:3", "after:0"] : ["lit:3"], -1]);
 wait(100);
-check("then run mode: normal LEDs, no dots, program 0", [fcb.hw.lamp, fcb.hw.hex, fcb.hw.text, fcb.hw.dots, fcb.hw.display, fcb.state().mode], [0, -1, 0, 0, 0, 0]);
+check("then run mode: normal LEDs, no dots, bank 1 (bank mode, DIRECT SELECT dark)", [fcb.hw.lamp, fcb.hw.hex, fcb.hw.text, fcb.hw.dots, fcb.hw.display, fcb.state().mode, fcb.hw.aux[4]], [0, -1, 0, 0, 1, 0, 0]);
 wait(BOOT_SHOW * 4);
 check("and it does not repeat", [fcb.hw.lamp, fcb.hw.hex], [0, -1]);
 check("nothing sent while idle", sent(), []);
@@ -135,6 +147,9 @@ check("switch 6 held " + UNDER_MS + " ms (under the hold time)", sent(), MOM ? [
 check("its LED", fcb.hw.leds[5], DEF_MODE === 2 ? 0 : 1);
 
 console.log("emulator: program change");
+chordTap();
+check("UP + DOWN tapped: program mode, DIRECT SELECT lit, the program (0) shown, nothing sent", [fcb.hw.aux[4], fcb.hw.display, sent()], [1, 0, []]);
+check("the hint says program mode", /program mode \(DIRECT SELECT lit\)/.test(sandbox.document.getElementById("hint").textContent), true);
 press(UP, 100);
 check("UP tap sends program 1 on release", sent(), ["c0 01"]);
 fcb.down(UP); wait(1500);
@@ -166,6 +181,26 @@ check("and sends program 0 once on release", WRAP ? [] : sent(), WRAP ? [] : ["c
 if (WRAP) { while (fcb.state().program !== p) { press(UP, 60); } } else { for (let i = 0; i < p; i++) press(UP, 60); }
 wait(100); sent();
 check("back at program " + p, fcb.state().program, p);
+// Footswitches choose programs by number: 1-9 at once; 10 shows "--", then digits.
+// Key codes: 0-4 are footswitches 1-5, 6-10 footswitches 6-10 (5 is DOWN).
+const swKey = (n) => n <= 5 ? n - 1 : n;
+const typeDigits = (d) => { for (const c of String(d)) press(c === "0" ? 10 : swKey(Number(c)), 60); };
+press(2, 60);
+check("footswitch 3 sends program 3 at once, toggling no stomp", [sent(), fcb.hw.display, fcb.hw.leds[2]], [["c0 03"], 3, 0]);
+press(10, 60);
+check("footswitch 10 shows -- and sends nothing", [fcb.hw.text, sent()], [TEXT_DASHES, []]);
+wait(50);
+check("the hint says a number is being typed", /typing a program number/.test(sandbox.document.getElementById("hint").textContent), true);
+typeDigits(56);
+check("5, 6: 56 is complete, sent at once", [sent(), fcb.hw.display], [["c0 38"], 56]);
+press(10, 60); typeDigits(123);
+check("10, 1, 2, 3: 123 is sent", [sent(), fcb.hw.display], [["c0 7b"], 123]);
+press(10, 60); typeDigits(4); press(DOWN, 100);
+check("10, 4, DOWN: cancelled, back to the current program", [sent(), fcb.hw.display, fcb.state().program], [[], 123, 123]);
+press(10, 60); typeDigits(p); press(UP, 100);
+check("10, " + p + ", UP (ENTER): program " + p + " sent", [sent(), fcb.state().program], [["c0 " + hex(p)], p]);
+chordTap();
+check("UP + DOWN again: bank mode, DIRECT SELECT dark, bank 1 shown", [fcb.hw.aux[4], fcb.hw.display, sent()], [0, 1, []]);
 
 console.log("emulator: MIDI IN");
 fcb.midiIn([0xb0, STOMP_CC[1], 127]); wait(20);
@@ -175,14 +210,11 @@ check("and nothing is echoed", sent(), []);
 fcb.midiIn([0xb0, 20, 127]); wait(20);
 check("CC 20 = 127 does not light DIRECT SELECT", [fcb.hw.aux[4], sent()], [0, []]);
 
-console.log("emulator: UP + DOWN tap in run mode");
-chordTap();
-check("lights DIRECT SELECT, sending nothing", [fcb.hw.aux[4], sent()], [1, []]);
-check("without changing the program", fcb.state().program, p);
-check("and the display shows the footswitch bank (1)", [fcb.hw.display, fcb.state().bank], [1, 0]);
+console.log("emulator: footswitch banks (the default, DIRECT SELECT dark)");
+check("the display shows the footswitch bank (1)", [fcb.hw.aux[4], fcb.hw.display, fcb.state().bank], [0, 1, 0]);
 press(UP, 100); wait(50);
 const bankMsgs = sent();
-check("with DIRECT SELECT lit, UP chooses bank 2 instead of sending a program change",
+check("UP chooses bank 2 instead of sending a program change",
       [fcb.hw.display, fcb.state().bank, fcb.state().program, bankMsgs.some((m) => /^c/.test(m))], [2, 1, p, false]);
 check("the footswitches of a bank never saved are the defaults", fcb.state().msgs.map((m) => m.num), STOMP_CC);
 check("switch 2's CC (the same in both banks) stays on, and the change sends nothing",
@@ -190,8 +222,9 @@ check("switch 2's CC (the same in both banks) stays on, and the change sends not
 press(DOWN, 100); wait(50); sent();
 check("DOWN goes back to bank 1", [fcb.hw.display, fcb.state().bank], [1, 0]);
 chordTap();
-check("a second tap turns it off, sending nothing", [fcb.hw.aux[4], sent()], [0, []]);
-check("and DIRECT SELECT goes out, the program back on the display", [fcb.hw.aux[4], fcb.hw.display, fcb.state().bank], [0, p, 0]);
+check("an UP + DOWN tap lights DIRECT SELECT, the program on the display, sending nothing", [fcb.hw.aux[4], fcb.hw.display, fcb.state().program, sent()], [1, p, p, []]);
+chordTap();
+check("a second tap turns it off, the bank back on the display", [fcb.hw.aux[4], fcb.hw.display, fcb.state().bank, sent()], [0, 1, 0, []]);
 
 console.log("emulator: config mode pages, channel entry, save, cancel and reload");
 const longKey = (k) => { fcb.down(k); wait(1300); fcb.up(k); wait(200); };
@@ -254,15 +287,22 @@ fcb.setRaw(255, 255); wait(100); fcb.setRaw(128, 255); wait(100);
 check("moving pedal A sets relay 1's trigger value, shown, EXP 1 lit", [fcb.state().swThr[0] > 0, fcb.hw.display === fcb.state().swThr[0], fcb.hw.aux[2]], [true, true, 1]);
 press(UP, 100);
 check("page 6 lights SWITCH 2", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.leds[3]], [5, 0, 1, 0]);
-// Page 7: every LED lit at once while "riban" scrolls, then the version from version.h,
+press(UP, 100);
+// Page 7: the bank's program change, DIRECT SELECT lit, "--" (none) until set.
+check("UP goes to page 7: DIRECT SELECT lit, \"--\"", [fcb.state().cfgPage, fcb.hw.aux[4], fcb.hw.aux[6], fcb.hw.text, fcb.hw.lamp, fcb.state().bankPc], [6, 1, 0, 13, 0, 0]);
+press(1, 100); press(4, 100);
+check("footswitches 2 and 5 type program 25", [fcb.hw.display, fcb.state().bankPc, sent()], [25, 26, []]);
+chordTap();
+check("a short UP + DOWN: none (\"--\")", [fcb.hw.text, fcb.state().bankPc], [13, 0]);
+// Page 8: every LED lit at once while "riban" scrolls, then the version from version.h,
 // repeating.
 const verText = readFileSync(new URL("../src/version.h", import.meta.url), "utf8");
 // Major and minor from version.h, the build number from version_build.inc.
 const verText2 = verText + readFileSync(new URL("../src/version_build.inc", import.meta.url), "utf8");
 const VER = ["MAJOR", "MINOR", "BUILD"].map((k) => Number(verText2.match(new RegExp("#define FW_VERSION_" + k + " (0x[0-9A-Fa-f]+)"))[1]));
 fcb.down(UP); wait(60); fcb.up(UP); wait(40);
-check("UP goes to page 7: every LED lit at once, the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [6, 4, 0, 7, 1]);
-// Page 7 opened at most 40 ms ago; the lead-in and the text are eight frames.
+check("UP goes to page 8: every LED lit at once, the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [7, 4, 0, 7, 1]);
+// Page 8 opened at most 40 ms ago; the lead-in and the text are eight frames.
 const pageFrames = [];
 for (let t = 0; t < FRAME * 8 - 104; t += 8) { wait(8); if (fcb.hw.text && pageFrames[pageFrames.length - 1] !== fcb.hw.text) pageFrames.push(fcb.hw.text); }
 check("the scroll runs through every frame", pageFrames, SCROLL_TEXT);
@@ -305,10 +345,10 @@ for (let t = 0; t < 14000; t += 8) {
 check("and keeps repeating with every LED lit", [[...pageParts].sort((x, y) => x - y), [...pageLamps]], [[-1, ...new Set(VER)].sort((x, y) => x - y), [4]]);
 check("each step blinks its footswitch LED, 1 to 10 in turn (one at a time)",
   [darkMax, new Set(darkSeq).size, darkSeq.every((v, i) => i === 0 || v === (darkSeq[i - 1] + 1) % 10)], [1, 10, true]);
-// Settings were changed on the earlier pages, so the drawn CONFIG LED flashes on page 7
+// Settings were changed on the earlier pages, so the drawn CONFIG LED flashes on page 8
 // while the other LEDs stay lit.
 const drawnOver = (id, ms) => { const seen = new Set(); for (let t = 0; t < ms; t += 10) { wait(10); seen.add(sandbox.document.getElementById(id).classList.contains("on")); } return [...seen].sort(); };
-check("with unsaved changes the CONFIG LED flashes on page 7", [fcb.hw.lamp, drawnOver("ledCfg", CFG_FLASH_MS * 3)], [4, [false, true]]);
+check("with unsaved changes the CONFIG LED flashes on page 8", [fcb.hw.lamp, drawnOver("ledCfg", CFG_FLASH_MS * 3)], [4, [false, true]]);
 check("while the other LEDs stay lit", drawnOver("ledChan", CFG_FLASH_MS * 3), [true]);
 // Footswitch 8 held: the minor version stays, LED 8 dark; released, it carries on.
 fcb.down(8); wait(60);
@@ -323,11 +363,13 @@ fcb.up(0); wait(FRAME + 100);
 check("then \"ri\"", fcb.hw.text, SCROLL_TEXT[1]);
 check("and nothing is sent", sent(), []);
 press(UP, 100);
-check("UP on page 7 stays on page 7 (no wrap)", fcb.state().cfgPage, 6);
+check("UP on page 8 stays on page 8 (no wrap)", fcb.state().cfgPage, 7);
 press(DOWN, 100);
-check("DOWN leaves page 7: lamp test off, dots off", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.dots], [5, 0, 0]);
+check("DOWN leaves page 8 for page 7: lamp test off, dots off, DIRECT SELECT lit", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.dots, fcb.hw.aux[4]], [6, 0, 0, 1]);
+press(DOWN, 100);
+check("then page 6", fcb.state().cfgPage, 5);
 press(DOWN, 100); press(DOWN, 100); press(DOWN, 100); press(DOWN, 100); press(DOWN, 100);
-check("DOWN six times in all goes back to page 1", fcb.state().cfgPage, 0);
+check("DOWN back to page 1", fcb.state().cfgPage, 0);
 press(DOWN, 100);
 check("DOWN on page 1 stays on page 1 (no wrap)", fcb.state().cfgPage, 0);
 fcb.setRaw(0, 0); wait(100);
@@ -501,6 +543,7 @@ check("in config mode the pedal does not answer", [conf.waiting, fcb.state().mod
 press(DOWN, OVER_MS);
 
 console.log("emulator: settings files (save to file, load from file)");
+const el2 = (id) => sandbox.document.getElementById(id);
 wait(200);
 fcb.confRead(false); wait(400);
 const file = JSON.parse(JSON.stringify(fcb.confToFile()));
@@ -525,6 +568,46 @@ const bad = JSON.parse(JSON.stringify(file)); bad.footswitches[4].on = 200;
 check("a value out of range is refused", fcb.confLoad(bad), false);
 file.channel = oldCh; fcb.confLoad(file); wait(600);
 check("loading a file with only the channel different sends just that", [fcb.state().midiChannel, conf.ch], [oldCh, oldCh]);
+
+// The bank's program change (configuration page 7; NRPN 92 / 93): null for none.
+check("a file holds the bank's program change (none: null)", [file.bankProgram, fcb.state().bankPc], [null, 0]);
+file.bankProgram = 42; fcb.confLoad(file); wait(600);
+check("loading a program sets it, and reading back gives the same file", [fcb.state().bankPc, fcb.confToFile().bankProgram, el2("cfBankPc").value], [43, 42, "42"]);
+file.bankProgram = null; fcb.confLoad(file); wait(600);
+check("null sets none", [fcb.state().bankPc, fcb.confToFile().bankProgram, el2("cfBankPc").value], [0, null, "-1"]);
+const noPc = JSON.parse(JSON.stringify(file)); delete noPc.bankProgram;
+fcb.confChanged(NP.BANK_PC, 9); wait(100);
+check("the panel sets it over MIDI", fcb.state().bankPc, 10);
+fcb.confLoad(noPc); wait(600);
+check("a file without it leaves it as it is", fcb.state().bankPc, 10);
+const badPc = JSON.parse(JSON.stringify(file)); badPc.bankProgram = 200;
+check("a program out of range is refused", fcb.confLoad(badPc), false);
+fcb.confChanged(NP.BANK_PC_ON, 0); wait(100);
+check("and turns it off", fcb.state().bankPc, 0);
+
+// Save to file: the name in the File box (.json added), downloaded where the browser has no save dialog.
+el2("cfFileName").value = "my rig";
+fcb.confDownload();
+check("without a save dialog the file downloads under the File box's name", [lastDownload, JSON.parse(lastBlob.text).format], ["my rig.json", "fcb1010-settings"]);
+el2("cfFileName").value = "a/b:c.json";
+check("characters a file name cannot hold become _", fcb.confFileName(), "a_b_c.json");
+el2("cfFileName").value = "";
+check("an empty name saves as fcb1010-settings.json", fcb.confFileName(), "fcb1010-settings.json");
+// With a save dialog (showSaveFilePicker), it offers that name and writes where the user chose.
+let offered = null, written = null;
+sandbox.showSaveFilePicker = (o) => { offered = o.suggestedName; return Promise.resolve({ name: "chosen.json",
+  createWritable: () => Promise.resolve({ write: (t) => { written = t; return Promise.resolve(); }, close: () => Promise.resolve() }) }); };
+el2("cfFileName").value = "song 1.json"; lastDownload = null;
+fcb.confDownload();
+for (let k = 0; k < 10; k++) await new Promise((r) => setImmediate(r));
+check("with a save dialog it offers the File box's name and saves where chosen, the box taking the chosen name",
+      [offered, JSON.parse(written).format, el2("cfFileName").value, lastDownload], ["song 1.json", "fcb1010-settings", "chosen.json", null]);
+sandbox.showSaveFilePicker = () => Promise.reject(Object.assign(new Error("cancelled"), { name: "AbortError" }));
+fcb.confDownload();
+for (let k = 0; k < 10; k++) await new Promise((r) => setImmediate(r));
+check("cancelling the dialog saves nothing", [lastDownload, el2("confStatus").textContent], [null, "Not saved."]);
+delete sandbox.showSaveFilePicker;
+el2("cfFileName").value = "fcb1010-settings.json";
 
 const el = (id) => sandbox.document.getElementById(id);
 conf.known = false; fcb.confRead(false); wait(400);

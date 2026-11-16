@@ -154,16 +154,22 @@ void hal_display(uint8_t value)
 }
 
 // Segment patterns for the HAL_TEXT_* words, tens then units, same bit order as
-// digit_segments: "Er" = E (A D E F G), r (E G); "Lo" = L (D E F), o (C D E G);
-// "Hi" = H (B C E F G), i (C).
-// Then the "riban" frames: " r", "ri", "ib", "bA", "An", "n " (space = 0x00;
-// b = C D E F G, A = A B C E F G, n = C E G).
+// digit_segments. Every letter is full height
+// r = A E F, i = E F (the left side, so it is not a "1"), n = A B C E F (an arch),
+// o = A B C D E F.
+// "Er" = E (A D E F G), r; "Lo" = L (D E F), o; "Hi" = H (B C E F G), i.
+// Then the "riban" frames: " r", "ri", "ib", "ba", "an", "n " (space = 0x00;
+// b = C D E F G). The scroll has its own r, SCROLL_R (user's design), and its a is
+// SCROLL_A, lowercase or uppercase.
 // Then the footswitch message types: "CC" = C (A D E F) twice; "nt" = n, t (D E F G);
-// "Pr" = P (A B E F G), r.
+// "Pr" = P (A B E F G), r. Then "--" (G twice).
+// Bits: A 0x80, B 0x40, C 0x20, D 0x10, E 0x08, F 0x04, G 0x02 (0x01 is the dot).
+#define SCROLL_R 0xCC   // A B E F: the r with its top-right corner
+#define SCROLL_A 0xFA   // lowercase a, A B C D E G (uppercase A is 0xEE, A B C E F G)
 static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
-    0x9E, 0x0A, 0x1C, 0x3A, 0x6E, 0x20,
-    0x00, 0x0A, 0x0A, 0x20, 0x20, 0x3E, 0x3E, 0xEE, 0xEE, 0x2A, 0x2A, 0x00,
-    0x9C, 0x9C, 0x2A, 0x1E, 0xCE, 0x0A
+    0x9E, 0x8C, 0x1C, 0xFC, 0x6E, 0x0C,
+    0x00, SCROLL_R, SCROLL_R, 0x0C, 0x0C, 0x3E, 0x3E, SCROLL_A, SCROLL_A, 0xEC, 0xEC, 0x00,
+    0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x8C, 0x02, 0x02
 };
 
 // One bit per display position (units first); a set bit turns that position off.

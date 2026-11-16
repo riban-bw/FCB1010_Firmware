@@ -39,8 +39,9 @@
 #define PAGE_TOE        3
 #define PAGE_SW1        4
 #define PAGE_SW2        5
-#define PAGE_VERSION    6
-#define PAGE_COUNT      7
+#define PAGE_BANK_PC    6
+#define PAGE_VERSION    7
+#define PAGE_COUNT      8
 // Pages 5 and 6 (one compare: the subtraction wraps for the pages below).
 #define IS_SW_PAGE(p)   ((uint8_t)((p) - PAGE_SW1) < 2)
 
@@ -95,7 +96,7 @@
 static const CODE uint8_t stomp_cc[STOMP_COUNT] = { STOMP_CC_LIST };
 static const CODE uint8_t pedal_cc[2]           = { PEDAL_CC_LIST };
 static const CODE uint8_t fw_version_dots[3]    = { 0x01, 0x05, 0x04 };
-// The "riban" scroll moves the strip ". ribAn ." (user's design) one place left per frame
+// The "riban" scroll moves the strip ". riban ." (user's design) one place left per frame
 // across the display's three dots, left to right "+1.8.8.": bit 2 after the "1", bit 1
 // between the digits, bit 0 after the units. The leading dot comes in alone (two lead-in
 // frames, far right then between the digits), so " r" has it after the "1", and it is
@@ -141,14 +142,14 @@ static const CODE uint8_t scroll_dots[HAL_TEXT_SCROLL_FRAMES] = { 0x04, 0x00, 0x
 #error CONFIG_CHANGED_FLASH_MS is out of range
 #endif
 
-// Page 7 runs in 100 ms steps, in ten segments, one per footswitch (user's design), each
+// Page 8 runs in 50ms steps, in ten segments, one per footswitch (user's design), each
 // shown from its start by a footswitch press:
-//   0-4  the scroll frames " r", "ri", "ib", "bA", "An" (VER_SCROLL_STEPS each)
+//   0-4  the scroll frames " r", "ri", "ib", "ba", "an" (VER_SCROLL_STEPS each)
 //   5    "n ", then the trailing dot running off (VER_TAIL_FRAMES more frames)
 //   6-8  major, minor, build (VER_ITEM_STEPS each)
 //   9    a blank (VER_ITEM_STEPS), then the lead-in (VER_LEAD_FRAMES frames)
 // then the scroll again. Every LED is lit throughout.
-#define VER_STEP_MS          100
+#define VER_STEP_MS          50
 #define VER_STEP_TICKS       (VER_STEP_MS / TICK_MS)
 #define VER_ITEM_STEPS       (VERSION_SHOW_MS / VER_STEP_MS)
 #define VER_SCROLL_STEPS     (SCROLL_FRAME_MS / VER_STEP_MS)
@@ -159,22 +160,29 @@ static const CODE uint8_t scroll_dots[HAL_TEXT_SCROLL_FRAMES] = { 0x04, 0x00, 0x
 #define VER_SCROLL_END       (VER_LAST_TEXT + (1 + VER_TAIL_FRAMES) * VER_SCROLL_STEPS)
 #define VER_BLANK_START      (VER_SCROLL_END + 3 * VER_ITEM_STEPS)
 #define VER_END_STEP         (VER_BLANK_START + VER_ITEM_STEPS + VER_LEAD_FRAMES * VER_SCROLL_STEPS)
-// Power-on and page 7 start at the lead-in.
+// Power-on and page 8 start at the lead-in.
 #define VER_START_STEP       (VER_END_STEP - VER_LEAD_FRAMES * VER_SCROLL_STEPS)
 // At power-on only the lead-in and the scroll run, once, then run mode.
 #define VER_BOOT_END_STEP    VER_SCROLL_END
+// At power-on every LED is lit for the first VER_BOOT_LAMP_STEPS (from the lead-in, the
+// settling included), then normal.
+#define VER_BOOT_LAMP_STEPS  (BOOT_LAMP_MS / VER_STEP_MS)
 // Footswitch N's LED is dark for the first VER_FLASH_STEPS of segment N.
 #define VER_SEGMENTS         (HAL_TEXT_SCROLL_FRAMES + 4)
 #define VER_FLASH_STEPS      ((VER_SCROLL_STEPS + 1) / 2)
 
 #if VER_SEGMENTS != STOMP_COUNT
-#error page 7 needs one segment per footswitch
+#error page 8 needs one segment per footswitch
 #endif
 
-#if VER_STEP_TICKS < 1 || VER_STEP_TICKS > 255 || VER_SCROLL_STEPS < 1 || \
+#if VER_STEP_TICKS < 1 || VER_STEP_TICKS > 255 || VER_SCROLL_STEPS < 2 || \
     VERSION_SHOW_MS % VER_STEP_MS != 0 || SCROLL_FRAME_MS % VER_STEP_MS != 0 || \
-    VER_END_STEP > 255 || STARTUP_TICKS / VER_STEP_TICKS >= VER_SCROLL_STEPS
+    VER_END_STEP > 255 || STARTUP_TICKS / VER_STEP_TICKS >= VER_BOOT_END_STEP + VER_LEAD_FRAMES * VER_SCROLL_STEPS
 #error VERSION_SHOW_MS or SCROLL_FRAME_MS is out of range (see config.h)
+#endif
+
+#if BOOT_LAMP_MS % VER_STEP_MS != 0 || VER_BOOT_LAMP_STEPS > 255 - VER_LEAD_FRAMES * VER_SCROLL_STEPS
+#error BOOT_LAMP_MS is out of range (see config.h)
 #endif
 
 #if REPEAT_DELAY_TICKS < 1 || REPEAT_PERIOD_TICKS < 1 || CHORD_TICKS < 1
@@ -213,6 +221,14 @@ static XDATA uint8_t  msg[STOMP_COUNT * MSG_BYTES];
 // the external SRAM (256 bytes).
 static XDATA uint8_t  key_val[256];
 #define KEY_UNKNOWN     0xFF
+
+// The program change sent when the bank in use is chosen with UP / DOWN in bank mode (or
+// over MIDI): 0 none, otherwise the program + 1 (only bits 0-6 of that program are used,
+// so any byte is valid). Saved with the bank, in the spare top nibble of its first two
+// footswitch records' first byte (record 0 the low nibble, record 1 the high), so a
+// record saved before this setting existed reads as none.
+static XDATA uint8_t  bank_pc;
+#define BANK_PC_PROGRAM ((uint8_t)((bank_pc - 1) & 0x7F))
 // Switch i's key_val index (not for a program change).
 #define KEY_OF(i)       ((uint8_t)((msg[MSG_AT(i)] & 0x7F) | ((msg_type(i) == MT_NOTE) ? 0x80 : 0)))
 
@@ -254,7 +270,9 @@ static BIT_T          mode_cycle_pending;
 #define NP_FOLLOW2      72      // the same for SWITCH 2
 #define NP_TRIGGER      84      // + relay * 2 + pedal: trigger value 1-127, 0 = off
 #define NP_CAL          88      // heel A, toe A, heel B, toe B: raw readings 0-255 (read only)
-#define NP_COUNT        92
+#define NP_BANK_PC      92      // the bank's program change 0-127; setting it turns it on
+#define NP_BANK_PC_ON   93      // 1 if the bank sends its program change, 0 none ("--")
+#define NP_COUNT        94
 
 // Commands (values of NP_COMMAND).
 #define NC_DUMP         1       // send every parameter, then NP_DUMP_END
@@ -304,9 +322,24 @@ static BIT_T          program_moved;
 // Which of UP / DOWN are down, and the state of an UP + DOWN chord.
 static IDATA uint8_t  keys_down;
 static IDATA uint8_t  chord_state;
-// Bank mode, toggled by a short UP + DOWN press in run mode (DIRECT SELECT lit): UP / DOWN
-// choose a footswitch bank instead of a program. Nothing is sent for it.
-static BIT_T          bank_mode;
+// Program mode, toggled by a short UP + DOWN press in run mode (DIRECT SELECT lit; user's
+// request). Off (the default): UP / DOWN choose a footswitch bank and the footswitches are
+// stomps. On: UP / DOWN step the program and the footswitches choose one by number
+// (pc_typing, pc_entry). Nothing is sent for the toggle.
+static BIT_T          pc_mode;
+// Program mode: footswitch 10 started typing a program number ("--" until a digit), and
+// the number typed so far (PC_ENTRY_NONE before the first digit). Numbers are as shown
+// on the display (the program + DISPLAY_PROGRAM_OFFSET).
+static BIT_T          pc_typing;
+static IDATA uint8_t  pc_entry;
+#define PC_ENTRY_NONE 0xFF
+#define PC_SHOWN_MAX  (127 + DISPLAY_PROGRAM_OFFSET)
+// Whether a typed (shown) number is a program: with no offset every number is.
+#if DISPLAY_PROGRAM_OFFSET
+#define PC_IS_PROGRAM(n) ((n) >= DISPLAY_PROGRAM_OFFSET)
+#else
+#define PC_IS_PROGRAM(n) 1
+#endif
 // Footswitch banks: the bank UP / DOWN have chosen (0-based; the display shows it + 1 in
 // bank mode), which is the loaded one (hal_bank) except while a change waits in bank_run,
 // and whether one is waiting.
@@ -326,7 +359,7 @@ static IDATA uint8_t  chan_flash_ticks;
 // The flash count lives in cal_step: one is only used on the channel page and the
 // other only on the calibration pages, so they share a byte.
 #define chan_flash_count cal_step
-// Page 7 reuses both: ticks into the current step, and the step number.
+// Page 8 reuses both: ticks into the current step, and the step number.
 #define ver_ticks chan_flash_ticks
 #define ver_step  cal_step
 // The footswitch editor's parameter: only open on page 1, where neither is used.
@@ -364,7 +397,7 @@ static BIT_T          cfg_changed;
 static BIT_T          cfg_led_dark;
 // The power-on lamp test and version are running (run mode; uses ver_step / ver_ticks).
 static BIT_T          boot_anim;
-// Page 7 is held on one segment while its footswitch is down.
+// Page 8 is held on one segment while its footswitch is down.
 static BIT_T          ver_paused;
 #define cfg_flash_ticks rx_flash
 
@@ -413,13 +446,16 @@ static uint8_t settings_match_saved(void)
 {
     uint8_t i;
 
-    // Footswitch messages and modes (the current bank).
+    // Footswitch messages and modes (the current bank), and the bank's program change in
+    // the top nibbles of the first two records.
     for (i = 0; i < STOMP_COUNT; i++)
     {
         MSG_REC_LOAD(i);
 
         if (hal_rec[1] != msg[MSG_AT(i)] || hal_rec[2] != msg[MSG_AT(i) + 1] ||
-            hal_rec[3] != msg[MSG_AT(i) + 2] || ((hal_rec[0] >> 2) & 3) != pedal_mode_get(i))
+            hal_rec[3] != msg[MSG_AT(i) + 2] || ((hal_rec[0] >> 2) & 3) != pedal_mode_get(i) ||
+            (i == 0 && (hal_rec[0] >> 4) != (bank_pc & 0x0F)) ||
+            (i == 1 && (hal_rec[0] & 0xF0) != (bank_pc & 0xF0)))
         {
             return 0;
         }
@@ -517,10 +553,10 @@ static uint8_t prog_single(uint8_t index)
                       (uint8_t)(msg[index + 1] & 0x7F) == msg[index + 2]) ? 1 : 0);
 }
 
-// The run-mode number: the program, or in bank mode (DIRECT SELECT lit) the bank from 1.
+// The run-mode number: the bank from 1, or in program mode (DIRECT SELECT lit) the program.
 static void show_program(void)
 {
-    hal_display(bank_mode ? (uint8_t)(bank_next + 1) : (uint8_t)(program + DISPLAY_PROGRAM_OFFSET));
+    hal_display(pc_mode ? (uint8_t)(program + DISPLAY_PROGRAM_OFFSET) : (uint8_t)(bank_next + 1));
 }
 
 // Send footswitch index's message for the state on: a CC with the on or off value, a note
@@ -604,11 +640,11 @@ static void bank_step(uint8_t code)
 #endif
 }
 
-// Move the program number (or in bank mode the bank) one step for UP or DOWN and show it.
-// Nothing is sent.
+// Move the bank (or in program mode the program number) one step for UP or DOWN and show
+// it. Nothing is sent.
 static void program_step(uint8_t code)
 {
-    if (bank_mode)
+    if (!pc_mode)
     {
         bank_step(code);
     }
@@ -646,11 +682,11 @@ static void program_step(uint8_t code)
     show_program();
 }
 
-// Send the program number now, or as soon as there is room in the MIDI OUT queue. In bank
-// mode, change to the chosen bank if it is not the one loaded (bank_run does it).
+// Send the program number now, or as soon as there is room in the MIDI OUT queue. Out of
+// program mode, change to the chosen bank if it is not the one loaded (bank_run does it).
 static void commit_program(void)
 {
-    if (bank_mode)
+    if (!pc_mode)
     {
         if (bank_next != hal_bank)
         {
@@ -714,15 +750,60 @@ static void show_cal_step(void)
     }
 }
 
-// Page 7 (and power-on), the current step: every LED lit, and the "riban" frame or
+// Page 7: the bank's program change, or "--" for none.
+static void show_bank_pc(void)
+{
+    if (bank_pc != 0)
+    {
+        hal_display(BANK_PC_PROGRAM);
+    }
+    else
+    {
+        hal_display_text(HAL_TEXT_DASHES);
+    }
+}
+
+// A footswitch on page 7 types a digit of the program (switches 1-9 type 1-9, switch 10
+// types 0), as in the footswitch editor: added to the number being typed while that
+// stays within 127, otherwise starting a new one. A leaf, so its locals cost no fixed RAM.
+static void bank_pc_digit(uint8_t index)
+{
+    uint8_t v = BANK_PC_PROGRAM;
+
+    index = (uint8_t)((index == STOMP_COUNT - 1) ? 0 : index + 1);
+
+    if (edit_typing && bank_pc != 0 && (v < 12 || (v == 12 && index <= 7)))
+    {
+        index = (uint8_t)(v * 10 + index);
+    }
+
+    edit_typing = (index < 13) ? 1 : 0;
+    bank_pc = (uint8_t)(index + 1);
+}
+
+// Page 8 (and power-on), the current step: every LED lit, and the "riban" frame or
 // version part that starts at this step (other steps leave the display as it is).
 static void version_show(void)
 {
     uint8_t s = ver_step;
     uint8_t g;
 
-    // Every LED stays lit throughout; on page 7 the footswitch LEDs mark the segments.
-    hal_lamp_test(boot_anim ? HAL_LAMP_LEDS_ON : HAL_LAMP_LEDS_STOMPS);
+    // Page 8: every LED stays lit throughout, the footswitch LEDs marking the segments.
+    // Power-on: every LED lit for VER_BOOT_LAMP_STEPS from the lead-in (it starts at
+    // VER_START_STEP and wraps to 0), then the normal LEDs (run mode's).
+    if (!boot_anim)
+    {
+        hal_lamp_test(HAL_LAMP_LEDS_STOMPS);
+    }
+    else if ((s >= VER_START_STEP) ? (uint8_t)(s - VER_START_STEP) < VER_BOOT_LAMP_STEPS :
+             (uint8_t)(s + VER_LEAD_FRAMES * VER_SCROLL_STEPS) < VER_BOOT_LAMP_STEPS)
+    {
+        hal_lamp_test(HAL_LAMP_LEDS_ON);
+    }
+    else
+    {
+        hal_lamp_test(HAL_LAMP_NORMAL);
+    }
 
     // g = the segment (0-9), s = the step within it.
     if (s < VER_LAST_TEXT)
@@ -747,7 +828,7 @@ static void version_show(void)
         s = (uint8_t)(s - VER_BLANK_START);
     }
 
-    // Page 7 (not power-on): segment g's footswitch LED goes dark at its start (the one
+    // Page 8 (not power-on): segment g's footswitch LED goes dark at its start (the one
     // before lights again), then lights after VER_FLASH_STEPS.
     if (!boot_anim)
     {
@@ -832,7 +913,7 @@ static void boot_end(void)
     show_program();
 }
 
-// Page 7: footswitch index (0-9) jumps to its segment, held there until released.
+// Page 8: footswitch index (0-9) jumps to its segment, held there until released.
 // Every footswitch LED lights; version_show then darkens this one.
 static void version_jump(uint8_t index)
 {
@@ -851,7 +932,7 @@ static void version_jump(uint8_t index)
     version_show();
 }
 
-// Every scan tick on page 7: move to the next step, looping over the version parts
+// Every scan tick on page 8: move to the next step, looping over the version parts
 static void version_tick(void)
 {
     // Held by a footswitch: no steps until it is released.
@@ -936,7 +1017,7 @@ static void config_show(void)
     hal_aux_led(HAL_LED_SWITCH_1, cfg_page == PAGE_SW1);
     hal_aux_led(HAL_LED_SWITCH_2, cfg_page == PAGE_SW2);
 
-    // Page 7: no page LED (everything blinks); stomp LEDs off, display blank under the
+    // Page 8: no page LED (everything blinks); stomp LEDs off, display blank under the
     // version, with every LED lit.
     if (cfg_page == PAGE_VERSION)
     {
@@ -955,6 +1036,24 @@ static void config_show(void)
         hal_display(0);
         hal_display_blank(7);
         version_show();
+        return;
+    }
+
+    // Page 7, the bank's program change: DIRECT SELECT lit, the program or "--" (none).
+    if (cfg_page == PAGE_BANK_PC)
+    {
+        hal_aux_led(HAL_LED_MIDI_CHAN, 0);
+        hal_aux_led(HAL_LED_MIDI_FUNC, 0);
+        hal_aux_led(HAL_LED_EXP_1, 0);
+        hal_aux_led(HAL_LED_EXP_2, 0);
+        hal_aux_led(HAL_LED_DIRECT_SELECT, 1);
+
+        for (i = 0; i < STOMP_COUNT; i++)
+        {
+            hal_stomp_led(i, 0);
+        }
+
+        show_bank_pc();
         return;
     }
 
@@ -1017,7 +1116,7 @@ static void config_goto_page(uint8_t page)
     ver_paused = 0;
     mode_press_live = 0;
     mode_cycle_pending = 0;
-    // Leaving page 7 (or restarting it): normal LEDs again and no dots.
+    // Leaving page 8 (or restarting it): normal LEDs again and no dots.
     hal_lamp_test(HAL_LAMP_NORMAL);
     hal_display_dots(0);
 
@@ -1029,13 +1128,14 @@ static void config_goto_page(uint8_t page)
     {
         cal_step = CAL_TOE;
     }
-    // A SWITCH page takes the next pedal readings as the reference, so only a pedal
-    // that is then moved sets a trigger value.
-    else if (IS_SW_PAGE(page))
+    // A SWITCH page (and page 7) takes the next pedal readings as the reference, so only
+    // a pedal that is then moved sets a value; page 7's first digit starts a new number.
+    else if (IS_SW_PAGE(page) || page == PAGE_BANK_PC)
     {
         resync_pedals();
+        edit_typing = 0;
     }
-    // Page 7 starts with the "riban" scroll's lead-in.
+    // Page 8 starts with the "riban" scroll's lead-in.
     else if (page == PAGE_VERSION)
     {
         ver_step  = VER_START_STEP;
@@ -1426,6 +1526,8 @@ static void channel_digit_tick(void)
 static void enter_config(void)
 {
     mode = MODE_CONFIG;
+    // A program number being typed is dropped.
+    pc_typing = 0;
 
     // A stomp being held (momentary, or past the long-press time) is treated as released so
     // the synth is not left with it on.
@@ -1462,7 +1564,8 @@ static void settings_unpack(void)
 }
 
 // The messages and pedal modes of bank hal_bank (i is the caller's loop variable), the
-// defaults for any switch without a valid record. Every 2-bit pedal mode value is valid.
+// defaults for any switch without a valid record, and the bank's program change (none
+// without valid records). Every 2-bit pedal mode value is valid.
 // A macro, so the EEPROM reads under load_settings and bank_run are no deeper.
 #define LOAD_BANK(i)                                                           \
     do {                                                                       \
@@ -1473,6 +1576,14 @@ static void settings_unpack(void)
             msg[MSG_AT(i) + 1] = hal_rec[2];                                   \
             msg[MSG_AT(i) + 2] = hal_rec[3];                                   \
             pedal_mode_set((i), (uint8_t)((hal_rec[0] >> 2) & 3));             \
+            if ((i) == 0)                                                      \
+            {                                                                  \
+                bank_pc = (uint8_t)(hal_rec[0] >> 4);                          \
+            }                                                                  \
+            else if ((i) == 1)                                                 \
+            {                                                                  \
+                bank_pc |= (uint8_t)(hal_rec[0] & 0xF0);                       \
+            }                                                                  \
         }                                                                      \
     } while (0)
 
@@ -1549,7 +1660,9 @@ static void load_settings(void)
         }                                                                      \
         for ((i) = 0; (i) < STOMP_COUNT; (i)++)                                \
         {                                                                      \
-            hal_rec[0] = (uint8_t)(msg_type(i) | (pedal_mode_get(i) << 2));    \
+            hal_rec[0] = (uint8_t)(msg_type(i) | (pedal_mode_get(i) << 2) |    \
+                                   (((i) == 0) ? (uint8_t)(bank_pc << 4) :     \
+                                    ((i) == 1) ? (uint8_t)(bank_pc & 0xF0) : 0)); \
             hal_rec[1] = (uint8_t)(msg[MSG_AT(i)] & 0x7F);                     \
             hal_rec[2] = (uint8_t)(msg[MSG_AT(i) + 1] & 0x7F);                 \
             hal_rec[3] = msg[MSG_AT(i) + 2];                                   \
@@ -1610,7 +1723,7 @@ static void exit_config(uint8_t save)
 
     // Stop a two-digit channel entry that could still take a second digit.
     chan_digit_pending = 0;
-    // Leaving from page 7 ends the lamp test and its dots.
+    // Leaving from page 8 ends the lamp test and its dots.
     hal_lamp_test(HAL_LAMP_NORMAL);
     hal_display_dots(0);
 
@@ -1636,7 +1749,7 @@ static void exit_config(uint8_t save)
     hal_aux_led(HAL_LED_MIDI_FUNC, 0);
     hal_aux_led(HAL_LED_EXP_1, 0);
     hal_aux_led(HAL_LED_EXP_2, 0);
-    hal_aux_led(HAL_LED_DIRECT_SELECT, bank_mode ? 1 : 0);
+    hal_aux_led(HAL_LED_DIRECT_SELECT, pc_mode ? 1 : 0);
     hal_aux_led(HAL_LED_SWITCH_1, relay_out & 1);
     hal_aux_led(HAL_LED_SWITCH_2, (relay_out >> 1) & 1);
     hal_aux_led(HAL_LED_SELECT, 0);
@@ -1700,14 +1813,34 @@ static void nav_release(uint8_t code)
     }
 }
 
-// Short UP + DOWN in run mode: toggle bank mode and show it on the DIRECT SELECT LED.
-// Nothing is sent.
-static void bank_mode_toggle(void)
+// Short UP + DOWN in run mode: toggle program mode and show it on the DIRECT SELECT LED.
+// Nothing is sent; a number being typed is dropped.
+static void pc_mode_toggle(void)
 {
-    bank_mode = !bank_mode;
-    hal_aux_led(HAL_LED_DIRECT_SELECT, bank_mode ? 1 : 0);
-    // The display shows the bank in bank mode, the program otherwise.
+    pc_mode   = !pc_mode;
+    pc_typing = 0;
+    hal_aux_led(HAL_LED_DIRECT_SELECT, pc_mode ? 1 : 0);
+    // The display shows the program in program mode, the bank otherwise.
     show_program();
+}
+
+// Program mode: send the program chosen with the footswitches (in program) now, or as soon
+// as MIDI OUT has room, and show it; typing ends.
+static void pc_choose(void)
+{
+    pc_typing     = 0;
+    program_moved = 0;
+    show_program();
+
+    if (hal_midi_space() >= 2)
+    {
+        program_pending = 0;
+        send_program(program);
+    }
+    else
+    {
+        program_pending = 1;
+    }
 }
 
 // Stop tracking the held key because it has become part of a chord. If it had already been
@@ -1744,6 +1877,12 @@ static void nav_key_press(uint8_t code)
         return;
     }
 
+    // Typing a program number: UP / DOWN only act on release (enter / cancel), no repeat.
+    if (pc_typing && mode == MODE_RUN)
+    {
+        return;
+    }
+
     if (nav_code == NAV_NONE)
     {
         nav_code      = code;
@@ -1766,7 +1905,7 @@ static void nav_key_release(uint8_t code)
 
             if (mode == MODE_RUN)
             {
-                bank_mode_toggle();
+                pc_mode_toggle();
             }
             // On a SWITCH page it toggles whether that relay follows bank mode.
             else if (IS_SW_PAGE(cfg_page))
@@ -1775,11 +1914,37 @@ static void nav_key_release(uint8_t code)
                 config_changed();
                 hal_aux_led(HAL_LED_DIRECT_SELECT, (sw_mask[cfg_page - PAGE_SW1] & SW_CC_BIT) != 0);
             }
+            // On page 7 it turns the bank's program change off ("--").
+            else if (cfg_page == PAGE_BANK_PC)
+            {
+                bank_pc = 0;
+                edit_typing = 0;
+                config_changed();
+                show_bank_pc();
+            }
         }
 
         if (keys_down == 0)
         {
             chord_state = CHORD_NONE;
+        }
+
+        return;
+    }
+
+    // Typing a program number: UP (ENTER) sends the number typed, if it is a program;
+    // DOWN (ESCAPE), or UP with no number, goes back to the current program.
+    if (pc_typing && mode == MODE_RUN)
+    {
+        if (code == CTL_KEY_UP && pc_entry != PC_ENTRY_NONE && PC_IS_PROGRAM(pc_entry))
+        {
+            program = (uint8_t)(pc_entry - DISPLAY_PROGRAM_OFFSET);
+            pc_choose();
+        }
+        else
+        {
+            pc_typing = 0;
+            show_program();
         }
 
         return;
@@ -1868,7 +2033,8 @@ void ctl_init(void)
     program_moved   = 0;
     keys_down     = 0;
     chord_state   = CHORD_NONE;
-    bank_mode   = 0;
+    pc_mode       = 0;
+    pc_typing     = 0;
     bank_busy     = 0;
     nav_ticks   = 0;
     cfg_page      = PAGE_MODES;
@@ -1923,16 +2089,15 @@ void ctl_init(void)
     hal_relays(0);
     show_program();
 
-    // Power-on: every LED lit while "riban" scrolls once (as page 7 starts), then run
+    // Power-on: every LED lit while "riban" scrolls once (as page 8 starts), then run
     // mode. A key press ends it early and then acts as usual.
     boot_anim = 1;
     ver_step  = VER_START_STEP;
     version_show();
 
-    // The first frame shows through the start-up settling (STARTUP_TICKS, no ctl_tick),
-    // so that time comes off it and power-on takes ten frames in all.
-    ver_step  = (uint8_t)(VER_START_STEP + STARTUP_TICKS / VER_STEP_TICKS);
-    ver_ticks = (uint8_t)(VER_STEP_TICKS - STARTUP_TICKS % VER_STEP_TICKS);
+    // The scroll keeps time through the start-up settling (ctl_settle_tick), so power-on
+    // takes ten frames in all, the settling included.
+    ver_ticks = VER_STEP_TICKS;
 }
 
 // Stomp number 0..9 for a key code, or 0xFF for UP / DOWN / invalid codes.
@@ -2071,7 +2236,7 @@ void ctl_key_release(uint8_t code)
         return;
     }
 
-    // Page 7: a footswitch release carries on from the segment it held.
+    // Page 8: a footswitch release carries on from the segment it held.
     if (ver_paused && mode == MODE_CONFIG)
     {
         ver_paused = 0;
@@ -2179,14 +2344,70 @@ void ctl_key_press(uint8_t code)
             config_changed();
             hal_stomp_led(index, (sw_mask[cfg_page - PAGE_SW1] & bit) ? 1 : 0);
         }
-        // Page 7: a footswitch shows its segment and holds it until released.
+        // Page 8: a footswitch shows its segment and holds it until released.
         else if (cfg_page == PAGE_VERSION)
         {
             version_jump(stomp_index(code));
         }
+        // Page 7: types a digit of the bank's program change.
+        else if (cfg_page == PAGE_BANK_PC)
+        {
+            bank_pc_digit(stomp_index(code));
+            config_changed();
+            show_bank_pc();
+        }
         else
         {
             calibration_take();
+        }
+
+        return;
+    }
+
+    // Program mode (DIRECT SELECT lit): the footswitches choose a program by number, as
+    // shown on the display (user's design). Switches 1-9 send that program at once.
+    // Switch 10 shows "--" and starts typing a number: switches 1-9 type 1-9 and 10 types
+    // 0, each digit added while the number stays a program; a number no further digit
+    // fits (13 and up) is sent at once, a shorter one with UP (ENTER), or DOWN (ESCAPE)
+    // goes back to the current program. index and on are the digit work space.
+    if (pc_mode)
+    {
+        index = stomp_index(code);
+        on    = (uint8_t)((index == STOMP_COUNT - 1) ? 0 : index + 1);
+
+        if (!pc_typing)
+        {
+            if (index == STOMP_COUNT - 1)
+            {
+                pc_typing = 1;
+                pc_entry  = PC_ENTRY_NONE;
+                hal_display_text(HAL_TEXT_DASHES);
+            }
+            else if (PC_IS_PROGRAM(on))
+            {
+                program = (uint8_t)(on - DISPLAY_PROGRAM_OFFSET);
+                pc_choose();
+            }
+
+            return;
+        }
+
+        if (pc_entry != PC_ENTRY_NONE &&
+            (pc_entry < PC_SHOWN_MAX / 10 || (pc_entry == PC_SHOWN_MAX / 10 && on <= PC_SHOWN_MAX % 10)))
+        {
+            on = (uint8_t)(pc_entry * 10 + on);
+        }
+
+        pc_entry = on;
+
+        if (on > PC_SHOWN_MAX / 10 && PC_IS_PROGRAM(on))
+        {
+            program = (uint8_t)(on - DISPLAY_PROGRAM_OFFSET);
+            pc_choose();
+        }
+        else
+        {
+            hal_display(on);
         }
 
         return;
@@ -2338,7 +2559,8 @@ static uint8_t np_kind(uint8_t p)
 {
     if (p == NP_CHANNEL || p == NP_BANK || (p >= NP_MODE && p < NP_MODE + STOMP_COUNT) ||
         (p >= NP_TYPE && p < NP_OFF + STOMP_COUNT) || (p >= NP_FOLLOW1 && p <= NP_FOLLOW1 + STOMP_COUNT) ||
-        (p >= NP_FOLLOW2 && p <= NP_FOLLOW2 + STOMP_COUNT) || (p >= NP_TRIGGER && p < NP_TRIGGER + 4))
+        (p >= NP_FOLLOW2 && p <= NP_FOLLOW2 + STOMP_COUNT) || (p >= NP_TRIGGER && p < NP_TRIGGER + 4) ||
+        p == NP_BANK_PC || p == NP_BANK_PC_ON)
     {
         return NK_SET;
     }
@@ -2370,6 +2592,18 @@ static uint8_t nrpn_get(uint8_t p)
     if (p == NP_BANKS)
     {
         return BANK_COUNT;
+    }
+
+    // The bank's program change (127 while it is off: what turning it on gives) and whether
+    // it is on.
+    if (p == NP_BANK_PC)
+    {
+        return BANK_PC_PROGRAM;
+    }
+
+    if (p == NP_BANK_PC_ON)
+    {
+        return (uint8_t)(bank_pc != 0);
     }
 
     if (p < NP_MODE)
@@ -2473,7 +2707,8 @@ static void bank_run(void)
     // Static, so it is not pushed around each EEPROM read (the stack).
     static uint8_t i;
 
-    if (stomp_revert)
+    // Room for the new bank's program change, if it has one.
+    if (stomp_revert || hal_midi_space() < 2)
     {
         return;
     }
@@ -2515,6 +2750,15 @@ static void bank_run(void)
         }
 
         hal_stomp_led(i, (uint8_t)((stomp_state >> i) & 1));
+    }
+
+    // The new bank's program change, if set: it becomes the current program, as a
+    // program sent by a footswitch does (the display keeps showing the bank in bank mode).
+    if (bank_pc != 0)
+    {
+        program = BANK_PC_PROGRAM;
+        send_program(program);
+        show_program();
     }
 }
 
@@ -2595,6 +2839,14 @@ static void nrpn_set(void)
         return;
     }
 
+    // The bank's program change: setting the program turns it on, even to the program it
+    // already shows while off (so this comes before the unchanged check).
+    if (nrpn_lsb == NP_BANK_PC)
+    {
+        bank_pc = (uint8_t)(rx_data1 + 1);
+        return;
+    }
+
     if (np_kind(nrpn_lsb) != NK_SET || nrpn_get(nrpn_lsb) == rx_data1)
     {
         return;
@@ -2610,6 +2862,18 @@ static void nrpn_set(void)
         return;
     }
 
+    // On / off (the value differs, so it is 0 or 1 here only if it changes): on keeps the
+    // program parameter 92 reads (127 if it was never set).
+    if (nrpn_lsb == NP_BANK_PC_ON)
+    {
+        if (rx_data1 <= 1)
+        {
+            bank_pc = rx_data1 ? (uint8_t)(BANK_PC_PROGRAM + 1) : 0;
+        }
+
+        return;
+    }
+
     // A bank change, as UP / DOWN make one in bank mode (bank_run). Unsaved changes to
     // the old bank's footswitches are dropped.
     if (nrpn_lsb == NP_BANK)
@@ -2619,7 +2883,7 @@ static void nrpn_set(void)
             bank_next = (uint8_t)(rx_data1 - 1);
             bank_busy = 1;
 
-            if (bank_mode && !boot_anim)
+            if (!pc_mode && !boot_anim)
             {
                 show_program();
             }
@@ -2791,6 +3055,14 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
         {
             sw_pedal(channel);
         }
+        // Page 7: once moved, its CC value is the bank's program change.
+        else if (cfg_page == PAGE_BANK_PC && pedal_moved(channel))
+        {
+            edit_typing = 0;
+            bank_pc = (uint8_t)(sent[channel] + 1);
+            config_changed();
+            show_bank_pc();
+        }
 
         return;
     }
@@ -2847,7 +3119,7 @@ static uint8_t relays_compute(void)
     uint8_t  i;
     uint8_t  bit;
 
-    if (bank_mode)
+    if (pc_mode)
     {
         on |= SW_CC_BIT;
     }
@@ -2888,6 +3160,15 @@ static void relays_update(void)
         hal_relays(relay_out);
         hal_aux_led(HAL_LED_SWITCH_1, relay_out & 1);
         hal_aux_led(HAL_LED_SWITCH_2, (relay_out >> 1) & 1);
+    }
+}
+
+// During the start-up settling (no ctl_tick yet): only the power-on scroll moves on.
+void ctl_settle_tick(void)
+{
+    if (boot_anim)
+    {
+        version_tick();
     }
 }
 
@@ -3053,6 +3334,8 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_RELAYS:        return relay_out;
     case CTL_INSPECT_EDIT:          return edit_open ? (uint8_t)(edit_param + 1) : 0;
     case CTL_INSPECT_BANK:          return hal_bank;
+    case CTL_INSPECT_BANK_PC:       return bank_pc;
+    case CTL_INSPECT_PC_MODE:       return (uint8_t)(pc_mode + pc_typing);
     default:                        return 0;
     }
 }

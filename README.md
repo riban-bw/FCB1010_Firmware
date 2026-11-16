@@ -8,7 +8,7 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 
 - 10 footswitches, each sending its own MIDI controller (CC), note or program change, with a choice of four switch behaviours
 - 25 banks of footswitch settings, chosen with UP and DOWN
-- Program change from UP and DOWN, with fast scrolling when held
+- Program mode (UP + DOWN tapped): program change from UP and DOWN, with fast scrolling when held, or typed on the footswitches
 - 2 expression pedals
 - 2 relay outputs (the SWITCH 1 and SWITCH 2 jacks), triggered by any footswitch or pedal, to switch amp channels or other gear
 - Footswitches that send the same controller or note share its state, in every bank
@@ -38,5 +38,5 @@ Technical reference:
 ## Quick start
 
 1. Read the warning in [Installing](docs/installing.md), back up the original chip, and program a new one with the image for your chip size (`build/fcb1010_27c512.bin` for a 27C512).
-2. Power on: "riban" scrolls, then the display shows `0`.
-3. Press a footswitch to turn its effect on and off, and UP or DOWN to change program; [Using the pedal](docs/using.md) lists the messages each control sends out of the box. Hold UP and DOWN together to configure it (see [Configuration](docs/configuration.md)).
+2. Power on: "riban" scrolls, then the display shows `1` (footswitch bank 1).
+3. Press a footswitch to turn its effect on and off, UP or DOWN to change footswitch bank, and UP + DOWN tapped together to switch UP, DOWN and the footswitches to changing program; [Using the pedal](docs/using.md) lists the messages each control sends out of the box. Hold UP and DOWN together to configure it (see [Configuration](docs/configuration.md)).

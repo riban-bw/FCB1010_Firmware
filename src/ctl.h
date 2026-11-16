@@ -18,6 +18,10 @@ void    ctl_key_press(uint8_t code);
 // MIDI message that had to wait for room in the MIDI OUT queue.
 void    ctl_tick(void);
 
+// Call once per tick during the start-up settling, before ctl_tick runs: keeps the
+// power-on scroll moving.
+void    ctl_settle_tick(void);
+
 // The key has now been held down for the hold threshold (sent once per press).
 void    ctl_key_hold(uint8_t code);
 
@@ -61,6 +65,10 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 // The loaded footswitch bank, from 0.
 #define CTL_INSPECT_BANK           15
 #define CTL_INSPECT_PEDAL_MODE     16
+// The bank's program change: 0 none, else the program + 1 (after the ten pedal modes).
+#define CTL_INSPECT_BANK_PC        30
+// 1 in program mode (DIRECT SELECT lit), 2 while a program number is being typed.
+#define CTL_INSPECT_PC_MODE        31
 // Relay trigger values at 32 + relay * 2 + pedal; follow masks at 36 + relay * 2 (low
 // byte) and 37 + relay * 2 (high byte; bit 2 is bank mode). Pages 4 and 5 are SWITCH 1 / 2.
 #define CTL_INSPECT_SW_THR         32

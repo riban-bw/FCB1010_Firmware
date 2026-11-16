@@ -58,10 +58,12 @@ d = re.search(r"#define DEFAULT_PEDAL_MODE (\d)", t).group(1)
 w = re.search(r"#define PROGRAM_WRAP (\d)", t).group(1)
 print(" ".join("%02x" % c for c in cc[:10]), d, w)')
 
-# The program change after n DOWN steps from 0: wrapping (PROGRAM_WRAP 1), or none at all
-# (stopped at 0, so the number did not change and nothing is sent).
+# What n DOWN steps send at power-on: nothing. The pedal starts in bank mode (DIRECT
+# SELECT dark), where DOWN chooses a footswitch bank (from bank 1, stopping there or, with
+# PROGRAM_WRAP 1, wrapping to the last), and a bank change sends nothing here (no bank
+# has a program change: the EEPROM is not simulated).
 pc_down() {
-    if [ "$WRAP" = "1" ]; then printf 'c0%02x' $(( (128 - $1) & 127 )); fi
+    :
 }
 
 # expect "<values each of switches 1-5 sends>" [other messages...] -> sorted list.
@@ -139,7 +141,7 @@ check "five stomp CCs and the program change for one DOWN from 0 (none without w
       "$(messages "$TMP/s1.out")" \
       "$(expect "$V1" $(pc_down 1))"
 
-echo "scenario 2: press, release, press again (toggle off, program steps down)"
+echo "scenario 2: press, release, press again (toggle off; DOWN changes bank, sending nothing)"
 cat > "$TMP/s2.txt" <<EOF
 set hardware port[1] 0x9f
 step 800000
@@ -154,7 +156,7 @@ step 400000
 quit
 EOF
 run_sim "$TMP/s2.txt" "$TMP/s2.out"
-check "second press toggles stomps off; program changes for DOWN from 0 twice (none without wrap)" \
+check "second press toggles stomps off; no program change for DOWN (bank mode)" \
       "$(messages "$TMP/s2.out")" \
       "$(expect "$V2" $(pc_down 2) $(pc_down 1))"
 
@@ -282,14 +284,14 @@ echo "scenario 6: held about $UNDER_LO-$UNDER_HI ms (under the long-press time) 
 printf 'set hardware port[1] 0x9f\nstep 800000\nset hardware port[1] 0xdf\nstep %s\nset hardware port[1] 0x9f\nstep 800000\nquit\n' \
     "$UNDER_STEPS" > "$TMP/s6.txt"
 run_sim "$TMP/s6.txt" "$TMP/s6.out"
-check_any "no revert; one program change for the repeated number" "$(messages "$TMP/s6.out")" \
+check_any "no revert; no program change for the repeated DOWN (bank mode)" "$(messages "$TMP/s6.out")" \
       $(for k in $(seq "$N_UNDER_LO" "$N_UNDER_HI"); do printf '%s\n' "$(expect "$V6" $(pc_down "$k"))" | tr ' ' '_'; done)
 
 echo "scenario 7: held about $OVER_LO-$OVER_HI ms (over the long-press time) reverts on release"
 printf 'set hardware port[1] 0x9f\nstep 800000\nset hardware port[1] 0xdf\nstep %s\nset hardware port[1] 0x9f\nstep 800000\nquit\n' \
     "$OVER_STEPS" > "$TMP/s7.txt"
 run_sim "$TMP/s7.txt" "$TMP/s7.out"
-check_any "over the threshold (reverts only in stomp with momentary); one program change" "$(messages "$TMP/s7.out")" \
+check_any "over the threshold (reverts only in stomp with momentary); no program change" "$(messages "$TMP/s7.out")" \
       $(for k in $(seq "$N_OVER_LO" "$N_OVER_HI"); do printf '%s\n' "$(expect "$V7" $(pc_down "$k"))" | tr ' ' '_'; done)
 
 echo "scenario 8: stomps ON, long press turns OFF, release puts them back ON"
@@ -299,7 +301,7 @@ run_sim "$TMP/s8.txt" "$TMP/s8.out"
 check_any "on, off at press, back on at release only in stomp with momentary" "$(messages "$TMP/s8.out")" \
       $(for k in $(seq "$N_OVER_LO" "$N_OVER_HI"); do printf '%s\n' "$(expect "$V8" $(pc_down $((k + 1))) $(pc_down 1))" | tr ' ' '_'; done)
 
-echo "scenario 9: a short UP + DOWN press in run mode toggles bank select, sending nothing"
+echo "scenario 9: a short UP + DOWN press in run mode toggles program mode, sending nothing"
 # 0xff presses every key, so the ten footswitches are tapped too. Held briefly (under
 # the 1s config hold) and let go: only the ten taps, no program change.
 cat > "$TMP/s9.txt" <<EOF
@@ -316,9 +318,9 @@ check "ten stomp taps and nothing else, no program change" \
       "$(messages "$TMP/s9.out")" \
       "$(SWITCHES="$CC1 $CC2 $CC3 $CC4 $CC5 $CC6 $CC7 $CC8 $CC9 $CC10" expect "$V1")"
 
-echo "scenario 10: config page 7 lights every LED, scrolls riban, then shows the major version"
-# Into config mode, then six taps of row 2 (UP, plus switches 6-10, which only edit
-# settings on the way) reach page 7.
+echo "scenario 10: config page 8 lights every LED, scrolls riban, then shows the major version"
+# Into config mode, then seven taps of row 2 (UP, plus switches 6-10, which only edit
+# settings on the way) reach page 8.
 # About 0.1 s in, led_map (units, tens, left) holds the scroll's lead-in: digits blank,
 # the units' dot lit; about 3.5 s in (after the ten scroll frames, 3 s with the default
 # SCROLL_FRAME_MS) the major version with the dot after the units.
@@ -333,28 +335,45 @@ tens = ((~seg[v >> 4]) & 0xFE) | 1
 print("%02x %02x ff" % (units, tens))')
 # The lead-in: units blank with its dot (bit 0, lit low), tens and left blank.
 SCROLL_EXPECT="fe ff ff"
+# Dump times from config.h (about 595 steps per ms), counted from the last tap's release
+# (about 36ms to debounce): mid first lead-in frame, mid " r" (2 frames on), and mid the
+# major version (it starts 10 frames in).
+read -r S10_LEAD S10_R S10_MAJOR < <(python3 -I -c '
+import re
+t = open("src/config.h").read()
+n = lambda k: int(re.search(r"#define " + k + r"\s+(\d+)", t).group(1))
+f, v = n("SCROLL_FRAME_MS"), n("VERSION_SHOW_MS")
+print((36 + f // 2) * 595, 2 * f * 595, (15 * f // 2 + v // 2) * 595)')
 {
     echo "set hardware port[1] 0x9f"; echo "step 800000"
     echo "set hardware port[1] 0xff"; echo "step 900000"
     echo "set hardware port[1] 0x9f"; echo "step 300000"
-    for i in 1 2 3 4 5 6; do
+    for i in 1 2 3 4 5 6 7; do
         echo "set hardware port[1] 0xbf"; echo "step 60000"
         echo "set hardware port[1] 0x9f"; echo "step 60000"
     done
-    echo "step 60000"
+    echo "step $((S10_LEAD - 60000))"
     # One byte per dump, so a row boundary between them cannot split the output.
     for a in 0 1 2; do echo "dump iram $((LED_MAP + a)) $((LED_MAP + a)) 1"; done
-    echo "step 2000000"
+    # " r" (after the two lead-in frames), its dot after the left position's "1".
+    echo "step $S10_R"
+    for a in 0 1 2; do echo "dump iram $((LED_MAP + a)) $((LED_MAP + a)) 1"; done
+    echo "step $S10_MAJOR"
     for a in 0 1 2; do echo "dump iram $((LED_MAP + a)) $((LED_MAP + a)) 1"; done
     echo "quit"
 } > "$TMP/s10.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s10.out" "$IHX" < "$TMP/s10.txt" > "$TMP/s10.console" 2>&1
-# Each address is dumped twice: the first is the scroll, the last the major version.
+# Each address is dumped three times: the lead-in, " r", and the major version.
 check "at once the display shows the scroll's lead-in dot (units, tens, left: $SCROLL_EXPECT)" \
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | head -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$SCROLL_EXPECT"
+# " r": units the scroll's r (A B E F = 0xCC, its dot off), tens blank, left blank with
+# its dot lit (bit 0 low).
+R_EXPECT="$(printf '%02x' $(( (~0xCC & 0xFE) | 1 ))) ff fe"
+check "then the first riban frame, the scroll's r (A B E F) with the dot after the \"1\" (units, tens, left: $R_EXPECT)" \
+      "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | sed -n 2p | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$R_EXPECT"
 check "after the scroll the display shows the major version (units, tens, left: $VER_EXPECT)" \
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | tail -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$VER_EXPECT"
-# The channel page taps changed the channel, so a change is unsaved: on page 7 LED rows 3
+# The channel page taps changed the channel, so a change is unsaved: on page 8 LED rows 3
 # and 4 (commons 0x08, 0x10) stay lit, and in row 5 (0x20) everything is lit
 # except the CONFIG bit (0x40), which flashes, so both levels are seen.
 # Rows 3 and 4 hold the footswitch LEDs, which blink one at a time (switches 4 and 5
@@ -384,44 +403,55 @@ LAMP10=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s10b.console
     $1 == "0x1ff8" { com = $2; next }
     $1 == "0x1ff9" && com != "" { sample(com, $2); com = "" }
     END { print (bad ? "bad" : "ok"), (total >= 200 ? "enough" : "few:" total + 0), (n >= 20 ? "many" : n + 0), on + 0, off + 0, blink + 0 }')
-check "page 7 with an unsaved change: LEDs lit, CONFIG flashing, a footswitch LED blinking (state, samples, row-5 samples, CONFIG lit, CONFIG dark, footswitch dark)" \
+check "page 8 with an unsaved change: LEDs lit, CONFIG flashing, a footswitch LED blinking (state, samples, row-5 samples, CONFIG lit, CONFIG dark, footswitch dark)" \
       "$LAMP10" "ok enough many 1 1 1"
 # The entry chord taps all ten stomps in run mode (their CCs); page changes send no program.
 check "no program change was sent" "$(messages "$TMP/s10.out" | tr ' ' '\n' | grep -c '^c')" "0"
 
-echo "scenario 11: UP held about 5 s repeats slowly, then fast after PROGRAM_REPEAT_FAST_AFTER_MS; one program change"
+echo "scenario 11: UP held about 5 s repeats slowly, then fast after PROGRAM_REPEAT_FAST_AFTER_MS; one bank change"
+# The pedal starts in bank mode, so UP steps the footswitch bank (the same repeat as for
+# programs). Program mode cannot be held here: the simulator presses switches 6-10 with
+# UP, and in program mode switch 10 starts typing a number, which stops UP repeating.
 # Row 2 (0xbf) is UP plus switches 6-10 (their CCs are ignored here). Slow steps: one at
 # 0.4 s, then every 0.25 s to 16 at about 4.15 s; then one every 50 ms, so about 30 at
 # 5 s (instruction steps only roughly track time; the host tests check exact timing).
-# Without the fast repeat it would be about 19. Only the program change is checked.
-cat > "$TMP/s11.txt" <<'EOF11'
+# Without the fast repeat it would be about 19. The bank stops at the last one (or wraps
+# with PROGRAM_WRAP), so the fast repeat shows if BANK_COUNT is over the slow count. The
+# bank (hal_bank) is read back from RAM; nothing but the footswitches' CCs is sent.
+BANK_ADDR=$((16#$(awk '/_hal_bank:/ {print $1}' build/hw.rst | head -1)))
+cat > "$TMP/s11.txt" <<EOF11
 set hardware port[1] 0x9f
 step 800000
 set hardware port[1] 0xbf
 step 2975000
 set hardware port[1] 0x9f
 step 400000
+dump iram $BANK_ADDR $BANK_ADDR 1
 quit
 EOF11
-run_sim "$TMP/s11.txt" "$TMP/s11.out"
-PC11=$(messages "$TMP/s11.out" | tr ' ' '\n' | grep '^c0')
-N11=$((16#${PC11#c0}))
-# The expected range from the timings in config.h, for a hold of 4.4 to 5.0 s (the
-# simulator's steps only roughly track time), and the count with no fast repeat.
-read -r LO11 HI11 SLOW11 < <(python3 -I -c '
+s51 -t 80C32 -X 12M -S out="$TMP/s11.out" "$IHX" < "$TMP/s11.txt" > "$TMP/s11.console" 2>&1
+B11=$(grep -E "^0x$(printf '%02x' "$BANK_ADDR") " "$TMP/s11.console" | awk '{print $2}')
+N11=$((16#${B11:-ff}))
+PC11=$(messages "$TMP/s11.out" | tr ' ' '\n' | grep -c '^c')
+# The banks a hold of 4.4 to 5.0 s can reach (the simulator's steps only roughly track
+# time), from the timings in config.h, and the bank with no fast repeat.
+read -r OK11 SLOW11 < <(python3 -I -c '
 import math, re
 t = open("src/config.h").read()
 n = lambda k: int(re.search(r"#define " + k + r" (\d+)", t).group(1))
 d, p = n("PROGRAM_REPEAT_DELAY_MS"), 1000 / n("PROGRAM_REPEAT_HZ")
 f, a = 1000 / n("PROGRAM_REPEAT_FAST_HZ"), n("PROGRAM_REPEAT_FAST_AFTER_MS")
+banks, wrap = n("BANK_COUNT"), n("PROGRAM_WRAP")
 fs = math.ceil((a - d) / p) + 1
 at = d + (fs - 1) * p
 steps = lambda ms: int((ms - d) // p) + 1 if ms < at else fs + int((ms - at) // f)
-print(min(127, steps(4400) - 1), min(127, steps(5000) + 1), int((5000 - d) // p) + 1)')
-if [ "$(echo "$PC11" | wc -w)" = "1" ] && [ "$N11" -ge "$LO11" ] && [ "$N11" -le "$HI11" ]; then
-    echo "  ok   one program change, $N11 ($LO11-$HI11 expected from config.h, about $SLOW11 without the fast repeat)"
+bank = lambda k: k % banks if wrap else min(k, banks - 1)
+ok = sorted(set(bank(k) for k in range(steps(4400) - 1, steps(5000) + 2)))
+print(",".join(map(str, ok)), bank(int((5000 - d) // p) + 1))')
+if [ "$PC11" = "0" ] && echo ",$OK11," | grep -q ",$N11,"; then
+    echo "  ok   no program change; bank index $N11 (one of $OK11 expected from config.h, $SLOW11 without the fast repeat)"
 else
-    echo "  FAIL program change after a 5 s UP hold: got '$PC11', expected one in $LO11-$HI11"
+    echo "  FAIL after a 5 s UP hold: bank index $N11 and $PC11 program changes, expected one of $OK11 and none"
     fail=1
 fi
 
@@ -454,18 +484,14 @@ BOOT12=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s12.console"
 check "LED row 3 lit during the animation, normal afterwards (samples, state, samples, state)" "$BOOT12" "seen lit seen normal"
 check "nothing sent at power-on" "$(messages "$TMP/s12.out")" ""
 
-echo "scenario 13: with DIRECT SELECT lit (UP + DOWN tapped), UP and DOWN change footswitch bank, not program"
-# 0xff tapped is the UP + DOWN chord (and taps all ten stomps); then row 2 (0xbf, UP with
-# switches 6-10) twice and row 1 (0xdf, DOWN with switches 1-5) once, each a tap. Each
-# bank change loads the new bank (the EEPROM is not simulated, so the defaults, whose
-# CCs keep their states) and sends nothing. The bank (hal_bank) is read back from RAM.
-BANK_ADDR=$((16#$(awk '/_hal_bank:/ {print $1}' build/hw.rst | head -1)))
+echo "scenario 13: by default (DIRECT SELECT dark) UP and DOWN change footswitch bank, not program"
+# Row 2 (0xbf, UP with switches 6-10) three times and row 1 (0xdf, DOWN with switches
+# 1-5) once, each a tap. Each bank change loads the new bank (the EEPROM is not
+# simulated, so the defaults, whose CCs keep their states) and sends nothing. The bank
+# (hal_bank) is read back from RAM.
 {
     echo "set hardware port[1] 0x9f"; echo "step 800000"
-    echo "set hardware port[1] 0xff"; echo "step $TAP_STEPS"
-    echo "set hardware port[1] 0x9f"; echo "step 400000"
-    echo "dump iram $BANK_ADDR $BANK_ADDR 1"
-    for row in 0xbf 0xbf 0xdf; do
+    for row in 0xbf 0xbf 0xbf 0xdf; do
         echo "set hardware port[1] $row"; echo "step $TAP_STEPS"
         echo "set hardware port[1] 0x9f"; echo "step 400000"
         echo "dump iram $BANK_ADDR $BANK_ADDR 1"
@@ -474,7 +500,7 @@ BANK_ADDR=$((16#$(awk '/_hal_bank:/ {print $1}' build/hw.rst | head -1)))
 } > "$TMP/s13.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s13.out" "$IHX" < "$TMP/s13.txt" > "$TMP/s13.console" 2>&1
 BANKS13=$(grep -E "^0x$(printf '%02x' "$BANK_ADDR") " "$TMP/s13.console" | awk '{print $2}' | tr '\n' ' ')
-check "bank after the chord, UP, UP, DOWN (1 2 3 2, stored from 0)" "$BANKS13" "00 01 02 01 "
+check "bank after UP, UP, UP, DOWN (2 3 4 3, stored from 0)" "$BANKS13" "01 02 03 02 "
 check "no program change was sent" "$(messages "$TMP/s13.out" | tr ' ' '\n' | grep -c '^c')" "0"
 MAXSP13=$(grep -E "Max value of stack pointer" "$TMP/s13.console" | tail -1 | sed -E 's/.*= *0x0*([0-9a-fA-F]+),.*/\1/')
 if [ -n "$MAXSP13" ] && [ "$((16#$MAXSP13))" -le 240 ]; then
@@ -489,14 +515,14 @@ echo "scenario 14: a bank change keeps each CC's state (nothing is sent)"
 # release and is off once let go, so the expected states and count do not apply; the host
 # tests (test_banks, test_cc_memory) cover the carry-over in every mode.
 if [ "$DEF" = "0" ] || [ "$DEF" = "1" ]; then
-# The chord turns all ten stomps on (and bank select on). Each later tap of row 2 (0xbf,
-# UP with switches 6-10) or row 1 (0xdf, DOWN with switches 1-5) toggles those five and
-# changes bank. Every bank has the default CCs (no EEPROM), so the states carry over:
-# stomp_state and hal_bank are read back from RAM after each step.
+# Each tap of row 2 (0xbf, UP with switches 6-10) or row 1 (0xdf, DOWN with switches 1-5)
+# toggles those five and changes bank (bank mode is the default). Every bank has the
+# default CCs (no EEPROM), so the states carry over: stomp_state and hal_bank are read
+# back from RAM after each step.
 SS_ADDR=$((16#$(awk '/_stomp_state:/ {print $1}' build/ctl.rst | head -1)))
 {
     echo "set hardware port[1] 0x9f"; echo "step 800000"
-    for row in 0xff 0xbf 0xdf 0xbf; do
+    for row in 0xbf 0xdf 0xbf 0xdf; do
         echo "set hardware port[1] $row"; echo "step $TAP_STEPS"
         echo "set hardware port[1] 0x9f"; echo "step 400000"
         echo "dump iram $SS_ADDR $((SS_ADDR + 1)) 2"
@@ -506,10 +532,10 @@ SS_ADDR=$((16#$(awk '/_stomp_state:/ {print $1}' build/ctl.rst | head -1)))
 } > "$TMP/s14.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s14.out" "$IHX" < "$TMP/s14.txt" > "$TMP/s14.console" 2>&1
 STATES14=$(grep -E "^0x($(printf '%02x' "$SS_ADDR")|$(printf '%02x' "$BANK_ADDR")) " "$TMP/s14.console" | awk '{printf "%s ", ($3 == "" || $3 == ".") ? $2 : $2 $3}')
-check "states and bank after chord, UP row, DOWN row, UP row (all on in 1; 1-5 in 2; none in 1; 6-10 in 2)" \
-      "$STATES14" "ff03 00 1f00 01 0000 00 e003 01 "
-check "the bank changes sent only the footswitch taps' own CCs (25 messages)" \
-      "$(messages "$TMP/s14.out" | wc -w)" "25"
+check "states and bank after UP row, DOWN row, UP row, DOWN row (6-10 on in 2; all in 1; 1-5 in 2; none in 1)" \
+      "$STATES14" "e003 01 ff03 00 1f00 01 0000 00 "
+check "the bank changes sent only the footswitch taps' own CCs (20 messages)" \
+      "$(messages "$TMP/s14.out" | wc -w)" "20"
 else
     echo "  skip (default pedal mode $DEF is momentary)"
 fi
