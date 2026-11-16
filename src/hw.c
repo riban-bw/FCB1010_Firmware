@@ -128,22 +128,36 @@ static void clear_digit(uint8_t digit)
     led_map[digit] = 0xFF;
 }
 
+// Digits by subtraction: an 8-bit division would pull in SDCC's 16-bit library routines.
 void hal_display(uint8_t value)
 {
-    if (value >= 100)
+    uint8_t d = 0;
+
+    while (value >= 100)
     {
-        set_digit(2, (uint8_t)(value / 100));
-        value = (uint8_t)(value % 100);
+        value = (uint8_t)(value - 100);
+        d++;
+    }
+
+    if (d)
+    {
+        set_digit(2, d);
+        d = 0;
     }
     else
     {
         clear_digit(2);
     }
 
-    if (value >= 10 || led_map[2] != 0xFF)
+    while (value >= 10)
     {
-        set_digit(1, (uint8_t)(value / 10));
-        value = (uint8_t)(value % 10);
+        value = (uint8_t)(value - 10);
+        d++;
+    }
+
+    if (d || led_map[2] != 0xFF)
+    {
+        set_digit(1, d);
     }
     else
     {
@@ -252,11 +266,10 @@ static uint8_t ticks_seen;
 static uint8_t scan_row;
 static uint8_t scan_common;
 static uint8_t scan_key;
+static uint8_t scan_idx;
 static uint8_t scan_column;
 // Relay outputs: bits 0 and 1 of the key column latch
 static volatile uint8_t relay_bits;
-static volatile BIT_T lamp_all_on;
-static volatile BIT_T lamp_all_off;
 static volatile BIT_T lamp_leds_on;
 static volatile BIT_T lamp_stomps;
 
@@ -264,7 +277,12 @@ static volatile BIT_T lamp_stomps;
 static XDATA uint8_t hold[KEY_COUNT];
 
 // Debounce, hold and event rules are shared with the host tests and emulator (keys.h).
-#define PUSH_EVENT(e)  KEY_EVQ_PUSH(evq, evq_head, evq_tail, e)
+// KEY_SCAN checks the queue has room first.
+#define PUSH_EVENT(e)                                                          \
+    do {                                                                       \
+        evq[evq_head] = (e);                                                   \
+        evq_head = (uint8_t)((evq_head + 1) & KEY_EVQ_MASK);                   \
+    } while (0)
 #define SCAN_KEY(idx, level) \
     KEY_SCAN(hist, hold, idx, ((level) == KEY_ACTIVE_LEVEL ? 1 : 0), PUSH_EVENT, KEY_EVQ_FULL(evq_head, evq_tail))
 
@@ -281,15 +299,14 @@ void timer0_isr(void) __interrupt(1)
     PERIPHERALS[P_DUMMY_MUX]      = 0;
     PERIPHERALS[P_LATCH_SEGMENTS] = 0xFF;
     PERIPHERALS[P_LATCH_COMMONS]  = scan_common;
-    // A cleared bit lights, so 0x00 lights the whole row and 0xFF darkens it
-    PERIPHERALS[P_LATCH_SEGMENTS] = lamp_all_on ? 0x00 : (lamp_all_off ? 0xFF :
-                                    ((lamp_leds_on && scan_row >= 3) ?
-                                     // Every LED lit except CONFIG (it flashes for
-                                     // unsaved changes) and, in HAL_LAMP_LEDS_STOMPS,
-                                     // the footswitch LEDs, which keep their own state.
-                                     (led_map[scan_row] & (lamp_stomps ? lamp_keep_stomps[scan_row - 3] :
-                                                                         lamp_keep_leds[scan_row - 3])) :
-                                     led_map[scan_row]));
+    // A cleared bit lights, so 0x00 lights the whole row.
+    PERIPHERALS[P_LATCH_SEGMENTS] = (lamp_leds_on && scan_row >= 3) ?
+                                    // Every LED lit except CONFIG (it flashes for
+                                    // unsaved changes) and, in HAL_LAMP_LEDS_STOMPS,
+                                    // the footswitch LEDs, which keep their own state.
+                                    (led_map[scan_row] & (lamp_stomps ? lamp_keep_stomps[scan_row - 3] :
+                                                                        lamp_keep_leds[scan_row - 3])) :
+                                    led_map[scan_row];
     PERIPHERALS[P_DUMMY_MUX]      = 0;
 
     scan_row++;
@@ -307,8 +324,14 @@ void timer0_isr(void) __interrupt(1)
     PERIPHERALS[P_LATCH_KEY_COLUMNS] = (uint8_t)(scan_column | relay_bits);
     PERIPHERALS[P_DUMMY_MUX]         = 0;
 
-    SCAN_KEY(scan_key,     P1_6);
-    SCAN_KEY(scan_key + 6, P1_5);
+    // Both rows through one copy of the scan: key k on P1.6, then key k + 6 on P1.5.
+    scan_idx = scan_key;
+
+    do
+    {
+        SCAN_KEY(scan_idx, (scan_idx < KEY_SCAN_SLOTS) ? P1_6 : P1_5);
+        scan_idx = (uint8_t)(scan_idx + KEY_SCAN_SLOTS);
+    } while (scan_idx < KEY_COUNT);
 
     scan_key++;
     scan_column <<= 1;
@@ -324,8 +347,6 @@ void timer0_isr(void) __interrupt(1)
 
 void hal_lamp_test(uint8_t how)
 {
-    lamp_all_on  = (how == HAL_LAMP_ALL_ON);
-    lamp_all_off = (how == HAL_LAMP_ALL_OFF);
     lamp_leds_on = (how == HAL_LAMP_LEDS_ON || how == HAL_LAMP_LEDS_STOMPS);
     lamp_stomps  = (how == HAL_LAMP_LEDS_STOMPS);
 }
@@ -444,7 +465,7 @@ void hal_midi_tx(uint8_t byte)
     ES = 1;
 }
 
-uint8_t hal_midi_rx(uint8_t *byte)
+uint8_t hal_midi_rx(IDATA uint8_t *byte)
 {
     if (rx_tail == rx_head)
     {
@@ -714,15 +735,18 @@ static uint8_t rec_byte(uint8_t rec, uint8_t i)
     return (uint8_t)(rec_magic[rec] ^ hal_rec[0] ^ hal_rec[1] ^ hal_rec[2] ^ hal_rec[3] ^ rec_salt[rec]);
 }
 
+// The device address byte (write) of the record being accessed, set by rec_address.
+static uint8_t rec_control;
+
 // Start a transfer at record rec's first byte; eeprom_ok = 1 if the EEPROM acknowledged.
-// A macro, not a function: the EEPROM accesses are the main line's deepest stack use,
-// and a call level would add two bytes to every one.
-#define REC_ADDRESS(rec)                                                                     \
-    do {                                                                                     \
-        ADC_CS = 1;                                                                          \
-        i2c_start();                                                                         \
-        eeprom_ok = (i2c_write(REC_CONTROL(rec_slot(rec))) && i2c_write(REC_LOW(rec_slot(rec)))) ? 1 : 0; \
-    } while (0)
+static void rec_address(uint8_t rec)
+{
+    rec = rec_slot(rec);
+    rec_control = REC_CONTROL(rec);
+    ADC_CS = 1;
+    i2c_start();
+    eeprom_ok = (i2c_write(rec_control) && i2c_write(REC_LOW(rec))) ? 1 : 0;
+}
 
 // Set by hal_rec_save for its read-back: hal_rec_load then compares every byte with what
 // was written instead of loading it.
@@ -739,12 +763,12 @@ uint8_t hal_rec_load(uint8_t rec)
 
     if (rec < HAL_RECORDS)
     {
-        REC_ADDRESS(rec);
+        rec_address(rec);
 
         if (eeprom_ok)
         {
             i2c_start();
-            eeprom_ok = i2c_write((uint8_t)(REC_CONTROL(rec_slot(rec)) | 1)) ? 1 : 0;
+            eeprom_ok = i2c_write((uint8_t)(rec_control | 1)) ? 1 : 0;
         }
     }
 
@@ -786,7 +810,7 @@ uint8_t hal_rec_save(uint8_t rec)
         return 0;
     }
 
-    REC_ADDRESS(rec);
+    rec_address(rec);
 
     for (i = 0; i < REC_LENGTH && eeprom_ok; i++)
     {
@@ -804,7 +828,7 @@ uint8_t hal_rec_save(uint8_t rec)
     for (tries = 0; tries < 5000; tries++)
     {
         i2c_start();
-        eeprom_ok = i2c_write(REC_CONTROL(rec_slot(rec))) ? 1 : 0;
+        eeprom_ok = i2c_write(rec_control) ? 1 : 0;
         i2c_stop();
 
         if (eeprom_ok)

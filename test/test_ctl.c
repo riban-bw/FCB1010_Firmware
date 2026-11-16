@@ -3699,10 +3699,27 @@ static void test_pc_mode(void)
     clear_log();
     tap(sw_code(10));
     CHECK(pc_typing && display == SHOWN_TEXT(HAL_TEXT_DASHES) && midi_len == 0);
+    // The right-hand dot flashes until the number is complete, starting lit.
+    CHECK(dots == 0x01);
+    ticks(CHAN_FLASH_TICKS - 1);
+    CHECK(dots == 0x01);
+    ticks(1);
+    CHECK(dots == 0);
+    ticks(CHAN_FLASH_TICKS);
+    CHECK(dots == 0x01);
     pc_digits("12");
-    CHECK(pc_typing && display == 12 && midi_len == 0 && program == SHOWN_PC(9));
+    CHECK(pc_typing && display == 12 && midi_len == 0 && program == SHOWN_PC(9) && dots == 0x01);
+    ticks(CHAN_FLASH_TICKS);
+    CHECK(dots == 0);
+    ticks(CHAN_FLASH_TICKS);
+    CHECK(dots == 0x01);
     pc_digits("3");
     CHECK(!pc_typing && midi_len == 2 && midi_log[1] == SHOWN_PC(123) && display == 123 && program == SHOWN_PC(123));
+    // Complete: the dot goes out on the next tick and stays out.
+    ticks(1);
+    CHECK(dots == 0);
+    ticks(CHAN_FLASH_TICKS * 3);
+    CHECK(dots == 0);
     // 5, 6: 56 is complete (no third digit fits), sent at once.
     clear_log();
     pc_digits("056");
@@ -3718,6 +3735,8 @@ static void test_pc_mode(void)
     pc_digits("04");
     tap(CTL_KEY_DOWN);
     CHECK(!pc_typing && midi_len == 0 && display == 1 && program == SHOWN_PC(1));
+    ticks(1);
+    CHECK(dots == 0);
     // UP with no digit typed: nothing sent, back to the current program.
     tap(sw_code(10));
     tap(CTL_KEY_UP);
@@ -3775,7 +3794,7 @@ static void test_pc_mode(void)
     chord_short();
     pc_digits("05");
     chord_long();
-    CHECK(mode == MODE_CONFIG && !pc_typing);
+    CHECK(mode == MODE_CONFIG && !pc_typing && dots == 0);
     cancel_exit();
     CHECK(mode == MODE_RUN && pc_mode && aux[HAL_LED_DIRECT_SELECT] == 1 && display == SHOWN_PC(2) + DISPLAY_PROGRAM_OFFSET);
 

@@ -93,7 +93,7 @@ uint8_t hal_midi_space(void)
     return (uint8_t)((MIDI_TX_QUEUE - 1) - ((tx_head - tx_tail) & TX_MASK));
 }
 
-uint8_t hal_midi_rx(uint8_t *byte)
+uint8_t hal_midi_rx(IDATA uint8_t *byte)
 {
     if (rx_tail == rx_head)
     {

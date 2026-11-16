@@ -3,7 +3,7 @@
 #include "keys.h"
 
 // Portable key scanner for the host tests and the browser emulator. It runs the same
-// KEY_SCAN and KEY_EVQ_PUSH macros as the firmware's scan interrupt (hw.c), in the same
+// KEY_SCAN macro as the firmware's scan interrupt (hw.c), in the same
 // order: one column per tick, keys k and k + 6 together. Not part of the 8051 build.
 
 static uint8_t hist[KEY_COUNT];
@@ -13,7 +13,12 @@ static uint8_t evq_head;
 static uint8_t evq_tail;
 static uint8_t scan_key;
 
-#define PUSH_EVENT(e)  KEY_EVQ_PUSH(evq, evq_head, evq_tail, e)
+// KEY_SCAN checks the queue has room first.
+#define PUSH_EVENT(e)                                                          \
+    do {                                                                       \
+        evq[evq_head] = (e);                                                   \
+        evq_head = (uint8_t)((evq_head + 1) & KEY_EVQ_MASK);                   \
+    } while (0)
 
 void keys_init(void)
 {

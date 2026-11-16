@@ -10,7 +10,7 @@
 void    hal_midi_tx(uint8_t byte);
 
 // Fetch one received MIDI IN byte. Returns 1 and fills *byte, or 0 if none waiting.
-uint8_t hal_midi_rx(uint8_t *byte);
+uint8_t hal_midi_rx(IDATA uint8_t *byte);
 
 // Number of bytes that can still be queued for MIDI OUT.
 uint8_t hal_midi_space(void);
@@ -97,15 +97,13 @@ void    hal_display_hex(uint8_t value);
 void    hal_display_dots(uint8_t mask);
 
 #define HAL_LAMP_NORMAL   0
-#define HAL_LAMP_ALL_ON   1
-#define HAL_LAMP_ALL_OFF  2
+// 1 and 2 were every LED and segment lit / dark, no longer used.
 #define HAL_LAMP_LEDS_ON  3
 // As HAL_LAMP_LEDS_ON, but the footswitch LEDs also follow hal_stomp_led().
 #define HAL_LAMP_LEDS_STOMPS 4
 
-// Lamp test: light every LED and display segment, turn them all off, light every LED
-// but show the display normally, or go back to showing the normal LED and display
-// state (which is kept meanwhile).
+// Lamp test: light every LED but show the display normally, or go back to showing the
+// normal LED and display state (which is kept meanwhile).
 // HAL_LAMP_LEDS_ON leaves the CONFIG LED following hal_status_led(), so it can
 // still flash for unsaved changes on the version page.
 void    hal_lamp_test(uint8_t how);

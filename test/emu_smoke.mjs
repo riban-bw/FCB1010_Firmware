@@ -189,10 +189,16 @@ press(2, 60);
 check("footswitch 3 sends program 3 at once, toggling no stomp", [sent(), fcb.hw.display, fcb.hw.leds[2]], [["c0 03"], 3, 0]);
 press(10, 60);
 check("footswitch 10 shows -- and sends nothing", [fcb.hw.text, sent()], [TEXT_DASHES, []]);
+// The right-hand dot flashes while the number is incomplete.
+const dotSeen = [];
+for (let t = 0; t < 600; t += 50) { wait(50); dotSeen.push(fcb.hw.dots & 1); }
+check("the right-hand dot flashes while typing", dotSeen.includes(0) && dotSeen.includes(1), true);
 wait(50);
 check("the hint says a number is being typed", /typing a program number/.test(sandbox.document.getElementById("hint").textContent), true);
 typeDigits(56);
 check("5, 6: 56 is complete, sent at once", [sent(), fcb.hw.display], [["c0 38"], 56]);
+wait(600);
+check("and the dot is out once it is complete", fcb.hw.dots, 0);
 press(10, 60); typeDigits(123);
 check("10, 1, 2, 3: 123 is sent", [sent(), fcb.hw.display], [["c0 7b"], 123]);
 press(10, 60); typeDigits(4); press(DOWN, 100);

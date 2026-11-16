@@ -38,17 +38,7 @@
 // 1 if a ring buffer of KEY_EVENT_QUEUE bytes has no room for another event.
 #define KEY_EVQ_FULL(head, tail)  ((((head) + 1) & KEY_EVQ_MASK) == (tail))
 
-// Add an event to a ring buffer of KEY_EVENT_QUEUE bytes; dropped if the queue is full.
-#define KEY_EVQ_PUSH(q, head, tail, e)                                         \
-    do {                                                                       \
-        if ((((head) + 1) & KEY_EVQ_MASK) != (tail))                           \
-        {                                                                      \
-            (q)[head] = (uint8_t)(e);                                          \
-            (head) = (uint8_t)(((head) + 1) & KEY_EVQ_MASK);                   \
-        }                                                                      \
-    } while (0)
-
-// One scan of one key. hist[idx]: bits 0..6 are the most recent samples, bit 7 the pressed
+// One scan of one key (push is called only when full is 0, so it need not check). hist[idx]: bits 0..6 are the most recent samples, bit 7 the pressed
 // state. hold[idx]: scans the key has been down since its debounced press (stops counting
 // at the threshold). pressed is 1 if the key reads as pressed now. push is the name of a
 // one-argument macro that queues an event, full an expression that is 1 while the queue
@@ -59,38 +49,46 @@
 // delayed, not lost.
 #define KEY_SCAN(hist, hold, idx, pressed, push, full)                         \
     do {                                                                       \
-        /* One local (the state in bit 7, the samples below): with two, the */ \
-        /* 8051 interrupt spills one to RAM, which raises the stack start. */  \
+        /* The state in bit 7, the samples below; e_ the event to queue. */    \
         uint8_t h_ = (hist)[idx];                                              \
+        uint8_t e_ = KEY_EV_NONE;                                              \
         h_ = (uint8_t)((h_ & 0x80) | (((h_ << 1) | (pressed)) & KEY_DEBOUNCE_MASK)); \
         if ((h_ & KEY_DEBOUNCE_MASK) == KEY_DEBOUNCE_MASK)                     \
         {                                                                      \
             if (!(h_ & 0x80))                                                  \
             {                                                                  \
-                if (!(full))                                                   \
-                {                                                              \
-                    h_ |= 0x80;                                                \
-                    (hold)[idx] = 0;                                           \
-                    push((idx) | KEY_EV_PRESS);                                \
-                }                                                              \
+                e_ = KEY_EV_PRESS;                                             \
             }                                                                  \
             else if ((uint8_t)((hold)[idx] + 1) < KEY_HOLD_SCANS)              \
             {                                                                  \
                 (hold)[idx]++;                                                 \
             }                                                                  \
-            else if ((hold)[idx] < KEY_HOLD_SCANS && !(full))                  \
+            else if ((hold)[idx] < KEY_HOLD_SCANS)                             \
             {                                                                  \
-                (hold)[idx]++;                                                 \
-                push((idx) | KEY_EV_HOLD);                                     \
+                e_ = KEY_EV_HOLD;                                              \
             }                                                                  \
         }                                                                      \
-        else if ((h_ & KEY_DEBOUNCE_MASK) == 0)                                \
+        else if ((h_ & KEY_DEBOUNCE_MASK) == 0 && (h_ & 0x80))                 \
         {                                                                      \
-            if ((h_ & 0x80) && !(full))                                        \
+            e_ = KEY_EV_RELEASE;                                               \
+        }                                                                      \
+        /* An event changes the state only once it is queued. */              \
+        if (e_ != KEY_EV_NONE && !(full))                                      \
+        {                                                                      \
+            if (e_ == KEY_EV_PRESS)                                            \
+            {                                                                  \
+                h_ |= 0x80;                                                    \
+                (hold)[idx] = 0;                                               \
+            }                                                                  \
+            else if (e_ == KEY_EV_HOLD)                                        \
+            {                                                                  \
+                (hold)[idx]++;                                                 \
+            }                                                                  \
+            else                                                               \
             {                                                                  \
                 h_ &= 0x7F;                                                    \
-                push((idx) | KEY_EV_RELEASE);                                  \
             }                                                                  \
+            push((uint8_t)((idx) | e_));                                       \
         }                                                                      \
         (hist)[idx] = h_;                                                      \
     } while (0)

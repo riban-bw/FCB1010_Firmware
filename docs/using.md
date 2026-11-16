@@ -69,7 +69,7 @@ In program mode UP and DOWN step the program number by one, from 0 to 127 (stopp
 The footswitches choose a program directly, as numbers (the footswitch effects are left as they are, and their LEDs keep showing them):
 
 - **Footswitches 1 to 9** send programs 1 to 9 straight away.
-- **Footswitch 10** starts a longer number: the display shows `--`. Then type the digits with the footswitches (1 to 9 are digits 1 to 9, 10 is 0). The program is sent as soon as no more digits would fit, so 5, 6 sends 56 and 1, 2, 3 sends 123 (13 and up, or three digits). For a shorter number, such as 12 or 0, type it and press UP (ENTER). Press DOWN (ESCAPE) to give up: nothing is sent and the display shows the current program again.
+- **Footswitch 10** starts a longer number: the display shows `--`, and the dot at the right flashes until the number is sent or dropped. Then type the digits with the footswitches (1 to 9 are digits 1 to 9, 10 is 0). The program is sent as soon as no more digits would fit, so 5, 6 sends 56 and 1, 2, 3 sends 123 (13 and up, or three digits). For a shorter number, such as 12 or 0, type it and press UP (ENTER). Press DOWN (ESCAPE) to give up: nothing is sent and the display shows the current program again.
 
 ## Footswitch banks
 
