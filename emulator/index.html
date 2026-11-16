@@ -283,10 +283,10 @@ kbd { font: 500 11px var(--font-mono); background: var(--log-bg); border: 1px so
       <div class="scroll">
         <h3>Footswitches</h3>
         <table>
-          <thead><tr><th></th><th>Mode</th><th>Message</th><th>Number</th><th>On value</th><th>Off value</th></tr></thead>
+          <thead><tr><th></th><th>Mode</th><th>Message</th><th>Number</th><th>ON Value</th><th>OFF Value</th></tr></thead>
           <tbody id="cfSwitches"></tbody>
         </table>
-        <p class="note">For a program change, On value is the program sent when the switch turns on and Off value the one sent when it turns off (Number is not used); with both the same it is one program, sent on every press.</p>
+        <p class="note">For a program change, ON value is the program sent when the switch turns on and OFF Value the one sent when it turns off (Number is not used); with both the same it is one program, sent on every press.</p>
       </div>
       <div class="scroll">
         <h3>Relays</h3>
@@ -1015,7 +1015,7 @@ kbd { font: 500 11px var(--font-mono); background: var(--log-bg); border: 1px so
       $("cfNum" + i).disabled = prog;
       $("cfNum" + i).title = prog ? "Not used by a program change" : "";
       $("cfOn" + i).title = prog ? "Program sent when the switch turns on" : "";
-      $("cfOff" + i).title = prog ? "Program sent when it turns off (the same as On value: one program, sent on every press)" : "";
+      $("cfOff" + i).title = prog ? "Program sent when it turns off (the same as ON Value: one program, sent on every press)" : "";
     }
     for (var r = 0; r < 2; r++) {
       for (i = 0; i <= 10; i++) $("cfF" + r + "_" + i).checked = !!v[(r ? NP.FOLLOW2 : NP.FOLLOW1) + i];
