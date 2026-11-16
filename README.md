@@ -7,7 +7,7 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 ## Features
 
 - 10 footswitches, each sending its own MIDI controller (CC), note or program change, with a choice of four switch behaviours
-- 25 banks of footswitch settings, chosen with UP and DOWN
+- 40 banks of footswitch settings, chosen with UP and DOWN
 - Program mode (UP + DOWN tapped): program change from UP and DOWN, with fast scrolling when held, or typed on the footswitches
 - 2 expression pedals
 - 2 relay outputs (the SWITCH 1 and SWITCH 2 jacks), triggered by any footswitch or pedal, to switch amp channels or other gear

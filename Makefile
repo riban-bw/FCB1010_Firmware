@@ -59,7 +59,7 @@ $(OUT):
 	mkdir -p $(OUT)
 
 # main.rel must be linked first so the interrupt vector table lands at address 0.
-$(OUT)/%.rel: src/%.c src/*.h | $(OUT)
+$(OUT)/%.rel: src/%.c src/*.h src/eeprom.inc | $(OUT)
 	$(SDCC) $(SDCCFLAGS) -c $< -o $@
 
 # Each link of the image is a new build: tools/bump_build.py adds one to the build
@@ -108,7 +108,7 @@ $(OUT)/sram_probe.rel: probe/sram_probe.c src/*.h | $(OUT)
 # RAM (NO_XDATA) with the old small queues.
 PROBE_HW_FLAGS := -DNO_XDATA -DMIDI_TX_QUEUE=16 -DMIDI_RX_QUEUE=8 -DKEY_EVENT_QUEUE=8
 
-$(OUT)/hw_probe.rel: src/hw.c src/*.h | $(OUT)
+$(OUT)/hw_probe.rel: src/hw.c src/*.h src/eeprom.inc | $(OUT)
 	$(SDCC) $(SDCCFLAGS) $(PROBE_HW_FLAGS) -c $< -o $@
 
 # sram_probe.rel first so the interrupt vector table lands at address 0.
@@ -127,13 +127,17 @@ $(OUT)/probe_27c256.bin: $(OUT)/probe_raw.bin tools/rom_image.py
 $(OUT)/probe_27c512.bin: $(OUT)/probe_raw.bin tools/rom_image.py
 	python3 -I tools/rom_image.py $< $(ROM_SIZE) 65536 $@
 
-test: $(OUT)/test_ctl $(OUT)/test_keys $(OUT)/test_probe
+test: $(OUT)/test_ctl $(OUT)/test_keys $(OUT)/test_probe $(OUT)/test_eeprom
 	$(OUT)/test_ctl
 	$(OUT)/test_keys
 	$(OUT)/test_probe
+	$(OUT)/test_eeprom
 
 $(OUT)/test_probe: test/test_probe.c probe/sram_probe.c | $(OUT)
 	$(HOSTCC) -std=c99 -Wall -Wextra -Wno-unused-function test/test_probe.c -o $@
+
+$(OUT)/test_eeprom: test/test_eeprom.c src/eeprom.inc src/*.h | $(OUT)
+	$(HOSTCC) -std=c99 -Wall -Wextra -Isrc test/test_eeprom.c -o $@
 
 $(OUT)/test_ctl: test/test_ctl.c src/ctl.c src/version.c src/version_build.inc src/*.h | $(OUT)
 	$(HOSTCC) -std=c99 -Wall -Wextra -Isrc test/test_ctl.c -o $@

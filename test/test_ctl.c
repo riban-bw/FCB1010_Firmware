@@ -3879,6 +3879,29 @@ static void test_bank_pc(void)
     ticks(1);
     CHECK(dots == 0 && !pc_typing);
 
+    // "--" starts when footswitch 10 is let go with UP and DOWN up: 10 pressed and let go
+    // while UP is held, or UP tapped while 10 is held, only changes page.
+    tap(sw_code(9));
+    tap(sw_code(9));
+    CHECK(bank_pc == 100 && !edit_typing);
+    ctl_key_press(CTL_KEY_UP);
+    tap(sw_code(10));
+    CHECK(!pc_typing && display == 99);
+    ctl_key_release(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_VERSION && bank_pc == 100);
+    tap(CTL_KEY_DOWN);
+    CHECK(cfg_page == PAGE_BANK_PC);
+    ctl_key_press(sw_code(10));
+    CHECK(!pc_typing && display == 99);
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_VERSION);
+    ctl_key_release(sw_code(10));
+    CHECK(!pc_typing && cfg_page == PAGE_VERSION);
+    tap(CTL_KEY_DOWN);
+    tap(sw_code(10));
+    tap(CTL_KEY_UP);
+    CHECK(bank_pc == 0 && cfg_page == PAGE_BANK_PC);
+
     // A long UP still saves and leaves during a "--" entry, which is dropped.
     tap(sw_code(10));
     long_nav(CTL_KEY_UP);

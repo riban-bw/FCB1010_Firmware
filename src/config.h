@@ -68,11 +68,12 @@
 #define NOTE_BANK_2         4
 #define NOTE_BANK_2_FIRST   60
 
-// Footswitch banks: while DIRECT SELECT is lit (the UP + DOWN toggle), UP / DOWN choose
-// one of this many banks, each with its own message and pedal mode for every footswitch.
-// Each bank takes ten 8-byte records of the 2KB settings EEPROM, so 1 to 25 fit.
+// Footswitch banks: in bank mode (the default, DIRECT SELECT dark; a tap of UP + DOWN
+// switches to program mode and back), UP / DOWN choose one of this many banks, each with
+// its own message and pedal mode for every footswitch. Each bank takes 50 bytes (ten
+// 5-byte records) of the 2KB settings EEPROM, so 1 to 40 fit.
 #ifndef BANK_COUNT
-#define BANK_COUNT 25
+#define BANK_COUNT 40
 #endif
 
 // Controller numbers sent by expression pedal A and pedal B.

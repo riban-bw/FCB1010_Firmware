@@ -342,6 +342,8 @@ static IDATA uint8_t  pc_entry;
 // The right-hand dot flashes while a number is being typed (user's request); this is
 // whether it is shown. Its timer is chan_flash_ticks, idle in run mode once power-on ends.
 static BIT_T          pc_dot;
+// Page 7: footswitch 10 pressed with no number being typed; its release starts "--".
+static BIT_T          bank_none_ready;
 #define PC_ENTRY_NONE 0xFF
 #define PC_SHOWN_MAX  (127 + DISPLAY_PROGRAM_OFFSET)
 // Whether a typed (shown) number is a program: with no offset every number is.
@@ -2340,9 +2342,28 @@ void ctl_key_release(uint8_t code)
         return;
     }
 
-    // Modes page: releasing the selected switch after a short press changes its mode.
     if (mode == MODE_CONFIG)
     {
+        // Page 7: footswitch 10 let go with UP and DOWN up (so "10, then UP", not the two
+        // together, which only changes page) shows "--", the right-hand dot flashing: UP
+        // then turns the bank's program change off.
+        if (bank_none_ready && index == STOMP_COUNT - 1)
+        {
+            bank_none_ready = 0;
+
+            if (keys_down == 0 && cfg_page == PAGE_BANK_PC)
+            {
+                pc_typing        = 1;
+                pc_dot           = 1;
+                chan_flash_ticks = 0;
+                hal_display_text(HAL_TEXT_DASHES);
+                hal_display_dots(1);
+            }
+
+            return;
+        }
+
+        // Modes page: releasing the selected switch after a short press changes its mode.
         if (mode_press_live && index == cfg_sel)
         {
             mode_press_live = 0;
@@ -2447,19 +2468,16 @@ void ctl_key_press(uint8_t code)
             version_jump(stomp_index(code));
         }
         // Page 7: types a digit of the bank's program change. Footswitch 10 with no number
-        // being typed shows "--" (the right-hand dot flashing): UP then turns the program
-        // change off; a digit starts a number (10 again is 0).
+        // being typed shows "--" on its release (below); a digit then starts a number (10
+        // again is 0).
         else if (cfg_page == PAGE_BANK_PC)
         {
             index = stomp_index(code);
+            bank_none_ready = 0;
 
             if (index == STOMP_COUNT - 1 && !edit_typing && !pc_typing)
             {
-                pc_typing        = 1;
-                pc_dot           = 1;
-                chan_flash_ticks = 0;
-                hal_display_text(HAL_TEXT_DASHES);
-                hal_display_dots(1);
+                bank_none_ready = 1;
             }
             else
             {

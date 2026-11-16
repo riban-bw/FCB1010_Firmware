@@ -20,7 +20,7 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 12.3KB (12613 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 12.6KB (12857 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
 
 Each build also updates the documentation: the code size above, the firmware version on configuration page 8 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
@@ -41,7 +41,7 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `MOMENTARY_HOLD_MS` | 600 | Long press time (ms): stomp with momentary reverts after it, and the configuration save / cancel hold |
 | `CONFIG_HOLD_MS` | 1000 | UP + DOWN hold (ms) that opens configuration mode |
 | `PROGRAM_WRAP` | 0 | 1: program change wraps between 127 and 0 (and the bank between the last and 1); 0: both stop at the ends |
-| `BANK_COUNT` | 25 | Number of footswitch banks, 1 to 25 (each takes ten 8-byte EEPROM records; 25 is all that fit below the shared records) |
+| `BANK_COUNT` | 40 | Number of footswitch banks, 1 to 40 (each takes 50 bytes of the EEPROM, ten 5-byte records; 40 is all that fit below the shared records) |
 | `NOTE_BANK_1` | 3 | A bank (1 to `BANK_COUNT`, 0 for none) whose footswitches default to momentary notes until it is saved, footswitch 1 playing the first note and each next one a note higher |
 | `NOTE_BANK_1_FIRST` | 48 | The first note of that bank (up to 118) |
 | `NOTE_BANK_2` | 4 | A second such bank |
