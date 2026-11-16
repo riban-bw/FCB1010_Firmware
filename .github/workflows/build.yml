@@ -24,16 +24,16 @@ jobs:
       - name: Check out
         uses: actions/checkout@v6
 
-      # The README's version and config.h numbers are filled in by the build. If they
+      # The documentation's version and config.h numbers are filled in by the build. If they
       # differ from what was committed, the commit was made without running make first.
       # (The size sentence is left out: it is checked by the build itself.)
-      - name: README matches config.h and version.h
+      - name: Documentation matches config.h and version.h
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          python3 -I tools/readme_version.py src/version.h src/version_build.inc README.md
-          python3 -I tools/readme_config.py src/config.h README.md
-          if ! git diff --exit-code README.md; then
-            echo "::error file=README.md::README.md is out of date with src/config.h or the version: run make and commit README.md"
+          python3 -I tools/readme_version.py src/version.h src/version_build.inc docs/configuration.md
+          python3 -I tools/readme_config.py src/config.h README.md docs/*.md
+          if ! git diff --exit-code README.md docs; then
+            echo "::error::the documentation is out of date with src/config.h or the version: run make and commit README.md and docs/"
             exit 1
           fi
 

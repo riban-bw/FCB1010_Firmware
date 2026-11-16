@@ -2,7 +2,7 @@
 # Runs the real 8051 image in the uCsim simulator and checks the MIDI bytes.
 # The simulator cannot model the key-column latches, so pressing the key-row
 # line shows all six keys on that row (switches 1-5 and DOWN) as pressed at once.
-# Pedals and the settings EEPROM are not simulated; see README for what is untested.
+# Pedals and the settings EEPROM are not simulated; see docs/testing.md for what is untested.
 # Usage: test/sim_smoke.sh   (run from the project root after `make`)
 
 set -u

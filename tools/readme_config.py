@@ -1,18 +1,19 @@
 # Build hook: fill the README's numbers that come from src/config.h (timings, hold times,
-# CC numbers, channel, counts), so the README always describes the firmware that was
-# built. Usage: readme_config.py <config.h> <README.md>
+# CC numbers, channel, counts), so the documentation always describes the firmware that
+# was built. Usage: readme_config.py <config.h> <file.md>... (the README and docs/*.md)
 # Two kinds of update:
 # - The "Compile-time configuration" table: every row whose first cell is a `NAME`
 #   defined in config.h gets that definition in its second cell (a missing NAME prints a
 #   note).
 # - Numbers in the text: each is found by the words around it (the RULES below); only
 #   the number itself is rewritten, in every place the words match. A rule whose words are
-#   not found prints a note (the README was reworded) and changes nothing for that value.
-# The file is only written when something changes.
+#   found in none of the files prints a note (the text was reworded) and changes nothing
+#   for that value.
+# A file is only written when something changes.
 import re
 import sys
 
-config_h, readme = sys.argv[1], sys.argv[2]
+config_h, docs = sys.argv[1], sys.argv[2:]
 cfg_text = open(config_h).read()
 
 
@@ -119,14 +120,14 @@ RULES = [
     (r"Hold a footswitch for ([\d.]+ seconds?) to open its editor", [sec_words(hold)]),
 ]
 
-text = open(readme).read()
-new = text
+texts = {path: open(path).read() for path in docs}
+news = dict(texts)
 
 for pattern, values in RULES:
     regex = re.compile(pattern)
 
-    if not regex.search(new):
-        print("note: %s: no match for '%s'; that value is not filled in" % (readme, pattern))
+    if not any(regex.search(t) for t in news.values()):
+        print("note: no match in %s for '%s'; that value is not filled in" % (", ".join(docs), pattern))
         continue
 
     def fill(m):
@@ -139,7 +140,8 @@ for pattern, values in RULES:
 
         return out
 
-    new = regex.sub(fill, new)
+    for path in docs:
+        news[path] = regex.sub(fill, news[path])
 
 
 # Units follow the README style: no space between a number and a unit symbol (0.6s,
@@ -149,14 +151,16 @@ def table_row(m):
     value = define(m.group(1))
 
     if value is None:
-        print("note: %s: `%s` is in the option table but not defined in %s" % (readme, m.group(1), config_h))
+        print("note: `%s` is in an option table but not defined in %s" % (m.group(1), config_h))
         return m.group(0)
 
     return "| `%s` | %s |" % (m.group(1), value)
 
 
-new = re.sub(r"^\| `([A-Z][A-Z0-9_]*)` \| ([^|]*?) \|", table_row, new, flags=re.M)
+for path in docs:
+    # Only the option table: rows whose first cell is a bare `NAME`.
+    news[path] = re.sub(r"^\| `([A-Z][A-Z0-9_]*)` \| ([^|]*?) \|", table_row, news[path], flags=re.M)
 
-if new != text:
-    open(readme, "w").write(new)
-    print("updated the config.h values in " + readme)
+    if news[path] != texts[path]:
+        open(path, "w").write(news[path])
+        print("updated the config.h values in " + path)

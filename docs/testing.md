@@ -1,0 +1,20 @@
+# What has and has not been tested
+
+[Back to the README](../README.md)
+
+Tested:
+- The controller logic: stomp toggling, all four pedal modes, CC, note and program change footswitch messages and the footswitch editor (typed and pedal values, accept, revert, saved records), program change on release with auto-repeat, the UP + DOWN chord, every configuration page and its saved bytes, pedal scaling, hysteresis, calibration flow, a full MIDI buffer, bad input, and MIDI IN parsing including running status, split messages, real-time bytes, SysEx, other channels and the 63/64 threshold, plus the momentary long-press behaviour: every switch, two switches at once, duplicate or unmatched hold and release events, a full MIDI queue at press and at release, calibration, and incoming MIDI CC changes during a hold (`make test`).
+- The browser emulator, which runs the same control code, with a scripted smoke test (`make emulator`), including its MIDI configuration panel driving the emulated pedal (Find, read, set, save, discard).
+- Configuration over MIDI in the controller logic: every parameter, the dump and its pacing, a dump fed back in, selection and deselection, the commands, and the run-mode-only rule (`make test`).
+- Footswitch banks in the controller logic: choosing with UP / DOWN in bank mode (taps, held repeat, ends), states carried over by CC and note (nothing sent), resting states of the rest, program change switches, holds and pending reverts across a change, saving and comparing the bank in use, and the bank parameter over MIDI (`make test`); shared CC and note states within a bank (`make test`); in the emulator and its configuration panel (`make emulator`); and in the simulator, with the stack depth of the EEPROM reads (`test/sim_smoke.sh`).
+- The real 8051 image in a simulator: key scan and debounce, toggle on and off, program change, MIDI UART output with the correct bytes, the UP + DOWN chord opening and closing configuration mode (read back from RAM, including the stack depth of the save path), the long-press behaviour just under (stays latched) and just over (reverts) the long-press time, the power-on and page 7 LEDs and display, and the stack under receive load (`test/sim_smoke.sh`).
+
+Not tested, because it needs real hardware:
+- **Everything on an actual FCB1010** (see [Hardware notes](technical.md#hardware-notes)).
+- The pedal ADC reading and the EEPROM calibration and settings save and load. The settings records have host-level round-trip tests only, and the simulator does not model them. The code is adapted from the same library.
+- **MIDI IN on the real image.** The simulator's UART input would not deliver bytes to the firmware. The parser is tested on the host, and the simulator confirms the receive interrupt queues and drains bytes without disturbing key handling or the stack, but the step from a received byte to a lit LED has not been run end to end on the 8051 image. The FCB1010's MIDI IN feeds the same UART, per the reference code, which receives SysEx through it.
+- **The 0.6 second long-press threshold on real hardware.** It is counted from the 2ms scan timer, which assumes a 12MHz crystal. The simulator measures it correctly in simulated time, but a different crystal speed or a slower scan would shift it.
+- The configuration panel with a real pedal and MIDI interface. Its emulator target is tested, and so is its Web MIDI code against a simulated interface, but not with a real one.
+- The 31250 baud MIDI rate on real silicon. It is computed for a 12MHz crystal; the simulator confirms the bytes but not the timing.
+
+A wrong LED or key map does no electrical harm, but it will look wrong.

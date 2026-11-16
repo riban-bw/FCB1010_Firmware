@@ -78,12 +78,12 @@ endif
 	$(SDCC) $(SDCCFLAGS) $(OBJS) $(OUT)/version.rel -o $@
 
 # The linked code as a binary (makebin only emits the used bytes), then the size check
-# and the README hooks.
+# and the documentation hooks.
 $(OUT)/fcb1010_raw.bin: $(OUT)/fcb1010.ihx
 	$(MAKEBIN) -p $< $@
-	python3 -I tools/check_size.py $@ $(ROM_SIZE) README.md
-	python3 -I tools/readme_version.py src/version.h src/version_build.inc README.md
-	python3 -I tools/readme_config.py src/config.h README.md
+	python3 -I tools/check_size.py $@ $(ROM_SIZE) docs/building.md
+	python3 -I tools/readme_version.py src/version.h src/version_build.inc docs/configuration.md
+	python3 -I tools/readme_config.py src/config.h README.md docs/*.md
 
 $(OUT)/fcb1010_27c128.bin: $(OUT)/fcb1010_raw.bin tools/rom_image.py
 	python3 -I tools/rom_image.py $< $(ROM_SIZE) 16384 $@
@@ -95,7 +95,7 @@ $(OUT)/fcb1010_27c512.bin: $(OUT)/fcb1010_raw.bin tools/rom_image.py
 	python3 -I tools/rom_image.py $< $(ROM_SIZE) 65536 $@
 
 # SRAM probe (probe/sram_probe.c): a separate test image that looks for RAM in the external
-# data space and shows what it finds. It links hw.c only; no build number, no README hooks.
+# data space and shows what it finds. It links hw.c only; no build number, no documentation hooks.
 PROBE_ROMS := $(OUT)/probe_27c128.bin $(OUT)/probe_27c256.bin $(OUT)/probe_27c512.bin
 
 .PHONY: probe

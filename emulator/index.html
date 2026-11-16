@@ -729,7 +729,7 @@ kbd { font: 500 11px var(--font-mono); background: var(--log-bg); border: 1px so
   $("btnPower").addEventListener("click", function () { logMsg("power cycle", ""); reset(); });
   $("btnErase").addEventListener("click", function () { storeErase(); logMsg("saved settings erased", ""); reset(); });
 
-  // ---- MIDI configuration: a client for the firmware's NRPN protocol (README, "Configuration over MIDI") ----
+  // ---- MIDI configuration: a client for the firmware's NRPN protocol (docs/midi.md, "Configuration over MIDI") ----
   // It talks to this emulator or, through Web MIDI, to a real pedal. It always holds a full set of settings
   // (conf.v: from the last read, a loaded file, or at first the emulator's own) and sends each change, so
   // with a real pedal a MIDI output is enough; the input is only needed to read the pedal (Read, Find).

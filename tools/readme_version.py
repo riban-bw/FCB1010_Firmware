@@ -1,6 +1,6 @@
-# Build hook: put the firmware version that was just linked into the README's
+# Build hook: put the firmware version that was just linked into the documentation's
 # "7. Lamp test and version" table row. Usage:
-#   readme_version.py <version.h> <version_build.inc> <README.md>
+#   readme_version.py <version.h> <version_build.inc> <docs/configuration.md>
 # In that row it rewrites the three display examples: major with a trailing dot (`MM.`),
 # minor with dots both sides (`.mm.`) and build with a leading dot (`.bb`), in hex as
 # the display shows them. The file is only written when something changes; if the row or
@@ -41,7 +41,7 @@ examples = [
 
 for pattern, value in examples:
     if len(re.findall(pattern, line)) != 1:
-        print("note: the README version row needs exactly one %s example; version not recorded" % value)
+        print("note: the version row needs exactly one %s example; version not recorded" % value)
         sys.exit(0)
 
     line = re.sub(pattern, value, line)
