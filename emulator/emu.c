@@ -29,10 +29,10 @@ IMPORT("js_display_hex")  void js_display_hex(uint8_t value);
 IMPORT("js_display_dots") void js_display_dots(uint8_t mask);
 IMPORT("js_lamp_test")    void js_lamp_test(uint8_t how);
 // Record 0 = settings, 1 = calibration, 2 / 3 = relay triggers; four bytes each. Load returns 1 if one was stored.
-IMPORT("js_store_load") uint8_t js_store_load(uint8_t record, uint8_t *data);
+IMPORT("js_store_load") uint8_t js_store_load(unsigned record, uint8_t *data);
 // Relay outputs, bit 0 = SWITCH 1. Records 2 and 3 are the SWITCH 1 / 2 triggers.
 IMPORT("js_relays") void js_relays(uint8_t mask);
-IMPORT("js_store_save") uint8_t js_store_save(uint8_t record, const uint8_t *data);
+IMPORT("js_store_save") uint8_t js_store_save(unsigned record, const uint8_t *data);
 
 // clang may emit calls to these for array loops, and there is no C library here.
 void *memset(void *d, int c, unsigned long n)
@@ -142,10 +142,13 @@ void hal_lamp_test(uint8_t how)               { js_lamp_test(how); }
 
 void    hal_relays(uint8_t mask)          { js_relays(mask); }
 
-// Settings records go to the page's store by HAL_REC_* number (the page names them).
+// Settings records go to the page's store by HAL_REC_* number (the page names them); a
+// footswitch record of bank b (hal_bank) above the first is number + 16 * b.
 uint8_t hal_rec[4];
-uint8_t hal_rec_load(uint8_t rec) { return rec < HAL_RECORDS && js_store_load(rec, hal_rec); }
-uint8_t hal_rec_save(uint8_t rec) { return rec < HAL_RECORDS && js_store_save(rec, hal_rec); }
+uint8_t hal_bank;
+static unsigned rec_id(uint8_t rec) { return (rec < HAL_REC_SW1) ? rec + 16u * hal_bank : rec; }
+uint8_t hal_rec_load(uint8_t rec) { return rec < HAL_RECORDS && hal_bank < BANK_COUNT && js_store_load(rec_id(rec), hal_rec); }
+uint8_t hal_rec_save(uint8_t rec) { return rec < HAL_RECORDS && hal_bank < BANK_COUNT && js_store_save(rec_id(rec), hal_rec); }
 
 // ---------------------------------------------------------------
 // Pedals: Averaged like hw_poll_pedals (four readings each, alternating, every 8 ticks)
@@ -332,7 +335,6 @@ uint16_t emu_const(uint8_t what)
     case 14: return MOMENTARY_HOLD_MS;
     case 15: return PROGRAM_REPEAT_DELAY_MS;
     case 16: return PROGRAM_REPEAT_HZ;
-    case 17: return CHORD_CC;
     case 18: return fw_version[0];
     case 19: return fw_version[1];
     case 20: return fw_version[2];

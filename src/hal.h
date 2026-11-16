@@ -43,12 +43,15 @@ void    hal_aux_led(uint8_t which, uint8_t on);
 // and a one-byte argument, so no pointer or second parameter takes RAM).
 // hal_rec_load(rec) returns 1 and fills hal_rec if a valid record was found (otherwise
 // hal_rec is undefined); hal_rec_save(rec) stores hal_rec and returns 1 if it read back.
-//   HAL_REC_MSG0 + n  footswitch n (0-9): type (0 CC, 1 note, 2 program change), number,
-//                     on value, off value
+//   HAL_REC_MSG0 + n  footswitch n (0-9) of bank hal_bank: type (bits 0-1: 0 CC, 1 note,
+//                     2 program change) with the pedal mode in bits 2-3, number, on
+//                     value, off value
 //   HAL_REC_SW1/SW2   relay SWITCH 1 / 2: follow mask low byte, high byte, pedal A
 //                     trigger, pedal B trigger
 //   HAL_REC_CAL       calibration: heel A, toe A, heel B, toe B (raw ADC readings)
-//   HAL_REC_CFG       MIDI channel, then the packed pedal modes (three bytes)
+//   HAL_REC_CFG       MIDI channel, then three unused bytes (saved as 0)
+// hal_bank (0 to BANK_COUNT - 1, set by ctl.c) picks which bank's records the footswitch
+// record numbers refer to; the other records are shared by every bank.
 #define HAL_REC_MSG0    0
 #define HAL_REC_SW1     10
 #define HAL_REC_SW2     11
@@ -56,6 +59,7 @@ void    hal_aux_led(uint8_t which, uint8_t on);
 #define HAL_REC_CFG     13
 #define HAL_RECORDS     14
 extern IDATA uint8_t hal_rec[4];
+extern IDATA uint8_t hal_bank;
 uint8_t hal_rec_load(uint8_t rec);
 uint8_t hal_rec_save(uint8_t rec);
 

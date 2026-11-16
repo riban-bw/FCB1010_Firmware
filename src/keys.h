@@ -35,6 +35,9 @@
 
 #define KEY_EVQ_MASK  (KEY_EVENT_QUEUE - 1)
 
+// 1 if a ring buffer of KEY_EVENT_QUEUE bytes has no room for another event.
+#define KEY_EVQ_FULL(head, tail)  ((((head) + 1) & KEY_EVQ_MASK) == (tail))
+
 // Add an event to a ring buffer of KEY_EVENT_QUEUE bytes; dropped if the queue is full.
 #define KEY_EVQ_PUSH(q, head, tail, e)                                         \
     do {                                                                       \
@@ -48,40 +51,48 @@
 // One scan of one key. hist[idx]: bits 0..6 are the most recent samples, bit 7 the pressed
 // state. hold[idx]: scans the key has been down since its debounced press (stops counting
 // at the threshold). pressed is 1 if the key reads as pressed now. push is the name of a
-// one-argument macro that queues an event. Emits a press once debounced, one HOLD after
-// the hold threshold, and a release once the key has read up long enough.
-#define KEY_SCAN(hist, hold, idx, pressed, push)                               \
+// one-argument macro that queues an event, full an expression that is 1 while the queue
+// has no room. Emits a press once debounced, one HOLD after the hold threshold, and a
+// release once the key has read up long enough. A change only takes effect once its event
+// is queued: with the queue full the key keeps its old state and the event is tried again
+// on its next scan (12ms later), so a burst of presses (all twelve keys at once, say) is
+// delayed, not lost.
+#define KEY_SCAN(hist, hold, idx, pressed, push, full)                         \
     do {                                                                       \
+        /* One local (the state in bit 7, the samples below): with two, the */ \
+        /* 8051 interrupt spills one to RAM, which raises the stack start. */  \
         uint8_t h_ = (hist)[idx];                                              \
-        uint8_t s_ = (uint8_t)(h_ & 0x80);                                     \
-        h_ = (uint8_t)(((h_ << 1) | (pressed)) & KEY_DEBOUNCE_MASK);           \
-        if (h_ == KEY_DEBOUNCE_MASK)                                           \
+        h_ = (uint8_t)((h_ & 0x80) | (((h_ << 1) | (pressed)) & KEY_DEBOUNCE_MASK)); \
+        if ((h_ & KEY_DEBOUNCE_MASK) == KEY_DEBOUNCE_MASK)                     \
         {                                                                      \
-            if (!s_)                                                           \
+            if (!(h_ & 0x80))                                                  \
             {                                                                  \
-                s_ = 0x80;                                                     \
-                (hold)[idx] = 0;                                               \
-                push((idx) | KEY_EV_PRESS);                                    \
-            }                                                                  \
-            else if ((hold)[idx] < KEY_HOLD_SCANS)                             \
-            {                                                                  \
-                (hold)[idx]++;                                                 \
-                                                                               \
-                if ((hold)[idx] == KEY_HOLD_SCANS)                             \
+                if (!(full))                                                   \
                 {                                                              \
-                    push((idx) | KEY_EV_HOLD);                                 \
+                    h_ |= 0x80;                                                \
+                    (hold)[idx] = 0;                                           \
+                    push((idx) | KEY_EV_PRESS);                                \
                 }                                                              \
             }                                                                  \
-        }                                                                      \
-        else if (h_ == 0)                                                      \
-        {                                                                      \
-            if (s_)                                                            \
+            else if ((uint8_t)((hold)[idx] + 1) < KEY_HOLD_SCANS)              \
             {                                                                  \
-                s_ = 0;                                                        \
+                (hold)[idx]++;                                                 \
+            }                                                                  \
+            else if ((hold)[idx] < KEY_HOLD_SCANS && !(full))                  \
+            {                                                                  \
+                (hold)[idx]++;                                                 \
+                push((idx) | KEY_EV_HOLD);                                     \
+            }                                                                  \
+        }                                                                      \
+        else if ((h_ & KEY_DEBOUNCE_MASK) == 0)                                \
+        {                                                                      \
+            if ((h_ & 0x80) && !(full))                                        \
+            {                                                                  \
+                h_ &= 0x7F;                                                    \
                 push((idx) | KEY_EV_RELEASE);                                  \
             }                                                                  \
         }                                                                      \
-        (hist)[idx] = (uint8_t)(s_ | h_);                                      \
+        (hist)[idx] = h_;                                                      \
     } while (0)
 
 // Function form in keys.c, for the host tests and the emulator (not linked into the firmware).

@@ -10,7 +10,9 @@
 //                           and a message (CC, note or program change) set in its editor
 //   expression pedal A/B -> continuous CC 0..127
 //   UP / DOWN            -> MIDI program change +1 / -1, sent when the key is released;
-//                           held, the number auto-repeats on the display and is sent on release
+//                           held, the number auto-repeats on the display and is sent on release.
+//                           With DIRECT SELECT lit (UP + DOWN tapped), the next / previous
+//                           footswitch bank instead, chosen on release
 //   UP + DOWN held 1s   -> configuration mode (MIDI channel, pedal modes, calibration)
 
 #define NO_VALUE        0xFF
@@ -42,7 +44,8 @@
 // Pages 5 and 6 (one compare: the subtraction wraps for the pages below).
 #define IS_SW_PAGE(p)   ((uint8_t)((p) - PAGE_SW1) < 2)
 
-// A relay's follow mask: bits 0-9 are footswitches 1-10, this bit is CHORD_CC.
+// A relay's follow mask: bits 0-9 are footswitches 1-10, this bit is bank mode (the UP +
+// DOWN toggle, DIRECT SELECT lit).
 #define SW_CC_BIT       ((uint16_t)1 << STOMP_COUNT)
 // On a SWITCH page a pedal must move this many CC steps (or reach 0 or 127) to set a
 // new trigger value, so ADC noise does not keep changing it.
@@ -181,7 +184,18 @@ static IDATA uint8_t  pedal_modes[3];
 // Index of switch i's first msg[] byte, i * 3 as 8-bit shift and add: SDCC would compute
 // i * MSG_BYTES with a call to its 16-bit multiply (a call level deeper, and slower).
 #define MSG_AT(i)       ((uint8_t)((uint8_t)((uint8_t)(i) << 1) + (uint8_t)(i)))
-static IDATA uint8_t  msg[STOMP_COUNT * MSG_BYTES];
+static XDATA uint8_t  msg[STOMP_COUNT * MSG_BYTES];
+
+// The last value of every CC and note, wherever it came from (a footswitch sending it,
+// MIDI IN, or the state a switch showed when its bank was left): index the number, plus
+// 0x80 for a note. A CC's entry is its 0-127 value, a note's 0x80 + its state (1 on),
+// and 0xFF means never seen. A bank change gives each new switch the state its CC or
+// note last had (remote_on), however many banks ago, so a CC that is on stays on. In
+// the external SRAM (256 bytes).
+static XDATA uint8_t  key_val[256];
+#define KEY_UNKNOWN     0xFF
+// Switch i's key_val index (not for a program change).
+#define KEY_OF(i)       ((uint8_t)((msg[MSG_AT(i)] & 0x7F) | ((msg_type(i) == MT_NOTE) ? 0x80 : 0)))
 
 // The footswitch editor (configuration page 1, a long footswitch press): open, which
 // parameter, the switch's three bytes when it was opened (DOWN [ESCAPE] puts them back), and
@@ -210,6 +224,8 @@ static BIT_T          mode_cycle_pending;
 #define NP_VERSION      1       // 1-3: firmware major, minor, build (read only)
 #define NP_COMMAND      4       // a command (NC_*), never sent
 #define NP_DUMP_END     5       // sent (value 0) after the last parameter of a dump
+#define NP_BANK         6       // footswitch bank 1 to BANK_COUNT; setting it changes bank
+#define NP_BANKS        7       // BANK_COUNT (read only)
 #define NP_MODE         8       // + switch 0-9: pedal mode 0-3
 #define NP_TYPE         20      // + switch: message type 0 CC, 1 note, 2 program change
 #define NP_NUM          30      // + switch: number (CC or note; unused for a program change)
@@ -269,8 +285,14 @@ static BIT_T          program_moved;
 // Which of UP / DOWN are down, and the state of an UP + DOWN chord.
 static IDATA uint8_t  keys_down;
 static IDATA uint8_t  chord_state;
-// State of CHORD_CC, toggled by a short UP + DOWN press in run mode.
-static BIT_T          chord_cc_on;
+// Bank mode, toggled by a short UP + DOWN press in run mode (DIRECT SELECT lit): UP / DOWN
+// choose a footswitch bank instead of a program. Nothing is sent for it.
+static BIT_T          bank_mode;
+// Footswitch banks: the bank UP / DOWN have chosen (0-based; the display shows it + 1 in
+// bank mode), which is the loaded one (hal_bank) except while a change waits in bank_run,
+// and whether one is waiting.
+static IDATA uint8_t  bank_next;
+static BIT_T          bank_busy;
 
 // Configuration mode state: Open page, footswitch being edited on the modes page, calibration
 // step, and which pedals had their mode changed.
@@ -327,22 +349,36 @@ static BIT_T          boot_anim;
 static BIT_T          ver_paused;
 #define cfg_flash_ticks rx_flash
 
-// Footswitch i's message record into hal_rec[1..3] in msg[]'s form: the defaults (a CC
-// from STOMP_CC_LIST, on value 127, off value 0) if it is missing or invalid, the unused
-// type 3 as a CC, and each value cut to 7 bits. A macro, not a function: the EEPROM read
+// Mode of one footswitch, and set it.
+static uint8_t pedal_mode_get(uint8_t index)
+{
+    return (uint8_t)((pedal_modes[index >> 2] >> ((index & 3) * 2)) & 3);
+}
+
+static void pedal_mode_set(uint8_t index, uint8_t value)
+{
+    uint8_t shift = (uint8_t)((index & 3) * 2);
+
+    pedal_modes[index >> 2] = (uint8_t)((pedal_modes[index >> 2] & ~(3 << shift)) | (value << shift));
+}
+
+// Footswitch i's record (of bank hal_bank) into hal_rec[1..3] in msg[]'s form, with its
+// pedal mode in hal_rec[0] bits 2-3: the defaults (a CC from STOMP_CC_LIST, on value 127,
+// off value 0, DEFAULT_PEDAL_MODE) if it is missing or invalid, the unused type 3 as a CC,
+// and each value cut to 7 bits. A macro, not a function: the EEPROM read
 // under it is the deepest stack use, and a call level would add two bytes to it.
 #define MSG_REC_LOAD(i)                                                         \
     do {                                                                        \
         if (!hal_rec_load((uint8_t)(HAL_REC_MSG0 + (i))))                       \
         {                                                                       \
-            hal_rec[0] = MT_CC;                                                 \
+            hal_rec[0] = (uint8_t)(MT_CC | (DEFAULT_PEDAL_MODE << 2));          \
             hal_rec[1] = stomp_cc[i];                                           \
             hal_rec[2] = 127;                                                   \
             hal_rec[3] = 0;                                                     \
         }                                                                       \
         if ((hal_rec[0] & 3) == 3)                                              \
         {                                                                       \
-            hal_rec[0] = MT_CC;                                                 \
+            hal_rec[0] &= (uint8_t)~3;                                          \
         }                                                                       \
         hal_rec[1] = (uint8_t)((hal_rec[1] & 0x7F) | ((hal_rec[0] & 1) << 7));  \
         hal_rec[2] = (uint8_t)((hal_rec[2] & 0x7F) | ((hal_rec[0] & 2) << 6));  \
@@ -358,13 +394,13 @@ static uint8_t settings_match_saved(void)
 {
     uint8_t i;
 
-    // Footswitch messages.
+    // Footswitch messages and modes (the current bank).
     for (i = 0; i < STOMP_COUNT; i++)
     {
         MSG_REC_LOAD(i);
 
         if (hal_rec[1] != msg[MSG_AT(i)] || hal_rec[2] != msg[MSG_AT(i) + 1] ||
-            hal_rec[3] != msg[MSG_AT(i) + 2])
+            hal_rec[3] != msg[MSG_AT(i) + 2] || ((hal_rec[0] >> 2) & 3) != pedal_mode_get(i))
         {
             return 0;
         }
@@ -403,22 +439,13 @@ static uint8_t settings_match_saved(void)
         }
     }
 
-    // Channel and pedal modes.
-    if (!hal_rec_load(HAL_REC_CFG))
-    {
-        hal_rec[0] = MIDI_CHANNEL;
-        hal_rec[1] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
-        hal_rec[2] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
-        hal_rec[3] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x05);
-    }
-
-    if (hal_rec[0] < 1 || hal_rec[0] > 16)
+    // Channel.
+    if (!hal_rec_load(HAL_REC_CFG) || hal_rec[0] < 1 || hal_rec[0] > 16)
     {
         hal_rec[0] = MIDI_CHANNEL;
     }
 
-    return (uint8_t)(hal_rec[0] == midi_channel && hal_rec[1] == pedal_modes[0] &&
-                     hal_rec[2] == pedal_modes[1] && (uint8_t)(hal_rec[3] & 0x0F) == pedal_modes[2]);
+    return (uint8_t)(hal_rec[0] == midi_channel);
 }
 
 // A setting was edited in config mode (or config mode was just entered). If the settings
@@ -471,9 +498,10 @@ static uint8_t prog_single(uint8_t index)
                       (uint8_t)(msg[index + 1] & 0x7F) == msg[index + 2]) ? 1 : 0);
 }
 
+// The run-mode number: the program, or in bank mode (DIRECT SELECT lit) the bank from 1.
 static void show_program(void)
 {
-    hal_display((uint8_t)(program + DISPLAY_PROGRAM_OFFSET));
+    hal_display(bank_mode ? (uint8_t)(bank_next + 1) : (uint8_t)(program + DISPLAY_PROGRAM_OFFSET));
 }
 
 // Send footswitch index's message for the state on: a CC with the on or off value, a note
@@ -481,6 +509,8 @@ static void show_program(void)
 // program change, the on value (on) or the off value (off; a single-program switch sends
 // nothing), like a CC's two values; its number is not used. A program sent becomes the
 // current program, so UP / DOWN step from it and the run-mode display shows it. The caller has checked there is room for three bytes.
+static void remote_cc(uint8_t cc, uint8_t value);
+
 static void send_switch(uint8_t index, uint8_t on)
 {
     if (msg_type(index) == MT_PROG)
@@ -504,21 +534,15 @@ static void send_switch(uint8_t index, uint8_t on)
     hal_midi_tx((uint8_t)(((msg_type(index) == MT_NOTE) ? (on ? 0x90 : 0x80) : 0xB0) | (midi_channel - 1)));
     hal_midi_tx((uint8_t)(msg[MSG_AT(index)] & 0x7F));
     hal_midi_tx((uint8_t)(msg[(uint8_t)(MSG_AT(index) + (on ? 1 : 2))] & 0x7F));
+
+    // A CC or note has one state wherever it is used: every switch with it follows, as
+    // for one received on MIDI IN (remote_cc; not in configuration mode, where the LEDs
+    // show the pages). Last, so SDCC jumps to it and the stack goes no deeper (this is
+    // the main line's deepest path when a revert is flushed).
+    on = (msg_type(index) == MT_NOTE) ? (uint8_t)(0x80 | on) : (uint8_t)(msg[(uint8_t)(MSG_AT(index) + (on ? 1 : 2))] & 0x7F);
+    remote_cc((uint8_t)(msg[MSG_AT(index)] & 0x7F), on);
 }
 
-
-// Mode of one footswitch, and set it.
-static uint8_t pedal_mode_get(uint8_t index)
-{
-    return (uint8_t)((pedal_modes[index >> 2] >> ((index & 3) * 2)) & 3);
-}
-
-static void pedal_mode_set(uint8_t index, uint8_t value)
-{
-    uint8_t shift = (uint8_t)((index & 3) * 2);
-
-    pedal_modes[index >> 2] = (uint8_t)((pedal_modes[index >> 2] & ~(3 << shift)) | (value << shift));
-}
 
 // Forget the last sent pedal positions so the next reading is adopted
 // silently instead of being sent as a controller change.
@@ -532,10 +556,44 @@ static void resync_pedals(void)
 // Program change
 // ---------------------------------------------------------------
 
-// Move the program number one step for UP or DOWN and show it. Nothing is sent.
-static void program_step(uint8_t code)
+// Bank mode: the next / previous bank for UP / DOWN, stopping at the ends like the program
+// number (or wrapping with PROGRAM_WRAP). A leaf function.
+static void bank_step(uint8_t code)
 {
     if (code == CTL_KEY_UP)
+    {
+        if ((uint8_t)(bank_next + 1) < BANK_COUNT)
+        {
+            bank_next++;
+        }
+#if PROGRAM_WRAP
+        else
+        {
+            bank_next = 0;
+        }
+#endif
+    }
+    else if (bank_next != 0)
+    {
+        bank_next--;
+    }
+#if PROGRAM_WRAP
+    else
+    {
+        bank_next = BANK_COUNT - 1;
+    }
+#endif
+}
+
+// Move the program number (or in bank mode the bank) one step for UP or DOWN and show it.
+// Nothing is sent.
+static void program_step(uint8_t code)
+{
+    if (bank_mode)
+    {
+        bank_step(code);
+    }
+    else if (code == CTL_KEY_UP)
     {
         if (program >= 127)
         {
@@ -569,9 +627,20 @@ static void program_step(uint8_t code)
     show_program();
 }
 
-// Send the program number now, or as soon as there is room in the MIDI OUT queue.
+// Send the program number now, or as soon as there is room in the MIDI OUT queue. In bank
+// mode, change to the chosen bank if it is not the one loaded (bank_run does it).
 static void commit_program(void)
 {
+    if (bank_mode)
+    {
+        if (bank_next != hal_bank)
+        {
+            bank_busy = 1;
+        }
+
+        return;
+    }
+
     if (!program_moved)
     {
         return;
@@ -832,7 +901,7 @@ static void config_show(void)
     }
 
     // A SWITCH page shows that relay's triggers: footswitch LEDs for the switches it
-    // follows, DIRECT SELECT for CHORD_CC, EXP 1 / EXP 2 for a pedal trigger value. The
+    // follows, DIRECT SELECT for bank mode, EXP 1 / EXP 2 for a pedal trigger value. The
     // display is blank until a pedal is moved, then shows the value it set.
     if (IS_SW_PAGE(cfg_page))
     {
@@ -1325,18 +1394,29 @@ static void enter_config(void)
 }
 
 // Take the settings from the four bytes loaded into hal_rec, keeping the default
-// channel if the saved one is out of range. Every 2-bit pedal mode value is valid.
+// channel if the saved one is out of range. The other three bytes are unused.
 static void settings_unpack(void)
 {
     if (hal_rec[0] >= 1 && hal_rec[0] <= 16)
     {
         midi_channel = hal_rec[0];
     }
-
-    pedal_modes[0] = hal_rec[1];
-    pedal_modes[1] = hal_rec[2];
-    pedal_modes[2] = (uint8_t)(hal_rec[3] & 0x0F);
 }
+
+// The messages and pedal modes of bank hal_bank (i is the caller's loop variable), the
+// defaults for any switch without a valid record. Every 2-bit pedal mode value is valid.
+// A macro, so the EEPROM reads under load_settings and bank_run are no deeper.
+#define LOAD_BANK(i)                                                           \
+    do {                                                                       \
+        for ((i) = 0; (i) < STOMP_COUNT; (i)++)                                \
+        {                                                                      \
+            MSG_REC_LOAD(i);                                                   \
+            msg[MSG_AT(i)]     = hal_rec[1];                                   \
+            msg[MSG_AT(i) + 1] = hal_rec[2];                                   \
+            msg[MSG_AT(i) + 2] = hal_rec[3];                                   \
+            pedal_mode_set((i), (uint8_t)((hal_rec[0] >> 2) & 3));             \
+        }                                                                      \
+    } while (0)
 
 // Defaults, then whatever valid settings and calibration the EEPROM holds. Used at
 // start-up and to cancel configuration changes.
@@ -1351,10 +1431,6 @@ static void load_settings(void)
     toe[1]  = 255;
 
     midi_channel = MIDI_CHANNEL;
-    // DEFAULT_PEDAL_MODE in every 2-bit field
-    pedal_modes[0] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
-    pedal_modes[1] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
-    pedal_modes[2] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x05);
 
     if (hal_rec_load(HAL_REC_CAL))
     {
@@ -1364,14 +1440,9 @@ static void load_settings(void)
         toe[1]  = hal_rec[3];
     }
 
-    // Footswitch messages: a CC from STOMP_CC_LIST (on 127, off 0) unless saved.
-    for (i = 0; i < STOMP_COUNT; i++)
-    {
-        MSG_REC_LOAD(i);
-        msg[MSG_AT(i)]     = hal_rec[1];
-        msg[MSG_AT(i) + 1] = hal_rec[2];
-        msg[MSG_AT(i) + 2] = hal_rec[3];
-    }
+    // Footswitch messages and modes of the current bank: a CC from STOMP_CC_LIST (on
+    // 127, off 0) in DEFAULT_PEDAL_MODE unless saved.
+    LOAD_BANK(i);
 
     // Relay triggers: none by default. A saved value over 127 is ignored (off).
     for (i = 0; i < 2; i++)
@@ -1394,15 +1465,16 @@ static void load_settings(void)
     }
 }
 
-// Store every setting and the calibration (i is the caller's loop variable). If a write
-// fails the new settings still apply until power-off. A macro, expanded in exit_config and
+// Store every setting and the calibration (i is the caller's loop variable), the
+// footswitches as the current bank's. If a write fails the new settings still apply until
+// power-off. A macro, expanded in exit_config and
 // midi_save, so the EEPROM writes are no deeper than one call below either.
 #define SAVE_SETTINGS(i)                                                       \
     do {                                                                       \
         hal_rec[0] = midi_channel;                                             \
-        hal_rec[1] = pedal_modes[0];                                           \
-        hal_rec[2] = pedal_modes[1];                                           \
-        hal_rec[3] = pedal_modes[2];                                           \
+        hal_rec[1] = 0;                                                        \
+        hal_rec[2] = 0;                                                        \
+        hal_rec[3] = 0;                                                        \
         hal_rec_save(HAL_REC_CFG);                                             \
         hal_rec[0] = heel[0];                                                  \
         hal_rec[1] = toe[0];                                                   \
@@ -1419,7 +1491,7 @@ static void load_settings(void)
         }                                                                      \
         for ((i) = 0; (i) < STOMP_COUNT; (i)++)                                \
         {                                                                      \
-            hal_rec[0] = msg_type(i);                                          \
+            hal_rec[0] = (uint8_t)(msg_type(i) | (pedal_mode_get(i) << 2));    \
             hal_rec[1] = (uint8_t)(msg[MSG_AT(i)] & 0x7F);                     \
             hal_rec[2] = (uint8_t)(msg[MSG_AT(i) + 1] & 0x7F);                 \
             hal_rec[3] = msg[MSG_AT(i) + 2];                                   \
@@ -1506,7 +1578,7 @@ static void exit_config(uint8_t save)
     hal_aux_led(HAL_LED_MIDI_FUNC, 0);
     hal_aux_led(HAL_LED_EXP_1, 0);
     hal_aux_led(HAL_LED_EXP_2, 0);
-    hal_aux_led(HAL_LED_DIRECT_SELECT, chord_cc_on ? 1 : 0);
+    hal_aux_led(HAL_LED_DIRECT_SELECT, bank_mode ? 1 : 0);
     hal_aux_led(HAL_LED_SWITCH_1, relay_out & 1);
     hal_aux_led(HAL_LED_SWITCH_2, (relay_out >> 1) & 1);
     hal_aux_led(HAL_LED_SELECT, 0);
@@ -1570,18 +1642,14 @@ static void nav_release(uint8_t code)
     }
 }
 
-// Short UP + DOWN in run mode: Toggle CHORD_CC and show it on the DIRECT SELECT LED.
-// Like a stomp press, it is ignored if MIDI OUT has no room for the message.
-static void chord_cc_toggle(void)
+// Short UP + DOWN in run mode: toggle bank mode and show it on the DIRECT SELECT LED.
+// Nothing is sent.
+static void bank_mode_toggle(void)
 {
-    if (hal_midi_space() < 3)
-    {
-        return;
-    }
-
-    chord_cc_on = !chord_cc_on;
-    send_cc(CHORD_CC, chord_cc_on ? 127 : 0);
-    hal_aux_led(HAL_LED_DIRECT_SELECT, chord_cc_on ? 1 : 0);
+    bank_mode = !bank_mode;
+    hal_aux_led(HAL_LED_DIRECT_SELECT, bank_mode ? 1 : 0);
+    // The display shows the bank in bank mode, the program otherwise.
+    show_program();
 }
 
 // Stop tracking the held key because it has become part of a chord. If it had already been
@@ -1634,15 +1702,15 @@ static void nav_key_release(uint8_t code)
     {
         if (chord_state == CHORD_ACTIVE)
         {
-            // Let go before the hold time: in run mode it toggles CHORD_CC. In
+            // Let go before the hold time: in run mode it toggles bank mode. In
             // configuration mode UP + DOWN does nothing.
             chord_state = CHORD_DONE;
 
             if (mode == MODE_RUN)
             {
-                chord_cc_toggle();
+                bank_mode_toggle();
             }
-            // On a SWITCH page it toggles whether that relay follows CHORD_CC.
+            // On a SWITCH page it toggles whether that relay follows bank mode.
             else if (IS_SW_PAGE(cfg_page))
             {
                 sw_mask[cfg_page - PAGE_SW1] ^= SW_CC_BIT;
@@ -1714,7 +1782,16 @@ void ctl_init(void)
 {
     uint8_t i;
 
+    // Power-on is always in bank 1, with no CC or note value known.
+    hal_bank  = 0;
+    bank_next = 0;
     load_settings();
+
+    i = 0;
+    do
+    {
+        key_val[i] = KEY_UNKNOWN;
+    } while (++i != 0);
 
     mode          = MODE_RUN;
     rx_status     = 0;
@@ -1733,7 +1810,8 @@ void ctl_init(void)
     program_moved   = 0;
     keys_down     = 0;
     chord_state   = CHORD_NONE;
-    chord_cc_on   = 0;
+    bank_mode   = 0;
+    bank_busy     = 0;
     nav_ticks   = 0;
     cfg_page      = PAGE_MODES;
     cfg_sel       = 0;
@@ -1822,13 +1900,15 @@ static void apply_revert(uint8_t index)
         stomp_state &= (uint16_t)~bit;
     }
 
-    send_switch(index, on);
-
     // In configuration mode the footswitch LEDs belong to the settings pages.
     if (mode == MODE_RUN)
     {
         hal_stomp_led(index, on);
     }
+
+    // Last, so nothing is kept on the stack across it: this is the main line's deepest
+    // path when a revert is flushed from ctl_tick.
+    send_switch(index, on);
 }
 
 // Finish any revert that was held back because MIDI OUT was full at release time.
@@ -2051,8 +2131,9 @@ void ctl_key_press(uint8_t code)
     }
 
     // Stomps: If MIDI OUT is backed up, ignore the press entirely so the LEDs and
-    // toggle states never drift from what the synth received.
-    if (hal_midi_space() >= 3)
+    // toggle states never drift from what the synth received. Also while a bank change
+    // waits (one tick), so the press uses the new bank.
+    if (!bank_busy && hal_midi_space() >= 3)
     {
         index = stomp_index(code);
         bit   = (uint16_t)((uint16_t)1 << index);
@@ -2111,19 +2192,28 @@ void ctl_key_press(uint8_t code)
 // velocity 0 is off. A leaf function, so its locals cost no fixed RAM.
 static uint8_t remote_on(uint8_t i, uint8_t value)
 {
-    i = (uint8_t)(MSG_AT(i));
+    uint8_t q;
 
-    if ((rx_status & 0xF0) != 0xB0)
+    if (value & 0x80)
     {
-        return (uint8_t)(((rx_status & 0xF0) == 0x90 && value != 0) ? 1 : 0);
+        return (uint8_t)(value & 1);
     }
 
-    if (value == (msg[i + 1] & 0x7F))
+    q = MSG_AT(i);
+
+    if (value == (uint8_t)(msg[q + 1] & 0x7F))
     {
+        // A CC whose on and off values are both this value cannot say which it means:
+        // the switch keeps its state (so the switch that sent it does too).
+        if (value == msg[q + 2])
+        {
+            return (uint8_t)((stomp_state >> i) & 1);
+        }
+
         return 1;
     }
 
-    if (value == msg[i + 2])
+    if (value == msg[q + 2])
     {
         return 0;
     }
@@ -2132,7 +2222,7 @@ static uint8_t remote_on(uint8_t i, uint8_t value)
 }
 
 // Apply an incoming control change or note (rx_status) to every footswitch sending that
-// CC or note (remote_on). CHORD_CC is on from 64 up. No locals beyond the loop count:
+// CC or note (remote_on). No locals beyond the loop count:
 // ctl.c's directly addressed variables must stay small enough for the gap below the bit
 // area (0x08-0x1F), or the linker moves them all above it and the stack starts higher.
 static void remote_cc(uint8_t cc, uint8_t value)
@@ -2145,10 +2235,12 @@ static void remote_cc(uint8_t cc, uint8_t value)
         return;
     }
 
-    // 0xB0 (CC) has bit 5 set, 0x90 and 0x80 (notes) do not.
+    // Kept for every CC and note, used by a switch of this bank or not (bank changes).
+    key_val[(uint8_t)(cc | (value & 0x80))] = value;
+
     for (i = 0; i < STOMP_COUNT; i++)
     {
-        if ((msg[MSG_AT(i)] & 0x7F) == cc && msg_type(i) == ((rx_status & 0x20) ? MT_CC : MT_NOTE))
+        if ((msg[MSG_AT(i)] & 0x7F) == cc && msg_type(i) == ((value & 0x80) ? MT_NOTE : MT_CC))
         {
             if (remote_on(i, value))
             {
@@ -2161,14 +2253,6 @@ static void remote_cc(uint8_t cc, uint8_t value)
 
             hal_stomp_led(i, (uint8_t)((stomp_state >> i) & 1));
         }
-    }
-
-    // CHORD_CC sets the DIRECT SELECT state and LED the same way (relays that follow it
-    // update on the next tick). Nothing is sent back.
-    if ((rx_status & 0x20) && cc == CHORD_CC)
-    {
-        chord_cc_on = (value >= 64) ? 1 : 0;
-        hal_aux_led(HAL_LED_DIRECT_SELECT, chord_cc_on);
     }
 }
 
@@ -2190,14 +2274,14 @@ static void remote_cc(uint8_t cc, uint8_t value)
 
 static uint8_t np_kind(uint8_t p)
 {
-    if (p == NP_CHANNEL || (p >= NP_MODE && p < NP_MODE + STOMP_COUNT) ||
+    if (p == NP_CHANNEL || p == NP_BANK || (p >= NP_MODE && p < NP_MODE + STOMP_COUNT) ||
         (p >= NP_TYPE && p < NP_OFF + STOMP_COUNT) || (p >= NP_FOLLOW1 && p <= NP_FOLLOW1 + STOMP_COUNT) ||
         (p >= NP_FOLLOW2 && p <= NP_FOLLOW2 + STOMP_COUNT) || (p >= NP_TRIGGER && p < NP_TRIGGER + 4))
     {
         return NK_SET;
     }
 
-    if ((p >= NP_VERSION && p < NP_VERSION + 3) || (p >= NP_CAL && p < NP_CAL + 4))
+    if ((p >= NP_VERSION && p < NP_VERSION + 3) || p == NP_BANKS || (p >= NP_CAL && p < NP_CAL + 4))
     {
         return NK_READ;
     }
@@ -2214,6 +2298,16 @@ static uint8_t nrpn_get(uint8_t p)
     if (p == NP_CHANNEL)
     {
         return midi_channel;
+    }
+
+    if (p == NP_BANK)
+    {
+        return (uint8_t)(bank_next + 1);
+    }
+
+    if (p == NP_BANKS)
+    {
+        return BANK_COUNT;
     }
 
     if (p < NP_MODE)
@@ -2305,6 +2399,63 @@ static void midi_job_run(void)
     midi_job = (midi_job > NP_COUNT) ? 0 : (uint8_t)(midi_job + 1);
 }
 
+// A bank change (bank_busy, run mode), once any undo waiting in the revert queue has gone
+// out. Nothing is sent. First the old bank's states go into key_val as the values they
+// stand for (on: the on value, off: the off value; a note 0x80 + state), so a state shown
+// but never sent (a rest state, say) carries too. Then each switch of the new bank starts
+// in its power-on state (on only for inverted momentary, not a single program) and, if
+// its CC or note has a value, takes the state that value gives it (remote_on, as for MIDI
+// IN). No press is kept across the change, so a held switch does nothing on release.
+static void bank_run(void)
+{
+    // Static, so it is not pushed around each EEPROM read (the stack).
+    static uint8_t i;
+
+    if (stomp_revert)
+    {
+        return;
+    }
+
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        if (msg_type(i) != MT_PROG)
+        {
+            key_val[KEY_OF(i)] = (msg_type(i) == MT_NOTE)
+                                 ? (uint8_t)(0x80 | ((stomp_state >> i) & 1))
+                                 : (uint8_t)(msg[(uint8_t)(MSG_AT(i) + (((stomp_state >> i) & 1) ? 1 : 2))] & 0x7F);
+        }
+    }
+
+    hal_bank    = bank_next;
+    bank_busy   = 0;
+    LOAD_BANK(i);
+    stomp_state = 0;
+    stomp_down  = 0;
+    stomp_held  = 0;
+
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        if (pedal_mode_get(i) == PM_MOM_INV && !prog_single(i))
+        {
+            stomp_state |= (uint16_t)((uint16_t)1 << i);
+        }
+
+        if (msg_type(i) != MT_PROG && key_val[KEY_OF(i)] != KEY_UNKNOWN)
+        {
+            if (remote_on(i, key_val[KEY_OF(i)]))
+            {
+                stomp_state |= (uint16_t)((uint16_t)1 << i);
+            }
+            else
+            {
+                stomp_state &= (uint16_t)~((uint16_t)1 << i);
+            }
+        }
+
+        hal_stomp_led(i, (uint8_t)((stomp_state >> i) & 1));
+    }
+}
+
 // A command (in rx_data1). Save and reload run at once, so a command that follows (a dump,
 // say) cannot overtake them; the EEPROM access is still less deep on the stack than from
 // the key handlers. A dump starts on the next tick (and a new one restarts it).
@@ -2392,6 +2543,24 @@ static void nrpn_set(void)
         if (rx_data1 >= 1 && rx_data1 <= 16)
         {
             midi_channel = rx_data1;
+        }
+
+        return;
+    }
+
+    // A bank change, as UP / DOWN make one in bank mode (bank_run). Unsaved changes to
+    // the old bank's footswitches are dropped.
+    if (nrpn_lsb == NP_BANK)
+    {
+        if (rx_data1 >= 1 && rx_data1 <= BANK_COUNT)
+        {
+            bank_next = (uint8_t)(rx_data1 - 1);
+            bank_busy = 1;
+
+            if (bank_mode && !boot_anim)
+            {
+                show_program();
+            }
         }
 
         return;
@@ -2523,6 +2692,13 @@ void ctl_midi_in(uint8_t byte)
 
     // Running status: The next pair of data bytes is another message of the same kind.
     rx_have_data1 = 0;
+
+    // A note goes to remote_cc as 0x80 + its state (note on with a velocity above 0).
+    if ((rx_status & 0xF0) != 0xB0)
+    {
+        byte = (uint8_t)(((rx_status & 0xF0) == 0x90 && byte != 0) ? 0x81 : 0x80);
+    }
+
     remote_cc(rx_data1, byte);
 
     // Configuration over MIDI (after remote_cc: nrpn_cc may reuse rx_data1).
@@ -2597,17 +2773,19 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
 }
 
 // Run mode, every tick: each relay is on if any of its triggers is on (logical OR): a
-// followed footswitch that is on, CHORD_CC on if followed, or a pedal at or above its
+// followed footswitch that is on, bank mode if followed, or a pedal at or above its
 // trigger value (the last CC value sent). Until a pedal has a value again (after start-up
 // or configuration mode), its trigger keeps the relay as it was. The SWITCH LEDs follow.
-static void relays_update(void)
+// The relay outputs (bit 0 SWITCH 1, bit 1 SWITCH 2) for relays_update. A leaf function,
+// so its locals stay in registers instead of the directly addressed RAM.
+static uint8_t relays_compute(void)
 {
     uint16_t on = stomp_state;
     uint8_t  out = 0;
     uint8_t  i;
     uint8_t  bit;
 
-    if (chord_cc_on)
+    if (bank_mode)
     {
         on |= SW_CC_BIT;
     }
@@ -2635,12 +2813,19 @@ static void relays_update(void)
         }
     }
 
+    return out;
+}
+
+static void relays_update(void)
+{
+    uint8_t out = relays_compute();
+
     if (out != relay_out)
     {
         relay_out = out;
-        hal_relays(out);
-        hal_aux_led(HAL_LED_SWITCH_1, out & 1);
-        hal_aux_led(HAL_LED_SWITCH_2, (out >> 1) & 1);
+        hal_relays(relay_out);
+        hal_aux_led(HAL_LED_SWITCH_1, relay_out & 1);
+        hal_aux_led(HAL_LED_SWITCH_2, (relay_out >> 1) & 1);
     }
 }
 
@@ -2653,9 +2838,14 @@ void ctl_tick(void)
     {
         relays_update();
 
-        // Configuration over MIDI: a dump step or deferred command, then any switch whose
-        // mode or message it changed goes to its resting state.
-        if (midi_job)
+        // A bank change; a dump waits for it. Then any switch whose mode or message
+        // changed over MIDI goes to its resting state.
+        if (bank_busy)
+        {
+            bank_run();
+        }
+
+        if (midi_job && !bank_busy)
         {
             midi_job_run();
         }
@@ -2800,6 +2990,7 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_CAL_MIN_SPAN:  return CAL_MIN_SPAN;
     case CTL_INSPECT_RELAYS:        return relay_out;
     case CTL_INSPECT_EDIT:          return edit_open ? (uint8_t)(edit_param + 1) : 0;
+    case CTL_INSPECT_BANK:          return hal_bank;
     default:                        return 0;
     }
 }

@@ -58,7 +58,6 @@ def cc_words(ccs):
 
 stomp_cc = num_list("STOMP_CC_LIST")
 pedal_cc = num_list("PEDAL_CC_LIST")
-chord_cc = num("CHORD_CC")
 channel = num("MIDI_CHANNEL")
 hold = num("MOMENTARY_HOLD_MS")
 config_hold = num("CONFIG_HOLD_MS")
@@ -66,6 +65,8 @@ hold_real = (hold // 12) * 12 + num("DEBOUNCE_SAMPLES") * 12
 modes = ["stomp", "stomp with momentary", "momentary", "inverted momentary"]
 show = num("VERSION_SHOW_MS")
 wrap = num("PROGRAM_WRAP") != 0
+banks = num("BANK_COUNT")
+BANK_ENDS = r"stopping at banks 1 and \d+|wrapping from bank \d+ back to 1, and from 1 to \d+"
 WRAP_TEXT = "wrapping from 127 back to 0, and from 0 to 127"
 STOP_TEXT = "stopping at 0 and 127; a press that cannot change the number sends nothing"
 CC_PATTERN = r"(CC [0-9][0-9, ]*(?: to [0-9]+)?)"
@@ -74,7 +75,6 @@ RULES = [
     # Using the pedal
     (r"Volume \(CC (\d+)\)", [pedal_cc[0]]),
     (r"Expression \(CC (\d+)\)", [pedal_cc[1]]),
-    (r"An extra on/off switch \(CC (\d+)\)", [chord_cc]),
     (r"UP \+ DOWN held ([\d.]+)s ", [secs(config_hold)]),
     (r"channel (\d+) unless you change it", [channel]),
     (r"Footswitches 1 to 10 send " + CC_PATTERN + ", with value", [cc_words(stomp_cc)]),
@@ -89,6 +89,10 @@ RULES = [
     (r"Held: after (\d+)ms the number auto-repeats at (\d+)Hz",
      [num("PROGRAM_REPEAT_DELAY_MS"), num("PROGRAM_REPEAT_HZ")]),
     (r"speeding up to about (\d+)Hz", [num("PROGRAM_REPEAT_FAST_HZ")]),
+    (r"(\d+) banks of footswitch settings", [banks]),
+    (r"The pedal holds (\d+) banks", [banks]),
+    (r"step through the banks \((" + BANK_ENDS + r")\)",
+     ["wrapping from bank %d back to 1, and from 1 to %d" % (banks, banks) if wrap else "stopping at banks 1 and %d" % banks]),
     # Configuration
     (r"Hold UP and DOWN together for ([\d.]+ seconds?)", [sec_words(config_hold)]),
     (r"or UP \+ DOWN together for ([\d.]+ seconds?)", [sec_words(config_hold)]),
@@ -100,16 +104,15 @@ RULES = [
     (CC_PATTERN + r" \(`STOMP_CC_LIST`\)", [cc_words(stomp_cc)]),
     (r"CC (\d+) and CC (\d+) \(`PEDAL_CC_LIST`\)", [pedal_cc[0], pedal_cc[1]]),
     (r"A CC on channel (\d+) with", [channel]),
-    (r"CC (\d+) sets the UP \+ DOWN toggle", [chord_cc]),
-    (r"For example, CC (\d+) value 127 sets stomp 1 on", [stomp_cc[0]]),
-    (r"and CC (\d+) value 0 turns it off", [stomp_cc[0]]),
-    (r"[Ii]f CC (\d+) turned switch 1 on, pressing switch 1 sends CC (\d+) value 0",
+    # ON / OFF are capitalised when they name a state; either case matches.
+    (r"For example, CC (\d+) value 127 sets stomp 1 (?:on|ON)", [stomp_cc[0]]),
+    (r"and CC (\d+) value 0 turns it (?:off|OFF)", [stomp_cc[0]]),
+    (r"[Ii]f CC (\d+) turned switch 1 (?:on|ON), pressing switch 1 sends CC (\d+) value 0",
      [stomp_cc[0], stomp_cc[0]]),
     (r"`MOMENTARY_HOLD_MS` in `src/config\.h` \((?:default|currently) (\d+)\)", [hold]),
     (r"so the real threshold is about ([\d.]+)s", ["%.2f" % (hold_real / 1000.0)]),
     (r"`PROGRAM_REPEAT_FAST_AFTER_MS` \(([\d.]+)s\)", [secs(num("PROGRAM_REPEAT_FAST_AFTER_MS"))]),
     (r"[Hh]eld ([\d.]+)s again in configuration mode", [secs(config_hold)]),
-    (r"A short UP \+ DOWN is the CC (\d+) toggle", [chord_cc]),
     (r"shows in hex, one part (per second|every [\d.]+ seconds?)",
      ["per second" if show == 1000 else "every " + sec_words(show)]),
     (r"The ([\d.]+) second long-press threshold", [secs(hold)]),

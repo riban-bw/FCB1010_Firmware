@@ -32,8 +32,10 @@ void keys_init(void)
 
 void keys_scan(uint16_t pressed)
 {
-    KEY_SCAN(hist, hold, scan_key,     (uint8_t)((pressed >> scan_key) & 1), PUSH_EVENT);
-    KEY_SCAN(hist, hold, scan_key + 6, (uint8_t)((pressed >> (scan_key + 6)) & 1), PUSH_EVENT);
+    KEY_SCAN(hist, hold, scan_key,     (uint8_t)((pressed >> scan_key) & 1), PUSH_EVENT,
+             KEY_EVQ_FULL(evq_head, evq_tail));
+    KEY_SCAN(hist, hold, scan_key + 6, (uint8_t)((pressed >> (scan_key + 6)) & 1), PUSH_EVENT,
+             KEY_EVQ_FULL(evq_head, evq_tail));
 
     scan_key++;
 

@@ -66,7 +66,6 @@ const UP = 11, DOWN = 5;
 const cfgText = readFileSync(new URL("../src/config.h", import.meta.url), "utf8");
 const STOMP_CC = cfgText.match(/#define STOMP_CC_LIST ([0-9, ]+)/)[1].split(",").map(Number);
 const DEF_MODE = Number(cfgText.match(/#define DEFAULT_PEDAL_MODE (\d)/)[1]);
-const CHORD_CC = Number(cfgText.match(/#define CHORD_CC (\d+)/)[1]);
 const hex = (n) => n.toString(16).padStart(2, "0");
 const cc = (ch, sw, v) => "b" + ch + " " + hex(STOMP_CC[sw]) + " " + hex(v);
 function chordTap() { fcb.down(UP); fcb.down(DOWN); wait(100); fcb.up(UP); fcb.up(DOWN); wait(200); }
@@ -157,20 +156,27 @@ console.log("emulator: MIDI IN");
 fcb.midiIn([0xb0, STOMP_CC[1], 127]); wait(20);
 check("CC " + STOMP_CC[1] + " = 127 on channel 1 lights switch 2", fcb.hw.leds[1], 1);
 check("and nothing is echoed", sent(), []);
-// CHORD_CC on MIDI IN sets the DIRECT SELECT state and LED, again with no echo.
-fcb.midiIn([0xb0, CHORD_CC, 127]); wait(20);
-check("CC " + CHORD_CC + " = 127 lights DIRECT SELECT", [fcb.hw.aux[4], sent()], [1, []]);
-fcb.midiIn([0xb0, CHORD_CC, 0]); wait(20);
-check("CC " + CHORD_CC + " = 0 turns it off", [fcb.hw.aux[4], sent()], [0, []]);
+// CC 20 (once the UP + DOWN controller) is an ordinary CC: it leaves DIRECT SELECT alone.
+fcb.midiIn([0xb0, 20, 127]); wait(20);
+check("CC 20 = 127 does not light DIRECT SELECT", [fcb.hw.aux[4], sent()], [0, []]);
 
 console.log("emulator: UP + DOWN tap in run mode");
 chordTap();
-check("toggles CC " + CHORD_CC + " on", sent(), ["b0 " + hex(CHORD_CC) + " 7f"]);
-check("and lights DIRECT SELECT", fcb.hw.aux[4], 1);
+check("lights DIRECT SELECT, sending nothing", [fcb.hw.aux[4], sent()], [1, []]);
 check("without changing the program", fcb.state().program, p);
+check("and the display shows the footswitch bank (1)", [fcb.hw.display, fcb.state().bank], [1, 0]);
+press(UP, 100); wait(50);
+const bankMsgs = sent();
+check("with DIRECT SELECT lit, UP chooses bank 2 instead of sending a program change",
+      [fcb.hw.display, fcb.state().bank, fcb.state().program, bankMsgs.some((m) => /^c/.test(m))], [2, 1, p, false]);
+check("the footswitches of a bank never saved are the defaults", fcb.state().msgs.map((m) => m.num), STOMP_CC);
+check("switch 2's CC (the same in both banks) stays on, and the change sends nothing",
+      [fcb.hw.leds[1], bankMsgs], [1, []]);
+press(DOWN, 100); wait(50); sent();
+check("DOWN goes back to bank 1", [fcb.hw.display, fcb.state().bank], [1, 0]);
 chordTap();
-check("a second tap turns it off", sent(), ["b0 " + hex(CHORD_CC) + " 00"]);
-check("and DIRECT SELECT goes out", fcb.hw.aux[4], 0);
+check("a second tap turns it off, sending nothing", [fcb.hw.aux[4], sent()], [0, []]);
+check("and DIRECT SELECT goes out, the program back on the display", [fcb.hw.aux[4], fcb.hw.display, fcb.state().bank], [0, p, 0]);
 
 console.log("emulator: config mode pages, channel entry, save, cancel and reload");
 const longKey = (k) => { fcb.down(k); wait(1300); fcb.up(k); wait(200); };
@@ -401,7 +407,7 @@ check("a long UP accepts: editor closed, its LEDs dark, still in config mode", [
 check("the footswitch label shows the new message", label(2), "Note 60");
 press(UP, OVER_MS);
 check("a long UP then saves and leaves", fcb.state().mode, 0);
-check("footswitch 3's record was stored (note, 60, on 100, off 20)", JSON.parse(store["fcb1010-eeprom-v2"]).fs2, [1, 60, 100, 20]);
+check("footswitch 3's record was stored (note, 60, on 100, off 20)", JSON.parse(store["fcb1010-eeprom-v2"]).fs2, [1 | (fcb.state().pedalModes[2] << 2), 60, 100, 20]);
 wait(20); sent();
 press(2, 100); wait(20);
 const notes = sent();
@@ -454,10 +460,19 @@ fcb.confChanged(NP.TRIGGER + 2, 70);
 wait(20);
 check("a set applies at once, unsaved", [fcb.state().msgs[9].num, fcb.state().swThr[2], rec().fs9 === undefined || rec().fs9[1] !== 99], [99, 70, true]);
 fcb.confCommand(NC.SAVE, "saved"); wait(600);
-check("Save stores it and the configurator reads it back", [rec().fs9, rec().sw2[2], conf.waiting, conf.v[NP.NUM + 9]], [[0, 99, 127, 0], 70, "", 99]);
+check("Save stores it and the configurator reads it back", [rec().fs9, rec().sw2[2], conf.waiting, conf.v[NP.NUM + 9]], [[fcb.state().pedalModes[9] << 2, 99, 127, 0], 70, "", 99]);
 fcb.confChanged(NP.NUM + 9, 98); wait(20);
 fcb.confCommand(NC.RELOAD, "dropped"); wait(600);
 check("Discard goes back to the saved settings", [fcb.state().msgs[9].num, conf.v[NP.NUM + 9]], [99, 99]);
+check("the dump has the bank (1) and the bank count", [conf.v[NP.BANK], conf.v[NP.BANKS] > 0], [1, true]);
+fcb.confBank(3); wait(600);
+check("choosing bank 3 switches the pedal and reads that bank back",
+      [fcb.state().bank, conf.v[NP.BANK], conf.known, conf.v[NP.NUM + 9], fcb.state().msgs[9].num], [2, 3, true, STOMP_CC[9], STOMP_CC[9]]);
+fcb.confChanged(NP.NUM + 0, 88); wait(20);
+fcb.confCommand(NC.SAVE, "saved"); wait(600);
+check("Store keeps bank 3's footswitches in its own records", [rec().b3fs0 && rec().b3fs0[1], rec().fs0 === undefined || rec().fs0[1] !== 88], [88, true]);
+fcb.confBank(1); wait(600);
+check("and bank 1 is as it was", [fcb.state().bank, conf.v[NP.NUM + 9], conf.v[NP.NUM + 0]], [0, 99, STOMP_CC[0]]);
 longChord();
 fcb.confRead(false); wait(2000);
 check("in config mode the pedal does not answer", [conf.waiting, fcb.state().mode], ["", 1]);
@@ -525,7 +540,9 @@ fcb.confRead(true); waitMidi(600);
 check("Find through the interface reads the pedal", [conf.waiting, conf.ch, !!conf.v, conf.v && conf.v[NP.NUM + 1]], ["", oldCh, true, 77]);
 fcb.confChanged(NP.ON + 1, 55); waitMidi(50);
 fcb.confCommand(NC.SAVE, "stored"); waitMidi(600);
-check("a change and Store reach the pedal", [fcb.state().msgs[1].on, rec().fs1, conf.v[NP.ON + 1]], [55, [1, 77, 55, 10], 55]);
+// The record's type byte carries the pedal mode in bits 2-3.
+check("a change and Store reach the pedal", [fcb.state().msgs[1].on, rec().fs1, conf.v[NP.ON + 1]],
+      [55, [1 | (fcb.state().pedalModes[1] << 2), 77, 55, 10], 55]);
 fakeIn.onmidimessage = null;
 const heardBefore = conf.heard;
 fcb.confRead(false); waitMidi(2000);
@@ -546,7 +563,7 @@ check("every setting was sent (no read, so nothing is assumed), and the pedal to
 check("the status says it cannot read back", /cannot read it back/.test(el("confStatus").textContent), true);
 fcb.confChanged(NP.OFF + 5, 2); waitMidi(50);
 fcb.confCommand(NC.SAVE, "Stored."); waitMidi(600);
-check("a change and Store work without an input", [rec().fs5, rec().sw2[2]], [[0, 33, 100, 2], 12]);
+check("a change and Store work without an input", [rec().fs5, rec().sw2[2]], [[fcb.state().pedalModes[5] << 2, 33, 100, 2], 12]);
 check("saving a file without a read leaves out the firmware version", [fcb.confToFile().firmware, fcb.confToFile().footswitches[5].off], [undefined, 2]);
 conf.out = null;
 check("with no output either, a load is refused", fcb.confLoad(oneWay), false);

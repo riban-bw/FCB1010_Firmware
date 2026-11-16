@@ -6,6 +6,7 @@
 #                  run the emulator smoke test
 #   make check     every test suite (host, emulator, simulator) without bumping the build
 #   make BUILD_BUMP=0  build without bumping the build number (for test runs)
+#   make probe     the SRAM probe test images (build/probe_27c*.bin, see probe/sram_probe.c)
 #   make clean
 
 SDCC     ?= sdcc
@@ -16,8 +17,11 @@ WASMCC   ?= clang
 OUT      := build
 ROM_SIZE ?= 32768
 
-# Small memory model: Everything lives in the 8032's 256 bytes of internal RAM.
-SDCCFLAGS := -mmcs51 --model-small --std-sdcc99 --iram-size 256 --code-size $(ROM_SIZE) -Isrc
+# Small memory model: variables default to the 8032's 256 bytes of internal RAM; the
+# queues and large tables are XDATA, in the board's 32KB SRAM at 0x8000-0xFFFF (IC14's
+# chip select is A15 inverted; below 0x8000 writes reach the display / key latches).
+XRAMFLAGS := --xram-loc 0x8000 --xram-size 0x8000
+SDCCFLAGS := -mmcs51 --model-small --std-sdcc99 --iram-size 256 --code-size $(ROM_SIZE) $(XRAMFLAGS) -Isrc
 
 OBJS := $(OUT)/main.rel $(OUT)/hw.rel $(OUT)/ctl.rel
 
@@ -90,9 +94,46 @@ $(OUT)/fcb1010_27c256.bin: $(OUT)/fcb1010_raw.bin tools/rom_image.py
 $(OUT)/fcb1010_27c512.bin: $(OUT)/fcb1010_raw.bin tools/rom_image.py
 	python3 -I tools/rom_image.py $< $(ROM_SIZE) 65536 $@
 
-test: $(OUT)/test_ctl $(OUT)/test_keys
+# SRAM probe (probe/sram_probe.c): a separate test image that looks for RAM in the external
+# data space and shows what it finds. It links hw.c only; no build number, no README hooks.
+PROBE_ROMS := $(OUT)/probe_27c128.bin $(OUT)/probe_27c256.bin $(OUT)/probe_27c512.bin
+
+.PHONY: probe
+probe: $(PROBE_ROMS)
+
+$(OUT)/sram_probe.rel: probe/sram_probe.c src/*.h | $(OUT)
+	$(SDCC) $(SDCCFLAGS) -c $< -o $@
+
+# The probe overwrites the SRAM it tests, so its copy of hw.c keeps everything in internal
+# RAM (NO_XDATA) with the old small queues.
+PROBE_HW_FLAGS := -DNO_XDATA -DMIDI_TX_QUEUE=16 -DMIDI_RX_QUEUE=8 -DKEY_EVENT_QUEUE=8
+
+$(OUT)/hw_probe.rel: src/hw.c src/*.h | $(OUT)
+	$(SDCC) $(SDCCFLAGS) $(PROBE_HW_FLAGS) -c $< -o $@
+
+# sram_probe.rel first so the interrupt vector table lands at address 0.
+$(OUT)/probe.ihx: $(OUT)/sram_probe.rel $(OUT)/hw_probe.rel
+	$(SDCC) $(SDCCFLAGS) $^ -o $@
+
+$(OUT)/probe_raw.bin: $(OUT)/probe.ihx
+	$(MAKEBIN) -p $< $@
+
+$(OUT)/probe_27c128.bin: $(OUT)/probe_raw.bin tools/rom_image.py
+	python3 -I tools/rom_image.py $< $(ROM_SIZE) 16384 $@
+
+$(OUT)/probe_27c256.bin: $(OUT)/probe_raw.bin tools/rom_image.py
+	python3 -I tools/rom_image.py $< $(ROM_SIZE) 32768 $@
+
+$(OUT)/probe_27c512.bin: $(OUT)/probe_raw.bin tools/rom_image.py
+	python3 -I tools/rom_image.py $< $(ROM_SIZE) 65536 $@
+
+test: $(OUT)/test_ctl $(OUT)/test_keys $(OUT)/test_probe
 	$(OUT)/test_ctl
 	$(OUT)/test_keys
+	$(OUT)/test_probe
+
+$(OUT)/test_probe: test/test_probe.c probe/sram_probe.c | $(OUT)
+	$(HOSTCC) -std=c99 -Wall -Wextra -Wno-unused-function test/test_probe.c -o $@
 
 $(OUT)/test_ctl: test/test_ctl.c src/ctl.c src/version.c src/version_build.inc src/*.h | $(OUT)
 	$(HOSTCC) -std=c99 -Wall -Wextra -Isrc test/test_ctl.c -o $@

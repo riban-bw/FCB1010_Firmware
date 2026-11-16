@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 #include <string.h>
 
 #include "../src/platform.h"
@@ -28,9 +29,12 @@ static uint8_t  leds[10];
 static uint8_t  aux[HAL_LED_COUNT];
 // Footswitch message records: saved by the firmware, and stored (what a load returns).
 static int      msg_saved;
-// Footswitch message records (type, number, on value, off value), one per switch.
-static int      msg_stored_valid[HAL_REC_SW1];
-static uint8_t  stored_msg[HAL_REC_SW1][4], saved_msg[HAL_REC_SW1][4];
+// Footswitch records (type with the pedal mode in bits 2-3, number, on value, off value),
+// one per switch and bank: bank b's switch n at b * 10 + n, so 0-9 are bank 1.
+#define MSG_RECS (BANK_COUNT * HAL_REC_SW1)
+#define MSG_REC(rec) (hal_bank * HAL_REC_SW1 + (rec))
+static int      msg_stored_valid[MSG_RECS], msg_was_saved[MSG_RECS];
+static uint8_t  stored_msg[MSG_RECS][4], saved_msg[MSG_RECS][4];
 // Relay outputs and the saved / stored relay trigger records.
 static uint8_t  relays;
 static int      sw_saved;
@@ -127,17 +131,20 @@ void hal_relays(uint8_t mask)
 // (calibration as heel A, toe A, heel B, toe B, like the EEPROM record). Saves are kept
 // apart from what loads return, so every save behaves like a failed one when reloading.
 uint8_t hal_rec[4];
+uint8_t hal_bank;
 
 uint8_t hal_rec_load(uint8_t rec)
 {
+    assert(hal_bank < BANK_COUNT);
+
     if (rec < HAL_REC_SW1)
     {
-        if (!msg_stored_valid[rec])
+        if (!msg_stored_valid[MSG_REC(rec)])
         {
             return 0;
         }
 
-        memcpy(hal_rec, stored_msg[rec], 4);
+        memcpy(hal_rec, stored_msg[MSG_REC(rec)], 4);
         return 1;
     }
 
@@ -180,7 +187,8 @@ uint8_t hal_rec_save(uint8_t rec)
     if (rec < HAL_REC_SW1)
     {
         msg_saved++;
-        memcpy(saved_msg[rec], hal_rec, 4);
+        msg_was_saved[MSG_REC(rec)] = 1;
+        memcpy(saved_msg[MSG_REC(rec)], hal_rec, 4);
     }
     else if (rec <= HAL_REC_SW2)
     {
@@ -247,6 +255,7 @@ static void reset_world(void)
     sw_stored_valid[1] = 0;
     msg_saved = 0;
     memset(msg_stored_valid, 0, sizeof(msg_stored_valid));
+    memset(msg_was_saved, 0, sizeof(msg_was_saved));
     ctl_init();
     // Skip the power-on animation (test_boot_animation covers it).
     boot_end();
@@ -255,6 +264,57 @@ static void reset_world(void)
 static void clear_log(void)
 {
     midi_len = 0;
+}
+
+// Store pedal mode m for footswitch sw (0-9) of bank b (0-based) in the fake EEPROM, in
+// its record's type byte (bits 2-3), keeping a stored message or else the default one.
+static void store_bank_mode(int b, int sw, uint8_t m)
+{
+    int r = b * HAL_REC_SW1 + sw;
+
+    if (!msg_stored_valid[r])
+    {
+        msg_stored_valid[r] = 1;
+        stored_msg[r][0] = MT_CC;
+        stored_msg[r][1] = stomp_cc[sw];
+        stored_msg[r][2] = 127;
+        stored_msg[r][3] = 0;
+    }
+
+    stored_msg[r][0] = (uint8_t)((stored_msg[r][0] & 3) | (m << 2));
+}
+
+// Bank 1's ten modes, given packed two bits per switch (switch 1 lowest), four switches a
+// byte.
+static void store_modes(uint8_t b0, uint8_t b1, uint8_t b2)
+{
+    int i;
+    uint8_t packed[3];
+
+    packed[0] = b0;
+    packed[1] = b1;
+    packed[2] = b2;
+
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        store_bank_mode(0, i, (uint8_t)((packed[i >> 2] >> ((i & 3) * 2)) & 3));
+    }
+}
+
+// Every footswitch record saved so far becomes what a load returns (the fake keeps saves
+// apart from loads otherwise).
+static void keep_saved_msgs(void)
+{
+    int r;
+
+    for (r = 0; r < MSG_RECS; r++)
+    {
+        if (msg_was_saved[r])
+        {
+            msg_stored_valid[r] = 1;
+            memcpy(stored_msg[r], saved_msg[r], 4);
+        }
+    }
 }
 
 // Feed one pedal channel a reading.
@@ -892,11 +952,12 @@ static void test_chord_and_config_entry(void)
     CHECK(mode == MODE_CONFIG && status_led == 1);
     CHECK(midi_len == 0);
 
-    // A chord that is let go early in run mode only toggles CHORD_CC (see test_chord_cc).
+    // A chord that is let go early in run mode only toggles bank mode (see
+    // test_bank_mode_toggle): nothing is sent, and the display shows bank 1.
     reset_world();
     clear_log();
     chord_short();
-    CHECK(mode == MODE_RUN && midi_len == 3 && cc_number(0) == CHORD_CC && display == 0);
+    CHECK(mode == MODE_RUN && midi_len == 0 && bank_mode && display == 1 && program == 0);
 
     // Once the chord has opened config mode, UP and DOWN stay quiet until both are let go.
     reset_world();
@@ -1067,7 +1128,7 @@ static void test_config_channel(void)
     ctl_key_release(CTL_KEY_DOWN);
 
     // A long UP + DOWN in config mode saves and leaves, like a long UP. The keys' own
-    // hold events and the release do nothing more (no CHORD_CC toggle, no program).
+    // hold events and the release do nothing more (no bank mode toggle, no program).
     reset_world();
     chord_long();
     tap(CTL_KEY_UP);
@@ -1084,7 +1145,7 @@ static void test_config_channel(void)
     ctl_key_hold(CTL_KEY_DOWN);
     ticks(CHORD_TICKS);
     chord_up();
-    CHECK(mode == MODE_RUN && midi_len == 0 && program == 0 && chord_cc_on == 0);
+    CHECK(mode == MODE_RUN && midi_len == 0 && program == 0 && bank_mode == 0);
     // The next long chord opens config mode again.
     chord_long();
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_MODES);
@@ -1134,6 +1195,7 @@ static void test_config_cancel(void)
     stored_cfg[1] = 0;
     stored_cfg[2] = 0;
     stored_cfg[3] = 0;
+    store_modes(0, 0, 0);
     cal_stored_valid = 1;
     stored_heel[0] = 40; stored_heel[1] = 50;
     stored_toe[0]  = 140; stored_toe[1] = 150;
@@ -1216,8 +1278,13 @@ static void test_config_modes(void)
     // Leave, then check the saved bytes round-trip into a fresh controller.
     save_exit();
     CHECK(mode == MODE_RUN && cfg_saved == 1);
+    // The modes are saved in the footswitch records (type byte bits 2-3), not the
+    // settings record, whose last three bytes are 0.
+    CHECK(msg_was_saved[9] && (saved_msg[9][0] >> 2) == PM_MOMENTARY && (saved_msg[9][0] & 3) == MT_CC);
+    CHECK((saved_msg[2][0] >> 2) == PM_STOMP && saved_cfg[1] == 0 && saved_cfg[2] == 0 && saved_cfg[3] == 0);
     memcpy(stored_cfg, saved_cfg, 4);
     cfg_stored_valid = 1;
+    keep_saved_msgs();
     ctl_init();
     CHECK(pedal_mode_get(2) == PM_STOMP);
     CHECK(pedal_mode_get(9) == PM_MOMENTARY);
@@ -1232,13 +1299,24 @@ static void test_config_modes(void)
     ctl_key_release(10);
     CHECK(midi_len == 6 && cc_number(0) == stomp_cc[9] && cc_value(0) == 127 && cc_value(1) == 0);
 
-    // Every 2-bit value is a mode now: 0xFF is inverted momentary for switches 1-4,
-    // and unused high bits of the last byte are ignored.
-    stored_cfg[1] = 0xFF;
-    stored_cfg[3] = 0xF0;
+    // Every 2-bit value is a mode: type byte 0xFC is a CC in inverted momentary, and
+    // the type byte's high bits are ignored.
+    for (i = 0; i < 4; i++)
+    {
+        stored_msg[i][0] = 0xFC;
+    }
+
+    stored_msg[8][0] = 0xF0;
+    stored_msg[9][0] = 0xF1;
     ctl_init();
-    CHECK(pedal_mode_get(0) == PM_MOM_INV && pedal_mode_get(3) == PM_MOM_INV);
-    CHECK(pedal_mode_get(8) == PM_STOMP && pedal_mode_get(9) == PM_STOMP && pedal_modes[2] == 0);
+    CHECK(pedal_mode_get(0) == PM_MOM_INV && pedal_mode_get(3) == PM_MOM_INV && msg_type(0) == MT_CC);
+    CHECK(pedal_mode_get(8) == PM_STOMP && pedal_mode_get(9) == PM_STOMP && msg_type(9) == MT_NOTE);
+    // The settings record's last three bytes are not modes.
+    stored_cfg[1] = 0xFF;
+    stored_cfg[2] = 0xFF;
+    stored_cfg[3] = 0xFF;
+    ctl_init();
+    CHECK(pedal_mode_get(0) == PM_MOM_INV && pedal_mode_get(8) == PM_STOMP && pedal_mode_get(9) == PM_STOMP);
 
     // Changing a switch to inverted momentary asserts it on saving: its state is set and
     // its LED lights, whether it was off (switch 2) or on (switch 3). Like a change to
@@ -1776,41 +1854,46 @@ static void test_config_version_jump(void)
     CHECK(midi_len == 3 && cc_number(0) == stomp_cc[0] && cc_value(0) == 127 && leds[0] == 1);
 }
 
-// A short UP + DOWN press in run mode toggles CHORD_CC (127, then 0) and the DIRECT
-// SELECT LED; it changes no program, and config mode leaves it alone.
-static void test_chord_cc(void)
+// A short UP + DOWN press in run mode toggles bank mode and the DIRECT SELECT LED. It
+// sends nothing, changes no program, and config mode leaves it alone.
+static void test_bank_mode_toggle(void)
 {
-    printf("run mode: UP + DOWN tap toggles CHORD_CC\n");
+    printf("run mode: UP + DOWN tap toggles bank mode\n");
     reset_world();
     CHECK(aux[HAL_LED_DIRECT_SELECT] == 0);
     clear_log();
     chord_short();
-    CHECK(mode == MODE_RUN && midi_len == 3);
-    CHECK(cc_status(0) == CC_STATUS && cc_number(0) == CHORD_CC && cc_value(0) == 127);
-    CHECK(aux[HAL_LED_DIRECT_SELECT] == 1 && display == 0 && program == 0);
-    clear_log();
+    CHECK(mode == MODE_RUN && midi_len == 0 && bank_mode == 1);
+    // The display shows the bank (bank 1) while DIRECT SELECT is lit.
+    CHECK(aux[HAL_LED_DIRECT_SELECT] == 1 && display == 1 && program == 0);
     chord_short();
-    CHECK(midi_len == 3 && cc_number(0) == CHORD_CC && cc_value(0) == 0);
-    CHECK(aux[HAL_LED_DIRECT_SELECT] == 0);
+    CHECK(midi_len == 0 && bank_mode == 0 && aux[HAL_LED_DIRECT_SELECT] == 0 && display == 0);
 
     // The second key pressed late still makes a chord; nothing is stepped.
-    clear_log();
     ctl_key_press(CTL_KEY_DOWN);
     ticks(10);
     ctl_key_press(CTL_KEY_UP);
     ticks(10);
     ctl_key_release(CTL_KEY_DOWN);
     ctl_key_release(CTL_KEY_UP);
-    CHECK(midi_len == 3 && cc_number(0) == CHORD_CC && cc_value(0) == 127 && program == 0);
+    CHECK(midi_len == 0 && bank_mode == 1 && program == 0);
 
-    // Opening and leaving config mode sends no CHORD_CC. DIRECT SELECT is dark while
+    // It does not wait for MIDI OUT room, since it sends nothing.
+    midi_space = 0;
+    chord_short();
+    CHECK(bank_mode == 0);
+    chord_short();
+    CHECK(bank_mode == 1);
+    midi_space = 15;
+
+    // Opening and leaving config mode sends nothing. DIRECT SELECT is dark while
     // editing and shows the kept state again on leaving (save or cancel). An UP + DOWN
     // tap in config mode does not toggle it either.
     clear_log();
     chord_long();
-    CHECK(mode == MODE_CONFIG && aux[HAL_LED_DIRECT_SELECT] == 0 && chord_cc_on == 1);
+    CHECK(mode == MODE_CONFIG && aux[HAL_LED_DIRECT_SELECT] == 0 && bank_mode == 1);
     chord_short();
-    CHECK(mode == MODE_CONFIG && chord_cc_on == 1 && aux[HAL_LED_DIRECT_SELECT] == 0);
+    CHECK(mode == MODE_CONFIG && bank_mode == 1 && aux[HAL_LED_DIRECT_SELECT] == 0);
     tap(CTL_KEY_UP);
     CHECK(aux[HAL_LED_DIRECT_SELECT] == 0);
     save_exit();
@@ -1820,26 +1903,19 @@ static void test_chord_cc(void)
     CHECK(mode == MODE_RUN && aux[HAL_LED_DIRECT_SELECT] == 1);
     CHECK(midi_len == 0);
 
-    // With CHORD_CC off, the LED stays dark after leaving.
+    // With bank mode off, the LED stays dark after leaving.
     chord_short();
-    CHECK(chord_cc_on == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
+    CHECK(bank_mode == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
     chord_long();
     save_exit();
     CHECK(aux[HAL_LED_DIRECT_SELECT] == 0);
     // Back on for the checks below.
     chord_short();
-    CHECK(chord_cc_on == 1 && aux[HAL_LED_DIRECT_SELECT] == 1);
-    clear_log();
-
-    // With MIDI OUT backed up the tap is ignored entirely.
-    midi_space = 2;
-    chord_short();
-    CHECK(midi_len == 0 && aux[HAL_LED_DIRECT_SELECT] == 1);
-    midi_space = 15;
+    CHECK(bank_mode == 1 && aux[HAL_LED_DIRECT_SELECT] == 1);
 
     // A power-on starts with it off.
     ctl_init();
-    CHECK(aux[HAL_LED_DIRECT_SELECT] == 0 && chord_cc_on == 0);
+    CHECK(aux[HAL_LED_DIRECT_SELECT] == 0 && bank_mode == 0);
 }
 
 // Open a SWITCH page: 1 (page 5) or 2 (page 6).
@@ -1877,9 +1953,9 @@ static void test_relays(void)
     CHECK(relays == 0 && aux[HAL_LED_SWITCH_1] == 0);
     tap(2);
     chord_short();
-    CHECK(leds[2] == 0 && chord_cc_on == 0);
+    CHECK(leds[2] == 0 && bank_mode == 0);
 
-    // Page 5: footswitch 3 and CHORD_CC, all LEDs showing the settings.
+    // Page 5: footswitch 3 and bank mode, all LEDs showing the settings.
     goto_switch_page(1);
     CHECK(cfg_page == PAGE_SW1 && aux[HAL_LED_SWITCH_1] == 1 && aux[HAL_LED_DIRECT_SELECT] == 0);
     for (i = 0; i < STOMP_COUNT; i++)
@@ -1894,7 +1970,7 @@ static void test_relays(void)
     tap(2);
     chord_short();
     CHECK(sw_mask[0] == (4 | SW_CC_BIT) && aux[HAL_LED_DIRECT_SELECT] == 1);
-    CHECK(mode == MODE_CONFIG && cfg_page == PAGE_SW1 && chord_cc_on == 0 && midi_len == 0);
+    CHECK(mode == MODE_CONFIG && cfg_page == PAGE_SW1 && bank_mode == 0 && midi_len == 0);
 
     // Pedal A sets the trigger value: the first reading is only a reference, small
     // wobble is ignored, a real move sets it, shows it and lights EXP 1.
@@ -1924,14 +2000,14 @@ static void test_relays(void)
     CHECK(leds[2] == 1 && leds[9] == 0 && aux[HAL_LED_DIRECT_SELECT] == 1 && aux[HAL_LED_EXP_1] == 1);
     CHECK(aux[HAL_LED_EXP_2] == 0);
 
-    // Saving stores both records: mask low, mask high (bit 2 = CHORD_CC), A, B.
+    // Saving stores both records: mask low, mask high (bit 2 = bank mode), A, B.
     save_exit();
     CHECK(sw_saved == 2);
     CHECK(saved_sw[0][0] == 4 && saved_sw[0][1] == 4 && saved_sw[0][2] == v && saved_sw[0][3] == 0);
     CHECK(saved_sw[1][0] == 0 && saved_sw[1][1] == 2 && saved_sw[1][2] == 0 && saved_sw[1][3] == ctl_scale(64, 0, 255));
     CHECK(aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
 
-    // Run mode, relay 1: footswitch 3 OR CHORD_CC OR pedal A at v and up.
+    // Run mode, relay 1: footswitch 3 OR bank mode OR pedal A at v and up.
     pedal(0, 0);
     pedal(1, 0);
     ticks(1);
@@ -1941,7 +2017,7 @@ static void test_relays(void)
     CHECK(relays == 1 && aux[HAL_LED_SWITCH_1] == 1 && aux[HAL_LED_SWITCH_2] == 0);
     chord_short();
     ticks(1);
-    CHECK(relays == 1 && chord_cc_on == 1);
+    CHECK(relays == 1 && bank_mode == 1);
     tap(2);
     ticks(1);
     CHECK(relays == 1);
@@ -2240,21 +2316,11 @@ static void test_midi_in(void)
     tap(0);
     CHECK(cc_value(0) == 0 && leds[0] == 0);
 
-    // CHORD_CC sets the DIRECT SELECT state and LED, sends nothing, and the next UP + DOWN
-    // tap toggles from that state. Config mode ignores it.
+    // A CC 20 (the old UP + DOWN controller number) is no longer special: it does not
+    // touch bank mode.
     clear_log();
-    ctl_midi_in(CC_STATUS); ctl_midi_in(CHORD_CC); ctl_midi_in(127);
-    CHECK(chord_cc_on == 1 && aux[HAL_LED_DIRECT_SELECT] == 1 && midi_len == 0);
-    ctl_midi_in(CC_STATUS); ctl_midi_in(CHORD_CC); ctl_midi_in(0);
-    CHECK(chord_cc_on == 0 && aux[HAL_LED_DIRECT_SELECT] == 0 && midi_len == 0);
-    ctl_midi_in(CC_STATUS); ctl_midi_in(CHORD_CC); ctl_midi_in(100);
-    CHECK(chord_cc_on == 1 && aux[HAL_LED_DIRECT_SELECT] == 1);
-    chord_short();
-    CHECK(chord_cc_on == 0 && midi_len == 3 && cc_number(0) == CHORD_CC && cc_value(0) == 0);
-    chord_long();
-    ctl_midi_in(CC_STATUS); ctl_midi_in(CHORD_CC); ctl_midi_in(127);
-    CHECK(chord_cc_on == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
-    cancel_exit();
+    ctl_midi_in(CC_STATUS); ctl_midi_in(20); ctl_midi_in(127);
+    CHECK(bank_mode == 0 && aux[HAL_LED_DIRECT_SELECT] == 0 && midi_len == 0);
 
     // Running status: One status byte, two pairs.
     reset_world();
@@ -2585,9 +2651,7 @@ static void test_boot_inverted(void)
     stored_cfg[0] = MIDI_CHANNEL;
     // Two bits per switch, switch 1 lowest: switch 2 inverted (3), switch 3 momentary
     // (2), switch 1 stomp; switches 5-8 inverted; switches 9 and 10 stomp.
-    stored_cfg[1] = (uint8_t)((PM_MOM_INV << 2) | (PM_MOMENTARY << 4));
-    stored_cfg[2] = 0xFF;
-    stored_cfg[3] = 0x00;
+    store_modes((uint8_t)((PM_MOM_INV << 2) | (PM_MOMENTARY << 4)), 0xFF, 0x00);
     memset(leds, 0xEE, sizeof(leds));
     clear_log();
     ctl_init();
@@ -2612,11 +2676,7 @@ static void test_boot_inverted(void)
     stored_sw[0][1] = 0;
     stored_sw[0][2] = 0;
     stored_sw[0][3] = 0;
-    cfg_stored_valid = 1;
-    stored_cfg[0] = MIDI_CHANNEL;
-    stored_cfg[1] = (uint8_t)(PM_MOM_INV << 2);
-    stored_cfg[2] = 0;
-    stored_cfg[3] = 0;
+    store_modes((uint8_t)(PM_MOM_INV << 2), 0, 0);
     ctl_init();
     ticks(1);
     CHECK(relays == 1 && aux[HAL_LED_SWITCH_1] == 1 && midi_len == 0);
@@ -2819,11 +2879,7 @@ static void test_switch_messages(void)
     stored_msg[1][1] = 60;
     stored_msg[1][2] = 100;
     stored_msg[1][3] = 30;
-    cfg_stored_valid = 1;
-    stored_cfg[0] = MIDI_CHANNEL;
-    stored_cfg[1] = 0x0F;               // switches 1 and 2 inverted momentary
-    stored_cfg[2] = 0;
-    stored_cfg[3] = 0;
+    store_modes(0x0F, 0, 0);            // switches 1 and 2 inverted momentary
     ctl_init();
     boot_end();
     CHECK(msg_type(0) == MT_PROG && MSG_ON(0) == 5 && MSG_OFF(0) == 5 && prog_single(0) && msg_type(1) == MT_NOTE && MSG_NUM(1) == 60 &&
@@ -2840,11 +2896,7 @@ static void test_switch_messages(void)
     stored_msg[0][1] = 0;
     stored_msg[0][2] = 5;
     stored_msg[0][3] = 6;
-    cfg_stored_valid = 1;
-    stored_cfg[0] = MIDI_CHANNEL;
-    stored_cfg[1] = 0x03;               // switch 1 inverted momentary
-    stored_cfg[2] = 0;
-    stored_cfg[3] = 0;
+    store_modes(0x03, 0, 0);            // switch 1 inverted momentary
     ctl_init();
     boot_end();
     CHECK(leds[0] == 1 && midi_len == 0);
@@ -2999,8 +3051,8 @@ static void test_config_editor(void)
     // Save and leave: every footswitch record is saved; switch 3 sends its note.
     save_exit();
     CHECK(mode == MODE_RUN && msg_saved == 10);
-    CHECK(saved_msg[2][0] == MT_NOTE && saved_msg[2][1] == 100 && saved_msg[2][2] == 90 && saved_msg[2][3] == 35);
-    CHECK(saved_msg[0][0] == MT_CC && saved_msg[0][1] == cc[0] && saved_msg[0][2] == 127 && saved_msg[0][3] == 0);
+    CHECK((saved_msg[2][0] & 3) == MT_NOTE && saved_msg[2][1] == 100 && saved_msg[2][2] == 90 && saved_msg[2][3] == 35);
+    CHECK((saved_msg[0][0] & 3) == MT_CC && saved_msg[0][1] == cc[0] && saved_msg[0][2] == 127 && saved_msg[0][3] == 0);
     CHECK(saved_msg[9][1] == cc[9] && param_leds(-1));
     clear_log();
     tap(sw_code(3));
@@ -3137,7 +3189,7 @@ static void test_config_editor(void)
     // record compares the way it loads.
     reset_world();
     msg_stored_valid[0] = 1;
-    stored_msg[0][0] = 3;               // type 3: loads as CC
+    stored_msg[0][0] = 3 | (DEFAULT_PEDAL_MODE << 2);   // type 3: loads as CC
     stored_msg[0][1] = cc[0];
     stored_msg[0][2] = 127;
     stored_msg[0][3] = 0x80;            // off value 0 with bit 7 set
@@ -3253,7 +3305,8 @@ static void test_midi_config(void)
     clear_log();
     dump_run(1000);
     n = parse_dump(0);
-    CHECK(n == 1 + 3 + 10 + 40 + 11 + 11 + 4 + 4 && dump_end && midi_job == 0);
+    CHECK(n == 1 + 3 + 2 + 10 + 40 + 11 + 11 + 4 + 4 && dump_end && midi_job == 0);
+    CHECK(dump_values[NP_BANK] == 1 && dump_values[NP_BANKS] == BANK_COUNT);
     CHECK(dump_values[NP_CHANNEL] == MIDI_CHANNEL);
     CHECK(dump_values[NP_VERSION] == fw_version[0] && dump_values[NP_VERSION + 1] == fw_version[1] &&
           dump_values[NP_VERSION + 2] == fw_version[2]);
@@ -3266,7 +3319,7 @@ static void test_midi_config(void)
     CHECK(dump_values[NP_TRIGGER + 1] == 77 && dump_values[NP_TRIGGER] == 0);
     CHECK(dump_values[NP_CAL] == 3 && dump_values[NP_CAL + 1] == 250 && dump_values[NP_CAL + 2] == 129 &&
           dump_values[NP_CAL + 3] == 200);
-    CHECK(!dump_seen[NP_COMMAND] && !dump_seen[6] && !dump_seen[NP_FOLLOW1 + 11]);
+    CHECK(!dump_seen[NP_COMMAND] && !dump_seen[NP_MODE + 10] && !dump_seen[NP_FOLLOW1 + 11]);
 
     // It goes one parameter per tick, waiting while MIDI OUT has less than 9 bytes free
     // (7 for a settable parameter, 9 with CC 38).
@@ -3464,6 +3517,421 @@ static void test_midi_config(void)
     CHECK(heel[0] == 20 && heel[1] == 30);
 }
 
+// Store footswitch sw's (0-9) message in bank b (0-based) of the fake EEPROM, with mode m.
+static void store_bank_msg(int b, int sw, uint8_t type, uint8_t num, uint8_t on, uint8_t off, uint8_t m)
+{
+    int r = b * HAL_REC_SW1 + sw;
+
+    msg_stored_valid[r] = 1;
+    stored_msg[r][0] = (uint8_t)(type | (m << 2));
+    stored_msg[r][1] = num;
+    stored_msg[r][2] = on;
+    stored_msg[r][3] = off;
+}
+
+// Every switch of banks 1 to n stored in stomp mode (the default messages).
+static void stomp_banks(int n)
+{
+    int b, i;
+
+    for (b = 0; b < n; b++)
+    {
+        for (i = 0; i < STOMP_COUNT; i++)
+        {
+            store_bank_mode(b, i, PM_STOMP);
+        }
+    }
+}
+
+// Footswitch banks: with DIRECT SELECT lit (UP + DOWN tapped), UP / DOWN choose a bank of
+// footswitch messages and modes instead of a program; the bank stays when DIRECT SELECT
+// goes out. Leaving a bank turns its switches off (sending their off), then the new bank's
+// switches go to their resting states.
+static void test_banks(void)
+{
+    const uint8_t cc[10] = { STOMP_CC_LIST };
+    int i;
+
+    printf("footswitch banks\n");
+
+    // Power-on is bank 1. Bank 2 holds a note on switch 1 (inverted momentary) and a CC
+    // on switch 2 (stomp); the rest of bank 2 was never saved.
+    reset_world();
+    stomp_banks(4);
+    store_bank_msg(1, 0, MT_NOTE, 60, 100, 30, PM_MOM_INV);
+    store_bank_msg(1, 1, MT_CC, 70, 90, 10, PM_STOMP);
+    ctl_init();
+    boot_end();
+    CHECK(hal_bank == 0 && bank_next == 0 && msg_type(0) == MT_CC && MSG_NUM(0) == cc[0] && pedal_mode_get(0) == PM_STOMP);
+
+    // Switch 3 on, then into bank mode: the display shows bank 1, nothing is sent.
+    tap(sw_code(3));
+    CHECK(leds[2] == 1);
+    clear_log();
+    chord_short();
+    CHECK(bank_mode && aux[HAL_LED_DIRECT_SELECT] == 1 && display == 1 && midi_len == 0);
+
+    // UP: bank 2 on the display, nothing sent. Bank 2's switch 3 has the same CC as bank
+    // 1's (the default), so it stays on; switch 1 is an inverted momentary note no switch
+    // of bank 1 uses, so it rests on (sending nothing, as at power-on); switch 2 rests off.
+    clear_log();
+    tap(CTL_KEY_UP);
+    CHECK(display == 2 && program == 0 && bank_busy && hal_bank == 0);
+    ticks(1);
+    CHECK(!bank_busy && hal_bank == 1 && bank_next == 1 && midi_len == 0);
+    CHECK(leds[0] == 1 && leds[1] == 0 && leds[2] == 1 && stomp_state == 0x005);
+    CHECK(msg_type(0) == MT_NOTE && pedal_mode_get(0) == PM_MOM_INV && MSG_NUM(1) == 70 && MSG_ON(1) == 90 &&
+          MSG_OFF(1) == 10 && msg_type(2) == MT_CC && MSG_NUM(2) == cc[2] && pedal_mode_get(2) == PM_STOMP);
+    CHECK(display == 2 && program == 0);
+    ticks(3);
+    CHECK(midi_len == 0);
+
+    // The footswitches now send bank 2's messages; switch 3 carries on from on.
+    clear_log();
+    tap(sw_code(2));
+    CHECK(midi_len == 3 && cc_number(0) == 70 && cc_value(0) == 90 && leds[1] == 1);
+    clear_log();
+    tap(sw_code(3));
+    CHECK(midi_len == 3 && cc_number(0) == cc[2] && cc_value(0) == 0 && leds[2] == 0);
+    tap(sw_code(3));
+    CHECK(leds[2] == 1);
+
+    // Out of bank mode: the display shows the program again and UP sends a program change;
+    // bank 2 stays.
+    clear_log();
+    chord_short();
+    CHECK(!bank_mode && aux[HAL_LED_DIRECT_SELECT] == 0 && display == 0 && hal_bank == 1 && midi_len == 0);
+    tap(CTL_KEY_UP);
+    CHECK(midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 1 && display == 1 && hal_bank == 1);
+    clear_log();
+    tap(sw_code(2));
+    CHECK(midi_len == 3 && cc_number(0) == 70 && cc_value(0) == 10 && leds[1] == 0);
+
+    // Back into bank mode: the bank (2) is shown, not the program; DOWN to bank 1, sending
+    // nothing. Switch 3's CC is still on; switch 1 is a CC no switch of bank 2 has, off.
+    clear_log();
+    chord_short();
+    CHECK(bank_mode && display == 2 && program == 1);
+    tap(CTL_KEY_DOWN);
+    ticks(3);
+    CHECK(hal_bank == 0 && display == 1 && midi_len == 0 && leds[0] == 0 && leds[2] == 1 && stomp_state == 0x004);
+    CHECK(msg_type(0) == MT_CC && MSG_NUM(0) == cc[0] && pedal_mode_get(0) == PM_STOMP);
+
+    // At bank 1 DOWN stops (or wraps to the last bank with PROGRAM_WRAP).
+    clear_log();
+    tap(CTL_KEY_DOWN);
+    ticks(3);
+#if PROGRAM_WRAP
+    CHECK(hal_bank == BANK_COUNT - 1 && display == BANK_COUNT);
+    tap(CTL_KEY_UP);
+    ticks(3);
+#endif
+    CHECK(hal_bank == 0 && display == 1 && midi_len == 0 && program == 1 && leds[2] == 1);
+
+    // A bank that was never saved has the default messages in DEFAULT_PEDAL_MODE; the
+    // CCs it shares with bank 1 keep bank 1's states, whatever the mode.
+    bank_next = 6;
+    tap(CTL_KEY_UP);
+    ticks(2);
+    CHECK(hal_bank == 7 && msg_type(4) == MT_CC && MSG_NUM(4) == cc[4] && MSG_ON(4) == 127 && MSG_OFF(4) == 0 &&
+          pedal_mode_get(4) == DEFAULT_PEDAL_MODE && stomp_state == 0x004 && midi_len == 0);
+    bank_next = 1;
+    tap(CTL_KEY_DOWN);
+    ticks(3);
+    CHECK(hal_bank == 0 && stomp_state == 0x004);
+
+    // Held UP repeats on the display only; the bank loads once, on release, and stops at
+    // the last bank (or wraps).
+    clear_log();
+    ctl_key_press(CTL_KEY_UP);
+    ticks(REPEAT_DELAY_TICKS + 2 * REPEAT_PERIOD_TICKS);
+    CHECK(display == 4 && hal_bank == 0 && !bank_busy);
+    ctl_key_release(CTL_KEY_UP);
+    ticks(1);
+    CHECK(hal_bank == 3 && display == 4 && midi_len == 0);
+    bank_next = BANK_COUNT - 1;
+    tap(CTL_KEY_UP);
+    ticks(1);
+#if PROGRAM_WRAP
+    CHECK(hal_bank == 0 && display == 1);
+#else
+    CHECK(hal_bank == BANK_COUNT - 1 && display == BANK_COUNT);
+#endif
+
+    // The change waits for a pending undo to go out (MIDI OUT full), with the old message;
+    // a footswitch press before the change is ignored.
+    reset_world();
+    stomp_banks(2);
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        set_mode((uint8_t)i, PM_STOMP);
+    }
+    set_mode(0, PM_STOMP_MOM);
+    store_bank_mode(0, 0, PM_STOMP_MOM);
+    store_bank_msg(1, 0, MT_CC, 71, 127, 0, PM_STOMP);
+    tap(sw_code(5));
+    chord_short();
+    ctl_key_press(sw_code(1));
+    ctl_key_hold(sw_code(1));
+    clear_log();
+    midi_space = 2;
+    ctl_key_release(sw_code(1));
+    CHECK(stomp_revert == 1 && midi_len == 0);
+    tap(CTL_KEY_UP);
+    ticks(5);
+    CHECK(bank_busy && hal_bank == 0 && midi_len == 0);
+    midi_space = 15;
+    ctl_key_press(sw_code(7));
+    ctl_key_release(sw_code(7));
+    // The undo goes out as soon as there is room (here on the key event), with the old
+    // bank's message; the press itself is ignored.
+    CHECK(bank_busy && midi_len == 3 && cc_number(0) == cc[0] && cc_value(0) == 0 && leds[6] == 0);
+    ticks(1);
+    CHECK(!bank_busy && hal_bank == 1 && midi_len == 3 && cc_number(0) == cc[0] && cc_value(0) == 0);
+    CHECK(leds[0] == 0 && leds[4] == 1 && stomp_state == 0x010);
+
+    // Bank 2's switch 1 is CC 71: a CC 71 from MIDI IN sets it, and its press sends it.
+    clear_log();
+    ctl_midi_in(CC_STATUS); ctl_midi_in(71); ctl_midi_in(127);
+    CHECK(leds[0] == 1 && midi_len == 0);
+
+    // A program change switch that is on turns off (no program change is ever carried); a
+    // switch held across the change does nothing when let go, but its CC's state (on, as
+    // last sent) carries over. In bank mode a program it sends is kept (and UP / DOWN step
+    // from it later) while the display shows the bank. The old bank is read back from the
+    // EEPROM, so the program change switch is stored.
+    reset_world();
+    stomp_banks(2);
+    store_bank_msg(0, 0, MT_PROG, 0, 5, 6, PM_STOMP);
+    store_bank_mode(0, 1, PM_MOMENTARY);
+    ctl_init();
+    boot_end();
+    for (i = 2; i < STOMP_COUNT; i++)
+    {
+        set_mode((uint8_t)i, PM_STOMP);
+    }
+    CHECK(msg_type(0) == MT_PROG && pedal_mode_get(1) == PM_MOMENTARY);
+    chord_short();
+    clear_log();
+    tap(sw_code(1));
+    CHECK(midi_len == 2 && midi_log[1] == 5 && program == 5 && display == 1 && leds[0] == 1);
+    ctl_key_press(sw_code(2));
+    CHECK(leds[1] == 1);
+    clear_log();
+    tap(CTL_KEY_UP);
+    ticks(3);
+    CHECK(hal_bank == 1 && leds[0] == 0 && leds[1] == 1 && midi_len == 0);
+    ctl_key_release(sw_code(2));
+    ticks(2);
+    CHECK(midi_len == 0 && leds[1] == 1);
+    chord_short();
+    CHECK(display == 5);
+
+    // Configuration mode edits the current bank: a save writes bank 2's records (with the
+    // modes) and leaves bank 1's alone; the CONFIG LED compares with bank 2.
+    reset_world();
+    stomp_banks(2);
+    store_bank_msg(1, 3, MT_CC, 44, 127, 0, PM_MOMENTARY);
+    chord_short();
+    tap(CTL_KEY_UP);
+    ticks(3);
+    CHECK(hal_bank == 1 && pedal_mode_get(3) == PM_MOMENTARY);
+    chord_long();
+    CHECK(mode == MODE_CONFIG && status_led == 1 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
+    tap(sw_code(4));
+    tap(sw_code(4));
+    CHECK(pedal_mode_get(3) == PM_MOM_INV && status_led == 0);
+    save_exit();
+    CHECK(mode == MODE_RUN && hal_bank == 1 && display == 2 && aux[HAL_LED_DIRECT_SELECT] == 1);
+    CHECK(msg_was_saved[HAL_REC_SW1 + 3] && saved_msg[HAL_REC_SW1 + 3][0] == (MT_CC | (PM_MOM_INV << 2)) &&
+          saved_msg[HAL_REC_SW1 + 3][1] == 44);
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        CHECK(!msg_was_saved[i] && msg_was_saved[HAL_REC_SW1 + i]);
+    }
+    // Saved, it comes back with the bank.
+    keep_saved_msgs();
+    tap(CTL_KEY_DOWN);
+    ticks(3);
+    CHECK(hal_bank == 0 && MSG_NUM(3) == cc[3]);
+    tap(CTL_KEY_UP);
+    ticks(3);
+    CHECK(hal_bank == 1 && MSG_NUM(3) == 44 && pedal_mode_get(3) == PM_MOM_INV && leds[3] == 1);
+
+    // Over MIDI: NP_BANK (1 to BANK_COUNT) changes bank as UP / DOWN do, out-of-range
+    // values are ignored, NP_BANKS reads BANK_COUNT, and a dump waits for the change.
+    reset_world();
+    stomp_banks(3);
+    set_mode(0, PM_STOMP);
+    store_bank_msg(2, 0, MT_NOTE, 61, 101, 31, PM_STOMP);
+    nrpn(NP_BANK, 0);
+    nrpn(NP_BANK, BANK_COUNT + 1);
+    nrpn(NP_BANKS, 5);
+    ticks(1);
+    CHECK(hal_bank == 0 && !bank_busy);
+    tap(sw_code(1));
+    clear_log();
+    nrpn(NP_BANK, 3);
+    nrpn(NP_COMMAND, NC_DUMP);
+    CHECK(bank_busy && display == 0);
+    ticks(1);
+    // Switch 1 was on (a CC); bank 3's switch 1 is a note, so it is off. Nothing is sent
+    // but the dump, which starts once the change is done.
+    CHECK(hal_bank == 2 && msg_type(0) == MT_NOTE && MSG_NUM(0) == 61 && leds[0] == 0);
+    CHECK(midi_len == 0 || midi_log[1] == 99);
+    clear_log();
+    dump_run(1000);
+    parse_dump(0);
+    CHECK(dump_values[NP_BANK] == 3 && dump_values[NP_BANKS] == BANK_COUNT && dump_values[NP_TYPE] == MT_NOTE &&
+          dump_values[NP_NUM] == 61);
+    // Saving over MIDI writes the current bank.
+    nrpn(NP_COMMAND, NC_SAVE);
+    CHECK(msg_was_saved[2 * HAL_REC_SW1] && saved_msg[2 * HAL_REC_SW1][1] == 61 && !msg_was_saved[0]);
+}
+
+// A CC or note has one state wherever it is used: a switch that sends it sets every
+// switch with the same CC or note (by MIDI IN's rule), sending one message.
+static void test_shared_state(void)
+{
+    int i;
+
+    printf("shared CC and note states\n");
+    reset_world();
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        set_mode((uint8_t)i, PM_STOMP);
+    }
+    set_msg(0, MT_CC, 40, 127, 0);
+    set_msg(1, MT_CC, 40, 100, 20);
+    set_msg(2, MT_NOTE, 60, 100, 0);
+    set_msg(3, MT_NOTE, 60, 80, 0);
+    set_msg(4, MT_CC, 60, 127, 0);
+    set_msg(5, MT_CC, 50, 64, 64);
+    set_msg(6, MT_CC, 50, 127, 0);
+    ticks(2);
+    clear_log();
+
+    // CC 40 127 turns switch 2 on too (127 is neither of its values, and from 64 up).
+    tap(sw_code(1));
+    CHECK(midi_len == 3 && cc_number(0) == 40 && cc_value(0) == 127 && leds[0] == 1 && leds[1] == 1);
+    // Switch 2 is on, so it toggles off and sends its off value 20, which turns switch 1 off.
+    clear_log();
+    tap(sw_code(2));
+    CHECK(midi_len == 3 && cc_number(0) == 40 && cc_value(0) == 20 && leds[0] == 0 && leds[1] == 0);
+    CHECK((stomp_state & 3) == 0);
+
+    // Notes: note 60 on from switch 3 lights switch 4; switch 5 (CC 60) is not the same.
+    clear_log();
+    tap(sw_code(3));
+    CHECK(midi_len == 3 && midi_log[0] == NOTE_ON && midi_log[1] == 60 && leds[2] == 1 && leds[3] == 1 && leds[4] == 0);
+    clear_log();
+    tap(sw_code(4));
+    CHECK(midi_len == 3 && midi_log[0] == NOTE_OFF && leds[2] == 0 && leds[3] == 0);
+
+    // A CC whose on and off values are the same (64) keeps its own toggle state; switch 7
+    // reads 64 as on.
+    clear_log();
+    tap(sw_code(6));
+    CHECK(midi_len == 3 && cc_number(0) == 50 && cc_value(0) == 64 && leds[5] == 1 && leds[6] == 1);
+    tap(sw_code(6));
+    CHECK(leds[5] == 0 && leds[6] == 1);
+    // Switch 7 off sends 0, below 64: switch 6 (already off) stays off.
+    tap(sw_code(7));
+    CHECK(leds[5] == 0 && leds[6] == 0);
+
+    // An undo (stomp with momentary, held) is shared too.
+    set_mode(0, PM_STOMP_MOM);
+    ctl_key_press(sw_code(1));
+    CHECK(leds[0] == 1 && leds[1] == 1);
+    ctl_key_hold(sw_code(1));
+    clear_log();
+    ctl_key_release(sw_code(1));
+    ticks(2);
+    CHECK(midi_len == 3 && cc_value(0) == 0 && leds[0] == 0 && leds[1] == 0);
+
+    // Configuration mode changes no footswitch state through a send.
+    tap(sw_code(1));
+    CHECK(leds[0] == 1 && leds[1] == 1);
+    chord_long();
+    cancel_exit();
+    CHECK(mode == MODE_RUN && leds[0] == 1 && leds[1] == 1);
+}
+
+// Every CC and note keeps its last value across any number of bank changes, used by
+// the banks in between or not (the user's case: CC 26 on in bank 1, through a bank
+// without CC 26, back to bank 1 still on).
+static void test_cc_memory(void)
+{
+    int i;
+
+    printf("CC and note values kept across banks\n");
+    reset_world();
+    stomp_banks(3);
+    store_bank_msg(0, 0, MT_CC, 26, 127, 0, PM_STOMP);
+    // Bank 2 has no CC 26 (its switch 6, normally CC 26, is CC 99), and switch 1 is CC 106.
+    store_bank_msg(1, 0, MT_CC, 106, 127, 0, PM_STOMP);
+    store_bank_msg(1, 5, MT_CC, 99, 127, 0, PM_STOMP);
+    // Bank 3: switch 2 is note 60, switch 3 an inverted momentary CC 50.
+    store_bank_msg(2, 1, MT_NOTE, 60, 100, 0, PM_STOMP);
+    store_bank_msg(2, 2, MT_CC, 50, 127, 0, PM_MOM_INV);
+    ctl_init();
+    boot_end();
+    ticks(2);
+
+    // Switch 1 (CC 26) on lights switch 6 too (also CC 26 in bank 1).
+    tap(sw_code(1));
+    CHECK(leds[0] == 1 && leds[5] == 1);
+    chord_short();
+    clear_log();
+    tap(CTL_KEY_UP);
+    ticks(2);
+    // Bank 2: nothing uses CC 26, so nothing is lit, and nothing was sent.
+    CHECK(hal_bank == 1 && stomp_state == 0 && midi_len == 0);
+    // Bank 3 and back to 2, then 1: CC 26 comes back on.
+    tap(CTL_KEY_UP);
+    ticks(2);
+    CHECK(hal_bank == 2 && leds[0] == 0 && leds[5] == 1);
+    tap(CTL_KEY_DOWN);
+    ticks(2);
+    tap(CTL_KEY_DOWN);
+    ticks(2);
+    CHECK(hal_bank == 0 && leds[0] == 1 && leds[5] == 1 && midi_len == 0);
+
+    // A CC received while no switch of the bank uses it is remembered too.
+    tap(CTL_KEY_UP);
+    ticks(2);
+    ctl_midi_in(CC_STATUS); ctl_midi_in(26); ctl_midi_in(0);
+    ctl_midi_in(CC_STATUS); ctl_midi_in(stomp_cc[1]); ctl_midi_in(127);
+    ctl_midi_in(NOTE_ON); ctl_midi_in(60); ctl_midi_in(90);
+    CHECK(hal_bank == 1 && leds[1] == 1 && midi_len == 0);
+    tap(CTL_KEY_DOWN);
+    ticks(2);
+    CHECK(hal_bank == 0 && leds[0] == 0 && leds[5] == 0 && leds[1] == 1);
+
+    // Bank 3: the note (on, from MIDI IN) lights switch 2. Switch 3's CC 50 was never seen,
+    // so it rests on (inverted momentary), sending nothing.
+    tap(CTL_KEY_UP);
+    ticks(2);
+    tap(CTL_KEY_UP);
+    ticks(2);
+    CHECK(hal_bank == 2 && leds[1] == 1 && leds[2] == 1 && midi_len == 0);
+
+    // Its rest state is kept as CC 50's value when the bank is left: a bank with CC 50 as
+    // a stomp switch shows it on.
+    store_bank_msg(3, 4, MT_CC, 50, 127, 0, PM_STOMP);
+    tap(CTL_KEY_UP);
+    ticks(2);
+    CHECK(hal_bank == 3 && leds[4] == 1 && midi_len == 0);
+
+    // Power-on forgets everything: back to bank 1 at rest.
+    ctl_init();
+    boot_end();
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        CHECK(leds[i] == (pedal_mode_get((uint8_t)i) == PM_MOM_INV));
+    }
+}
+
 int main(void)
 {
     test_stomp_modes();
@@ -3476,7 +3944,7 @@ int main(void)
     test_config_page_leds();
     test_config_version();
     test_config_version_jump();
-    test_chord_cc();
+    test_bank_mode_toggle();
     test_config_calibration();
     test_relays();
     test_midi_flash();
@@ -3489,6 +3957,9 @@ int main(void)
     test_switch_messages();
     test_config_editor();
     test_midi_config();
+    test_banks();
+    test_shared_state();
+    test_cc_memory();
     test_scaling();
     test_pedal_cc();
     test_pedal_noise();

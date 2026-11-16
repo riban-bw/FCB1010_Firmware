@@ -49,10 +49,11 @@
 // Controller number sent by footswitches 1..10 (toggles 127 / 0).
 #define STOMP_CC_LIST 21, 22, 23, 24, 25, 26, 27, 28, 29, 30
 
-// A short press of UP + DOWN together in run mode toggles this controller (127 / 0).
-// The DIRECT SELECT LED shows its state. Keep it out of STOMP_CC_LIST.
-#ifndef CHORD_CC
-#define CHORD_CC 20
+// Footswitch banks: while DIRECT SELECT is lit (the UP + DOWN toggle), UP / DOWN choose
+// one of this many banks, each with its own message and pedal mode for every footswitch.
+// Each bank takes ten 8-byte records of the 2KB settings EEPROM, so 1 to 25 fit.
+#ifndef BANK_COUNT
+#define BANK_COUNT 25
 #endif
 
 // Controller numbers sent by expression pedal A and pedal B.
@@ -136,10 +137,18 @@
 // events from this time (a switch held at power-on) are discarded.
 #define STARTUP_TICKS 100
 
-// Queue sizes in bytes (each a power of two; one slot is always left empty). They are cut
-// to fit the 8032's 256 bytes of RAM, and the emulator uses the same sizes.
-#define MIDI_TX_QUEUE    16
-#define MIDI_RX_QUEUE    8
-#define KEY_EVENT_QUEUE  8
+// Queue sizes in bytes (each a power of two, at most 256; one slot is always left empty).
+// They live in the board's external SRAM, and the emulator uses the same sizes. MIDI OUT
+// 128 holds about 40ms of messages at 31250 baud, MIDI IN 128 about 40ms of input (enough
+// to ride over an EEPROM save, which blocks the main loop for tens of ms).
+#ifndef MIDI_TX_QUEUE
+#define MIDI_TX_QUEUE    128
+#endif
+#ifndef MIDI_RX_QUEUE
+#define MIDI_RX_QUEUE    128
+#endif
+#ifndef KEY_EVENT_QUEUE
+#define KEY_EVENT_QUEUE  16
+#endif
 
 #endif

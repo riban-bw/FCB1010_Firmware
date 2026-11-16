@@ -234,9 +234,9 @@ void hal_display_text(uint8_t text)
 #define T0_RELOAD  (0x10000 - 1000 * TICK_MS)
 
 // Per key: Bits 0..6 hold the most recent samples, bit 7 is the pressed state.
-static IDATA uint8_t hist[KEY_COUNT];
+static XDATA uint8_t hist[KEY_COUNT];
 
-static volatile IDATA uint8_t evq[KEY_EVENT_QUEUE];
+static volatile XDATA uint8_t evq[KEY_EVENT_QUEUE];
 static volatile uint8_t evq_head;
 static volatile uint8_t evq_tail;
 
@@ -255,12 +255,12 @@ static volatile BIT_T lamp_leds_on;
 static volatile BIT_T lamp_stomps;
 
 // Scans each key has been down since its debounced press (stops counting at the threshold).
-static IDATA uint8_t hold[KEY_COUNT];
+static XDATA uint8_t hold[KEY_COUNT];
 
 // Debounce, hold and event rules are shared with the host tests and emulator (keys.h).
 #define PUSH_EVENT(e)  KEY_EVQ_PUSH(evq, evq_head, evq_tail, e)
 #define SCAN_KEY(idx, level) \
-    KEY_SCAN(hist, hold, idx, ((level) == KEY_ACTIVE_LEVEL ? 1 : 0), PUSH_EVENT)
+    KEY_SCAN(hist, hold, idx, ((level) == KEY_ACTIVE_LEVEL ? 1 : 0), PUSH_EVENT, KEY_EVQ_FULL(evq_head, evq_tail))
 
 void timer0_isr(void) __interrupt(1)
 {
@@ -374,7 +374,7 @@ uint8_t hw_key_is_down(uint8_t code)
 #define TX_SIZE  MIDI_TX_QUEUE
 #define TX_MASK  (TX_SIZE - 1)
 
-static volatile IDATA uint8_t txbuf[TX_SIZE];
+static volatile XDATA uint8_t txbuf[TX_SIZE];
 static volatile uint8_t tx_head;
 static volatile uint8_t tx_tail;
 static volatile uint8_t tx_busy;
@@ -384,7 +384,7 @@ static volatile uint8_t tx_busy;
 #define RX_SIZE  MIDI_RX_QUEUE
 #define RX_MASK  (RX_SIZE - 1)
 
-static volatile IDATA uint8_t rxbuf[RX_SIZE];
+static volatile XDATA uint8_t rxbuf[RX_SIZE];
 static volatile uint8_t rx_head;
 static volatile uint8_t rx_tail;
 
@@ -639,23 +639,29 @@ static uint8_t i2c_read(uint8_t send_nak)
 
 #define EEPROM_DEVICE  0xA0
 
-// Settings records at the top of the 2KB 24C16, away from the low addresses (from 0x000)
-// where Behringer's SysEx documentation places the stock preset data, so putting the
-// original chip back is unlikely to be affected. Each record is 6 bytes, 8-byte aligned:
-// magic, the four bytes of hal_rec, checksum (the XOR of the first five bytes and the
-// record's salt). Record rec (HAL_REC_*) is at EEPROM_BASE + rec * 8, so the relay,
-// calibration and settings records keep their addresses (0x7E0, 0x7E8, 0x7F0, 0x7F8),
-// with the ten footswitch message records below them from 0x790.
+// Settings records in the 2KB 24C16. Each record is 6 bytes, 8-byte aligned: magic, the
+// four bytes of hal_rec, checksum (the XOR of the first five bytes and the record's salt).
+// A record's slot is its address / 8 (0-255). The shared records are at the top (relays
+// 0x7E0 and 0x7E8, calibration 0x7F0, settings 0x7F8), with bank 1's ten footswitch
+// records below them from 0x790 and each further bank's ten records 80 bytes lower (bank
+// 2 at 0x740, bank 25 at 0x010). Behringer's SysEx documentation places the stock preset
+// data from 0x000, so banks that are saved can overwrite it: putting the original program
+// chip back would then need the presets restored. A bank that has never been saved holds
+// no valid records and loads as the defaults.
 #define EEPROM_BASE  0x790
 #define REC_LENGTH   6
 
 #if EEPROM_BASE + HAL_REC_SW1 * 8 != 0x7E0 || EEPROM_BASE + HAL_REC_CAL * 8 != 0x7F0 || \
-    EEPROM_BASE + HAL_REC_CFG * 8 != 0x7F8 || EEPROM_BASE + HAL_RECORDS * 8 != 0x800
+    EEPROM_BASE + HAL_REC_CFG * 8 != 0x7F8 || EEPROM_BASE + HAL_RECORDS * 8 != 0x800 || (EEPROM_BASE & 7) != 0
 #error EEPROM record layout assumptions broken
 #endif
 
+#if BANK_COUNT < 1 || (EEPROM_BASE / 8) < (BANK_COUNT - 1) * STOMP_COUNT || STOMP_COUNT != 10
+#error BANK_COUNT must be 1 to 25 (ten 8-byte records per bank below 0x790)
+#endif
+
 // The footswitch magics (0xD0-0xD9) differ from the two-switch records that used to be at
-// 0x7B8-0x7DF (0xC5-0xC9), so those read as invalid.
+// 0x7B8-0x7DF (0xC5-0xC9), so those read as invalid. Every bank uses the same ten.
 static const CODE uint8_t rec_magic[HAL_RECORDS] = {
     0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xC3, 0xC4, 0xC1, 0xC2
 };
@@ -663,19 +669,28 @@ static const CODE uint8_t rec_salt[HAL_RECORDS] = {
     0x96, 0x69, 0x55, 0xAA, 0x33, 0xCC, 0x0F, 0xF0, 0x5F, 0xF5, 0x3C, 0xC3, 0x5A, 0xA5
 };
 
-// The one record buffer, shared with ctl.c (loads and saves never overlap), and the result
-// of the last EEPROM access as a bit.
+// The one record buffer and the bank the footswitch records belong to, shared with ctl.c
+// (loads and saves never overlap), and the result of the last EEPROM access as a bit.
 IDATA uint8_t hal_rec[4];
+IDATA uint8_t hal_bank;
 static BIT_T  eeprom_ok;
 
-// Every record is in the 24C16's top 256-byte block (0x700-0x7FF), whose number goes in
-// the device address byte, so the device byte is a constant and the word address one byte.
-#define REC_CONTROL   ((uint8_t)(EEPROM_DEVICE | ((EEPROM_BASE >> 7) & 0x0E)))
-#define REC_LOW(rec)  ((uint8_t)((EEPROM_BASE & 0xFF) + (uint8_t)((rec) << 3)))
+// Slot of record rec: footswitch records move down ten slots per bank (hal_bank * 10 as
+// two shifts, avoiding SDCC's multiply call). A leaf, so it costs no fixed RAM.
+static uint8_t rec_slot(uint8_t rec)
+{
+    if (rec < HAL_REC_SW1)
+    {
+        rec = (uint8_t)(rec - (uint8_t)((uint8_t)(hal_bank << 3) + (uint8_t)(hal_bank << 1)));
+    }
 
-#if (EEPROM_BASE >> 8) != 7 || (EEPROM_BASE & 7) != 0
-#error EEPROM records must be 8-byte aligned in the top 256-byte block
-#endif
+    return (uint8_t)(rec + (EEPROM_BASE >> 3));
+}
+
+// The 24C16 takes the 256-byte block (address bits 8-10) in the device address byte, and
+// the low eight address bits as the word address.
+#define REC_CONTROL(slot)  ((uint8_t)(EEPROM_DEVICE | (((slot) >> 4) & 0x0E)))
+#define REC_LOW(slot)      ((uint8_t)((slot) << 3))
 
 // Byte i (0-5) of record rec as stored: magic, hal_rec[0..3], checksum.
 static uint8_t rec_byte(uint8_t rec, uint8_t i)
@@ -693,14 +708,15 @@ static uint8_t rec_byte(uint8_t rec, uint8_t i)
     return (uint8_t)(rec_magic[rec] ^ hal_rec[0] ^ hal_rec[1] ^ hal_rec[2] ^ hal_rec[3] ^ rec_salt[rec]);
 }
 
-// Start a transfer at record rec's first byte. 1 if the EEPROM acknowledged.
-static uint8_t rec_address(uint8_t rec)
-{
-    ADC_CS = 1;
-    i2c_start();
-
-    return (uint8_t)((i2c_write(REC_CONTROL) && i2c_write(REC_LOW(rec))) ? 1 : 0);
-}
+// Start a transfer at record rec's first byte; eeprom_ok = 1 if the EEPROM acknowledged.
+// A macro, not a function: the EEPROM accesses are the main line's deepest stack use,
+// and a call level would add two bytes to every one.
+#define REC_ADDRESS(rec)                                                                     \
+    do {                                                                                     \
+        ADC_CS = 1;                                                                          \
+        i2c_start();                                                                         \
+        eeprom_ok = (i2c_write(REC_CONTROL(rec_slot(rec))) && i2c_write(REC_LOW(rec_slot(rec)))) ? 1 : 0; \
+    } while (0)
 
 // Set by hal_rec_save for its read-back: hal_rec_load then compares every byte with what
 // was written instead of loading it.
@@ -715,10 +731,15 @@ uint8_t hal_rec_load(uint8_t rec)
 
     eeprom_ok = 0;
 
-    if (rec < HAL_RECORDS && rec_address(rec))
+    if (rec < HAL_RECORDS)
     {
-        i2c_start();
-        eeprom_ok = i2c_write((uint8_t)(REC_CONTROL | 1)) ? 1 : 0;
+        REC_ADDRESS(rec);
+
+        if (eeprom_ok)
+        {
+            i2c_start();
+            eeprom_ok = i2c_write((uint8_t)(REC_CONTROL(rec_slot(rec)) | 1)) ? 1 : 0;
+        }
     }
 
     if (eeprom_ok)
@@ -759,7 +780,7 @@ uint8_t hal_rec_save(uint8_t rec)
         return 0;
     }
 
-    eeprom_ok = rec_address(rec);
+    REC_ADDRESS(rec);
 
     for (i = 0; i < REC_LENGTH && eeprom_ok; i++)
     {
@@ -777,7 +798,7 @@ uint8_t hal_rec_save(uint8_t rec)
     for (tries = 0; tries < 5000; tries++)
     {
         i2c_start();
-        eeprom_ok = i2c_write(REC_CONTROL) ? 1 : 0;
+        eeprom_ok = i2c_write(REC_CONTROL(rec_slot(rec))) ? 1 : 0;
         i2c_stop();
 
         if (eeprom_ok)
@@ -818,6 +839,13 @@ void hw_init(void)
     for (i = 0; i < 6; i++)
     {
         led_map[i] = 0xFF;
+    }
+
+    // The key tables are in the external SRAM, which holds random data at power-on.
+    for (i = 0; i < KEY_COUNT; i++)
+    {
+        hist[i] = 0;
+        hold[i] = 0;
     }
 
     // Clear the display and key-column latches.

@@ -3,6 +3,9 @@
 
 #include <stdio.h>
 
+// The queue tests fill the queue with the twelve keys, so they use the old 8-entry queue
+// (the firmware's is larger now).
+#define KEY_EVENT_QUEUE 8
 #include "../src/platform.h"
 #include "../src/config.h"
 #include "../src/keys.h"
@@ -138,8 +141,9 @@ static void test_both_rows_and_queue(void)
     CHECK(keys_next_event() == (KEY_EV_PRESS | 6));
     CHECK(keys_next_event() == KEY_EV_NONE);
 
-    // All twelve pressed without the main loop reading: the queue keeps the first
-    // KEY_EVENT_QUEUE - 1 events and drops the rest.
+    // All twelve pressed without the main loop reading: the queue takes the first
+    // KEY_EVENT_QUEUE - 1 presses. The others are not lost: those keys stay up until their
+    // press fits, so once the queue is read their presses come on the next scans, each once.
     keys_init();
     run(0x0FFF, DEBOUNCE_SAMPLES * KEY_SCAN_SLOTS);
 
@@ -149,6 +153,64 @@ static void test_both_rows_and_queue(void)
     }
 
     CHECK(n == KEY_EVENT_QUEUE - 1);
+    CHECK(keys_is_down(0) && !keys_is_down(UP_CODE));
+    {
+        uint16_t seen = 0;
+        int dup = 0;
+        int i;
+
+        // Again from the start, this time reading the queue only once it is full.
+        keys_init();
+        run(0x0FFF, DEBOUNCE_SAMPLES * KEY_SCAN_SLOTS);
+
+        for (i = 0; i < 4 * KEY_SCAN_SLOTS; i++)
+        {
+            while ((e = keys_next_event()) != KEY_EV_NONE)
+            {
+                if (KEY_EV_TYPE(e) == KEY_EV_PRESS)
+                {
+                    dup += (seen & KEY(KEY_EV_CODE(e))) ? 1 : 0;
+                    seen |= KEY(KEY_EV_CODE(e));
+                }
+            }
+
+            keys_scan(0x0FFF);
+        }
+
+        // Every key pressed exactly once, UP (scanned last) included.
+        CHECK(seen == 0x0FFF && dup == 0 && keys_is_down(UP_CODE));
+    }
+
+    // A HOLD that finds the queue full waits for room too, and comes once.
+    keys_init();
+    run(KEY(0), 1 + (DEBOUNCE_SAMPLES - 1) * KEY_SCAN_SLOTS);
+    CHECK(keys_next_event() == (KEY_EV_PRESS | 0));
+    // Fill the queue with presses of other keys, not read.
+    run(KEY(0) | 0x0FFE, DEBOUNCE_SAMPLES * KEY_SCAN_SLOTS);
+    run(KEY(0) | 0x0FFE, KEY_HOLD_SCANS * KEY_SCAN_SLOTS);
+    n = 0;
+    while ((e = keys_next_event()) != KEY_EV_NONE)
+    {
+        CHECK(e != (KEY_EV_HOLD | 0));
+        n++;
+    }
+    CHECK(n == KEY_EVENT_QUEUE - 1);
+    {
+        int holds = 0;
+        int i;
+
+        for (i = 0; i < 4 * KEY_SCAN_SLOTS; i++)
+        {
+            keys_scan(KEY(0) | 0x0FFE);
+
+            while ((e = keys_next_event()) != KEY_EV_NONE)
+            {
+                holds += (e == (KEY_EV_HOLD | 0));
+            }
+        }
+
+        CHECK(holds == 1);
+    }
 
     // Flush discards anything waiting.
     keys_init();
