@@ -22,8 +22,8 @@ The settings out of the box (footswitches 3 to 9 left out here; a real file alwa
     { "mode": "stomp", "type": "cc", "number": 30, "on": 127, "off": 0 }
   ],
   "relays": [
-    { "follows": [], "followsUpDown": false, "pedalA": 0, "pedalB": 0 },
-    { "follows": [], "followsUpDown": false, "pedalA": 0, "pedalB": 0 }
+    { "follows": [], "pedalA": 0, "pedalB": 0 },
+    { "follows": [], "pedalA": 0, "pedalB": 0 }
   ],
   "bankProgram": null,
   "firmware": "00.02.01"
@@ -57,8 +57,9 @@ Each relay:
 | Field | Value |
 |---|---|
 | `follows` | The footswitches (1 to 10) the relay follows, in any order, for example `[1, 4]`; `[]` for none |
-| `followsUpDown` | `true` if the relay follows program mode (DIRECT SELECT lit) |
 | `pedalA`, `pedalB` | The pedal's trigger value, 1 to 127 (the relay closes from that value up), or 0 for not followed |
+
+Files from older firmware may have a `followsUpDown` field (relays following program mode, since removed); it is ignored.
 
 Numbers must be whole numbers. Other fields are ignored.
 

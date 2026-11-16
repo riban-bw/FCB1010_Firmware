@@ -1066,8 +1066,6 @@ static void test_config_channel(void)
     CHECK(cfg_page == PAGE_HEEL && midi_channel == MIDI_CHANNEL);
     tap(CTL_KEY_DOWN);
 
-    // A short UP + DOWN does nothing here (only the SWITCH pages use it).
-    chord_short();
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_CHANNEL);
 
     // Channel 4 typed on footswitch 4.
@@ -1149,15 +1147,15 @@ static void test_config_channel(void)
     CHECK(mode == MODE_RUN);
     ctl_key_release(CTL_KEY_DOWN);
 
-    // A long UP + DOWN in config mode saves and leaves, like a long UP. The keys' own
-    // hold events and the release do nothing more (no bank mode toggle, no program).
+    // UP + DOWN in config mode saves and leaves at once (on the next tick), like a long
+    // UP. The keys' own hold events and the release do nothing more (no program mode
+    // toggle, no program).
     reset_world();
     chord_long();
     tap(CTL_KEY_UP);
     tap(sw_code(5));
     clear_log();
     chord_down();
-    ticks(CHORD_TICKS - 1);
     CHECK(mode == MODE_CONFIG && cfg_saved == 0);
     ticks(1);
     CHECK(mode == MODE_RUN && status_led == 0 && display == 1);
@@ -1769,10 +1767,9 @@ static void test_config_version(void)
     ticks(VER_STEP_TICKS * (VER_SCROLL_END + VER_ITEM_STEPS * 2));
     CHECK(display == SHOWN_HEX(fw_version[2]) && lamp == HAL_LAMP_LEDS_STOMPS);
 
-    // Pedals and a short UP + DOWN do nothing here.
+    // Pedals do nothing here.
     pedal(0, 10);
     pedal(0, 200);
-    chord_short();
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_VERSION && midi_len == 0);
     CHECK(sw_thr[0] == 0 && sw_thr[1] == 0 && sw_thr[2] == 0 && sw_thr[3] == 0 && sw_mask[1] == 0);
 
@@ -1952,12 +1949,13 @@ static void test_bank_mode_toggle(void)
 
     // Opening and leaving config mode sends nothing. DIRECT SELECT is dark while
     // editing and shows the kept state again on leaving (save or cancel). An UP + DOWN
-    // tap in config mode does not toggle it either.
+    // in config mode saves and leaves without toggling it.
     clear_log();
     chord_long();
     CHECK(mode == MODE_CONFIG && aux[HAL_LED_DIRECT_SELECT] == 0 && pc_mode == 1);
     chord_short();
-    CHECK(mode == MODE_CONFIG && pc_mode == 1 && aux[HAL_LED_DIRECT_SELECT] == 0);
+    CHECK(mode == MODE_RUN && pc_mode == 1 && aux[HAL_LED_DIRECT_SELECT] == 1);
+    chord_long();
     tap(CTL_KEY_UP);
     CHECK(aux[HAL_LED_DIRECT_SELECT] == 0);
     save_exit();
@@ -2032,8 +2030,7 @@ static void test_relays(void)
     tap(2);
     CHECK(leds[2] == 0 && sw_mask[0] == 0);
     tap(2);
-    chord_short();
-    CHECK(sw_mask[0] == (4 | SW_CC_BIT) && aux[HAL_LED_DIRECT_SELECT] == 1);
+    CHECK(sw_mask[0] == 4 && aux[HAL_LED_DIRECT_SELECT] == 0);
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_SW1 && pc_mode == 0 && midi_len == 0);
 
     // Pedal A sets the trigger value: the first reading is only a reference, small
@@ -2061,18 +2058,18 @@ static void test_relays(void)
 
     // Back on page 5 its settings show again.
     tap(CTL_KEY_DOWN);
-    CHECK(leds[2] == 1 && leds[9] == 0 && aux[HAL_LED_DIRECT_SELECT] == 1 && aux[HAL_LED_EXP_1] == 1);
+    CHECK(leds[2] == 1 && leds[9] == 0 && aux[HAL_LED_DIRECT_SELECT] == 0 && aux[HAL_LED_EXP_1] == 1);
     CHECK(aux[HAL_LED_EXP_2] == 0);
 
-    // Saving stores both records: mask low, mask high (bit 2 = bank mode), A, B.
+    // Saving stores both records: mask low, mask high, A, B.
     save_exit();
     CHECK(sw_saved == 2);
-    CHECK(saved_sw[0][0] == 4 && saved_sw[0][1] == 4 && saved_sw[0][2] == v && saved_sw[0][3] == 0);
+    CHECK(saved_sw[0][0] == 4 && saved_sw[0][1] == 0 && saved_sw[0][2] == v && saved_sw[0][3] == 0);
     CHECK(saved_sw[1][0] == 0 && saved_sw[1][1] == 2 && saved_sw[1][2] == 0 && saved_sw[1][3] == ctl_scale(64, 0, 255));
     CHECK(aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
 
-    // Run mode, relay 1: footswitch 3 OR program mode (DIRECT SELECT lit) OR pedal A at v
-    // and up.
+    // Run mode, relay 1: footswitch 3 OR pedal A at v and up; program mode does not
+    // move it.
     pedal(0, 0);
     pedal(1, 0);
     ticks(1);
@@ -2085,7 +2082,7 @@ static void test_relays(void)
     CHECK(relays == 0);
     chord_short();
     ticks(1);
-    CHECK(relays == 1 && pc_mode == 1);
+    CHECK(relays == 0 && pc_mode == 1);
     chord_short();
     ticks(1);
     CHECK(relays == 0 && aux[HAL_LED_SWITCH_1] == 0);
@@ -2155,7 +2152,8 @@ static void test_relays(void)
     cancel_exit();
     CHECK(sw_mask[1] == 0x200 && sw_thr[3] == ctl_scale(64, 0, 255));
 
-    // Stored records load at start-up; a value over 127 is off, unused mask bits ignored.
+    // Stored records load at start-up; a value over 127 is off, unused mask bits ignored
+    // (bit 10, once program mode, among them).
     reset_world();
     sw_stored_valid[1] = 1;
     stored_sw[1][0] = 0x01;
@@ -2163,7 +2161,7 @@ static void test_relays(void)
     stored_sw[1][2] = 200;
     stored_sw[1][3] = 50;
     ctl_init();
-    CHECK(sw_mask[1] == (0x01 | SW_CC_BIT) && sw_thr[2] == 0 && sw_thr[3] == 50);
+    CHECK(sw_mask[1] == 0x01 && sw_thr[2] == 0 && sw_thr[3] == 50);
     CHECK(sw_mask[0] == 0 && sw_thr[0] == 0 && sw_thr[1] == 0);
     set_mode(0, PM_STOMP);
     tap(0);
@@ -3116,9 +3114,8 @@ static void test_config_editor(void)
     CHECK(edit_param == EP_OFF);
     tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN); tap(CTL_KEY_DOWN);
     CHECK(edit_param == EP_TYPE && param_leds(EP_TYPE) && display == SHOWN_TEXT(HAL_TEXT_NOTE));
-    // Footswitch holds and the short UP + DOWN do nothing in the editor; nothing is sent.
+    // Footswitch holds do nothing in the editor; nothing is sent.
     long_press(sw_code(5));
-    chord_short();
     CHECK(edit_open && msg_type(2) == MT_NOTE && midi_len == 0);
 
     // A long UP [ENTER] accepts: back to the modes page with switch 3 selected.
@@ -3408,14 +3405,14 @@ static void test_midi_config(void)
     reset_world();
     set_mode(3, PM_MOM_INV);
     set_msg(4, MT_NOTE, 60, 100, 30);
-    sw_mask[1] = (uint16_t)(SW_CC_BIT | (1 << 2));
+    sw_mask[1] = (uint16_t)(1 << 2);
     sw_thr[1] = 77;
     heel[0] = 3;   toe[0] = 250;
     heel[1] = 129; toe[1] = 200;
     clear_log();
     dump_run(1000);
     n = parse_dump(0);
-    CHECK(n == 1 + 3 + 2 + 10 + 40 + 11 + 11 + 4 + 4 + 2 && dump_end && midi_job == 0);
+    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 4 + 2 && dump_end && midi_job == 0);
     CHECK(dump_values[NP_BANK] == 1 && dump_values[NP_BANKS] == BANK_COUNT);
     CHECK(dump_values[NP_BANK_PC] == 127 && dump_values[NP_BANK_PC_ON] == 0);
     CHECK(dump_values[NP_CHANNEL] == MIDI_CHANNEL);
@@ -3425,8 +3422,9 @@ static void test_midi_config(void)
     CHECK(dump_values[NP_TYPE + 4] == MT_NOTE && dump_values[NP_NUM + 4] == 60 && dump_values[NP_ON + 4] == 100 &&
           dump_values[NP_OFF + 4] == 30);
     CHECK(dump_values[NP_TYPE] == MT_CC && dump_values[NP_NUM] == cc[0] && dump_values[NP_ON] == 127 && dump_values[NP_OFF] == 0);
-    CHECK(dump_values[NP_FOLLOW2 + 2] == 1 && dump_values[NP_FOLLOW2 + 10] == 1 && dump_values[NP_FOLLOW2 + 3] == 0 &&
-          dump_values[NP_FOLLOW1 + 10] == 0);
+    CHECK(dump_values[NP_FOLLOW2 + 2] == 1 && dump_values[NP_FOLLOW2 + 3] == 0 && dump_values[NP_FOLLOW1 + 2] == 0);
+    // Parameters 70 and 82 (once following program mode) are gone.
+    CHECK(!dump_seen[NP_FOLLOW1 + 10] && !dump_seen[NP_FOLLOW2 + 10]);
     CHECK(dump_values[NP_TRIGGER + 1] == 77 && dump_values[NP_TRIGGER] == 0);
     CHECK(dump_values[NP_CAL] == 3 && dump_values[NP_CAL + 1] == 250 && dump_values[NP_CAL + 2] == 129 &&
           dump_values[NP_CAL + 3] == 200);
@@ -3514,7 +3512,7 @@ static void test_midi_config(void)
     nrpn(NP_FOLLOW2 + 10, 1);
     nrpn(NP_FOLLOW1 + 5, 2);               // not 0 or 1: ignored
     nrpn(NP_TRIGGER + 3, 90);
-    CHECK(sw_mask[0] == (1 << 4) && sw_mask[1] == SW_CC_BIT && sw_thr[3] == 90);
+    CHECK(sw_mask[0] == (1 << 4) && sw_mask[1] == 0 && sw_thr[3] == 90);
     nrpn(NP_FOLLOW1 + 4, 0);
     CHECK(sw_mask[0] == 0);
 
@@ -3832,22 +3830,67 @@ static void test_bank_pc(void)
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_BANK_PC && lamp == HAL_LAMP_NORMAL);
 
-    // Digits as in the editor: 1, 2, 3 make 123; 10 then starts a new number (0), and 5
-    // follows it (5).
+    // Digits as in the editor: 1, 2, 3 make 123; 0 (footswitch 10) is a digit while a
+    // number can grow: 1, 0 make 10.
     clear_log();
     tap(sw_code(1));
     CHECK(bank_pc == 2 && display == 1 && cfg_changed == 1);
     tap(sw_code(2));
     tap(sw_code(3));
     CHECK(bank_pc == 124 && display == 123);
+    tap(sw_code(1));
+    tap(sw_code(10));
+    CHECK(bank_pc == 11 && display == 10 && !pc_typing);
+
+    // After a complete number (10 is not: 10 made it 100; 13 and up is), footswitch 10
+    // shows "--" with the right-hand dot flashing, changing nothing yet.
+    tap(sw_code(10));
+    CHECK(bank_pc == 101 && display == 100);
+    tap(sw_code(10));
+    CHECK(pc_typing && bank_pc == 101 && display == SHOWN_TEXT(HAL_TEXT_DASHES) && dots == 0x01);
+    ticks(CHAN_FLASH_TICKS);
+    CHECK(dots == 0);
+    ticks(CHAN_FLASH_TICKS);
+    CHECK(dots == 0x01);
+    // A digit then starts a number: 5.
+    tap(sw_code(5));
+    CHECK(!pc_typing && bank_pc == 6 && display == 5 && midi_len == 0);
+    ticks(1);
+    CHECK(dots == 0);
+
+    // 5, 7 make 57 (complete); then 10, 10: program 0.
+    tap(sw_code(7));
+    CHECK(bank_pc == 58);
+    tap(sw_code(10));
     tap(sw_code(10));
     CHECK(bank_pc == 1 && display == 0);
-    tap(sw_code(5));
-    CHECK(bank_pc == 6 && display == 5 && midi_len == 0);
 
-    // A short UP + DOWN: none.
-    chord_short();
+    // 0, 4, 2 make 42; 10 then DOWN [ESCAPE]: back to showing it, still on page 7.
+    tap(sw_code(4));
+    tap(sw_code(2));
+    tap(sw_code(10));
+    tap(CTL_KEY_DOWN);
+    CHECK(!pc_typing && bank_pc == 43 && display == 42 && cfg_page == PAGE_BANK_PC);
+
+    // 10 then UP [ENTER]: none, still on page 7, the dot out.
+    tap(sw_code(10));
+    tap(CTL_KEY_UP);
     CHECK(bank_pc == 0 && display == SHOWN_TEXT(HAL_TEXT_DASHES) && mode == MODE_CONFIG && cfg_page == PAGE_BANK_PC);
+    ticks(1);
+    CHECK(dots == 0 && !pc_typing);
+
+    // A long UP still saves and leaves during a "--" entry, which is dropped.
+    tap(sw_code(10));
+    long_nav(CTL_KEY_UP);
+    CHECK(mode == MODE_RUN && !pc_typing && bank_pc == 0);
+    ticks(1);
+    CHECK(dots == 0);
+    chord_long();
+    for (k = 0; k < PAGE_BANK_PC; k++)
+    {
+        tap(CTL_KEY_UP);
+    }
+    CHECK(cfg_page == PAGE_BANK_PC);
 
     // A pedal, once moved, sets its CC value; the next digit starts a new number.
     pedal(0, 0);
@@ -3964,6 +4007,53 @@ static void test_bank_pc(void)
     nrpn(NP_COMMAND, NC_SAVE);
     CHECK(midi_len == 0 && hal_bank == 1 && (saved_msg[HAL_REC_SW1][0] >> 4) == (34 & 0x0F) &&
           (saved_msg[HAL_REC_SW1 + 1][0] & 0xF0) == (34 & 0xF0));
+}
+
+// Banks NOTE_BANK_1 and NOTE_BANK_2, never saved, default to momentary notes: switch 1
+// the first note, each next switch one higher, on velocity 127, off velocity 0. Other
+// banks default to the CCs.
+static void check_note_bank(int bank, int first)
+{
+    int i;
+
+    while (hal_bank != bank - 1)
+    {
+        tap(CTL_KEY_UP);
+        ticks(2);
+    }
+
+    for (i = 0; i < STOMP_COUNT; i++)
+    {
+        CHECK(msg_type(i) == (first ? MT_NOTE : MT_CC) && pedal_mode_get(i) == (first ? PM_MOMENTARY : DEFAULT_PEDAL_MODE));
+        CHECK(MSG_NUM(i) == (first ? first + i : stomp_cc[i]) && MSG_ON(i) == 127 && MSG_OFF(i) == 0);
+    }
+
+    if (first)
+    {
+        clear_log();
+        ctl_key_press(sw_code(10));
+        CHECK(midi_len == 3 && midi_log[0] == NOTE_ON && midi_log[1] == first + 9 && midi_log[2] == 127 && leds[9] == 1);
+        ctl_key_release(sw_code(10));
+        CHECK(midi_len == 6 && midi_log[3] == NOTE_OFF && midi_log[4] == first + 9 && midi_log[5] == 0 && leds[9] == 0);
+    }
+}
+
+static void test_note_banks(void)
+{
+    printf("footswitch banks: default note banks\n");
+    reset_world();
+    ctl_init();
+    boot_end();
+    check_note_bank(1, 0);
+#if NOTE_BANK_1 > 0
+    check_note_bank(NOTE_BANK_1, NOTE_BANK_1_FIRST);
+#endif
+#if NOTE_BANK_2 > 0
+    check_note_bank(NOTE_BANK_2, NOTE_BANK_2_FIRST);
+#endif
+#if NOTE_BANK_2 < BANK_COUNT
+    check_note_bank(NOTE_BANK_2 + 1, 0);
+#endif
 }
 
 static void test_banks(void)
@@ -4374,6 +4464,7 @@ int main(void)
     test_midi_config();
     test_banks();
     test_bank_pc();
+    test_note_banks();
     test_pc_mode();
     test_shared_state();
     test_cc_memory();

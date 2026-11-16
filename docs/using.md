@@ -19,7 +19,7 @@ Everything uses one MIDI channel, channel 1 unless you change it in configuratio
 |---|---|---|
 | Footswitches 1 to 10 | Lit while that footswitch is ON | Depends on the page: the selected footswitch (page 1), the footswitch being edited (editor), the footswitches a relay follows (pages 5 and 6) |
 | SWITCH 1, SWITCH 2 | Lit while that relay is closed | Marks page 5 (SWITCH 1) or page 6 (SWITCH 2) |
-| DIRECT SELECT | Lit in program mode: UP, DOWN and the footswitches change program. Dark while UP and DOWN choose footswitch banks | Pages 5 and 6: lit if the relay follows program mode. Page 7: lit (it marks the page). Dark on the other pages |
+| DIRECT SELECT | Lit in program mode: UP, DOWN and the footswitches change program. Dark while UP and DOWN choose footswitch banks | Page 7: lit (it marks the page). Dark on the other pages |
 | MIDI FUNCTION | Dark | Marks page 1 (pedal modes) |
 | MIDI CHAN | Flickers when MIDI arrives | Marks page 2 (MIDI channel) |
 | EXP 1, EXP 2 | Dark | Both mark pages 3 and 4 (calibration). Pages 5 and 6: lit while the relay follows that pedal |
@@ -79,11 +79,11 @@ While DIRECT SELECT is dark (as at power-on), the display shows the bank number,
 
 Changing bank sends nothing except the bank's own program change, if you have set one for it (configuration page 7, see [Configuration](configuration.md)): choosing that bank sends it, and it becomes the current program, so UP and DOWN step on from it in program mode. Each controller and note keeps its state, however many banks you pass through. A footswitch of the new bank takes the state its CC or note last had, from a footswitch in any bank or from incoming MIDI: for example, if footswitch 1 is CC 26 and is ON in bank 1, any footswitch with CC 26 in any other bank shows ON, and footswitch 1 is still ON when you come back to bank 1, even through banks that do not use CC 26. The pedal forgets these states when it is switched off. A CC is read by the value last sent, the same way as incoming MIDI, so the switches do not need the same ON and OFF values. A footswitch whose CC or note has not been used since power-on starts in its resting state, without sending anything: ON for inverted momentary and OFF for the other modes. A program change switch always starts OFF. A footswitch you are holding during the change does nothing when you let go (its CC or note keeps the state it had).
 
-Configuration mode edits the bank in use, and saving stores that bank (with the shared settings). A bank you have never saved has the default footswitch messages and modes. The pedal always starts in bank 1. A program a footswitch sends is remembered too, and UP and DOWN step on from it in program mode.
+Configuration mode edits the bank in use, and saving stores that bank (with the shared settings). A bank you have never saved has the default footswitch messages and modes: CC 21 to 30 in most banks, but in bank 3 the footswitches play notes 48 to 57 (C3 to A3, footswitch 1 the lowest) and in bank 4 notes 60 to 69 (C4 to A4), each sounding while held (momentary, velocity 127). The pedal always starts in bank 1. A program a footswitch sends is remembered too, and UP and DOWN step on from it in program mode.
 
 ## The relay outputs (SWITCH 1 and SWITCH 2)
 
-Each of the two relay jacks can follow any mix of footswitches, program mode (DIRECT SELECT lit) and the expression pedals. The relay closes when any of the things it follows is ON, and opens when they are all OFF. For a pedal, ON means pushed past a threshold you set. The SWITCH 1 and SWITCH 2 LEDs show the relay states. Nothing is set up until you choose, so out of the box the relays stay open.
+Each of the two relay jacks can follow any mix of footswitches and the expression pedals. The relay closes when any of the things it follows is ON, and opens when they are all OFF. For a pedal, ON means pushed past a threshold you set. The SWITCH 1 and SWITCH 2 LEDs show the relay states. Nothing is set up until you choose, so out of the box the relays stay open.
 
 ## Keeping in step with your DAW
 

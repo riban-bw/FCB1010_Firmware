@@ -60,6 +60,14 @@
 // Controller number sent by footswitches 1..10 (toggles 127 / 0).
 #define STOMP_CC_LIST 21, 22, 23, 24, 25, 26, 27, 28, 29, 30
 
+// Banks whose footswitches default to notes (until the bank is saved): momentary, on
+// velocity 127, off velocity 0, footswitch 1 playing the first note and each next switch
+// one note higher. Bank numbers count from 1; 0 turns the option off.
+#define NOTE_BANK_1         3
+#define NOTE_BANK_1_FIRST   48
+#define NOTE_BANK_2         4
+#define NOTE_BANK_2_FIRST   60
+
 // Footswitch banks: while DIRECT SELECT is lit (the UP + DOWN toggle), UP / DOWN choose
 // one of this many banks, each with its own message and pedal mode for every footswitch.
 // Each bank takes ten 8-byte records of the 2KB settings EEPROM, so 1 to 25 fit.

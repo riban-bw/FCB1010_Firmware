@@ -96,7 +96,6 @@ RULES = [
      ["wrapping from bank %d back to 1, and from 1 to %d" % (banks, banks) if wrap else "stopping at banks 1 and %d" % banks]),
     # Configuration
     (r"Hold UP and DOWN together for ([\d.]+ seconds?)", [sec_words(config_hold)]),
-    (r"or UP \+ DOWN together for ([\d.]+ seconds?)", [sec_words(config_hold)]),
     (r"[Hh]old UP \(ENTER\) for ([\d.]+ seconds?)", [sec_words(hold)]),
     (r"hold DOWN \(ESCAPE\) for ([\d.]+ seconds?)", [sec_words(hold)]),
     (r"Switch 10 flashes `0` for ([\d.]+ seconds?)", [sec_words(num("CHANNEL_DIGIT_TIMEOUT_MS"))]),
@@ -113,7 +112,6 @@ RULES = [
     (r"`MOMENTARY_HOLD_MS` in `src/config\.h` \((?:default|currently) (\d+)\)", [hold]),
     (r"so the real threshold is about ([\d.]+)s", ["%.2f" % (hold_real / 1000.0)]),
     (r"`PROGRAM_REPEAT_FAST_AFTER_MS` \(([\d.]+)s\)", [secs(num("PROGRAM_REPEAT_FAST_AFTER_MS"))]),
-    (r"[Hh]eld ([\d.]+)s again in configuration mode", [secs(config_hold)]),
     (r"shows in hex, one part (per second|every [\d.]+ seconds?)",
      ["per second" if show == 1000 else "every " + sec_words(show)]),
     (r"The ([\d.]+) second long-press threshold", [secs(hold)]),

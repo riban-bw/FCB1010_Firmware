@@ -39,8 +39,8 @@ Settings travel as NRPN controllers on the pedal's channel, so any MIDI tool can
 | 30 to 39 | Footswitch 1 to 10 number | 0 to 127: controller or note (not used by a program change) |
 | 40 to 49 | Footswitch 1 to 10 ON value | 0 to 127: CC value, note on velocity, or the program sent ON |
 | 50 to 59 | Footswitch 1 to 10 OFF value | 0 to 127: CC value, note off velocity, or the program sent OFF |
-| 60 to 70 | SWITCH 1 follows footswitch 1 to 10, then program mode (DIRECT SELECT lit) | 0 / 1 |
-| 72 to 82 | SWITCH 2, the same | 0 / 1 |
+| 60 to 69 | SWITCH 1 follows footswitch 1 to 10 | 0 / 1 |
+| 72 to 81 | SWITCH 2, the same | 0 / 1 |
 | 84, 85 | SWITCH 1 trigger, pedal A, pedal B | 1 to 127, 0 off |
 | 86, 87 | SWITCH 2 trigger, pedal A, pedal B | 1 to 127, 0 off |
 | 88 to 91 | Calibration: heel A, toe A, heel B, toe B (read only) | 0 to 255 raw readings, as CC 6 + CC 38 |

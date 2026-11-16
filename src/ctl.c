@@ -32,6 +32,13 @@
 #error DEFAULT_PEDAL_MODE must be 0 to 3
 #endif
 
+#if NOTE_BANK_1 > BANK_COUNT || NOTE_BANK_2 > BANK_COUNT
+#error NOTE_BANK_1 and NOTE_BANK_2 must be 0 (none) or a bank up to BANK_COUNT
+#endif
+#if NOTE_BANK_1_FIRST + 9 > 127 || NOTE_BANK_2_FIRST + 9 > 127
+#error NOTE_BANK_1_FIRST and NOTE_BANK_2_FIRST must leave room for ten notes (up to 118)
+#endif
+
 // Configuration pages
 #define PAGE_MODES      0
 #define PAGE_CHANNEL    1
@@ -47,7 +54,8 @@
 
 // A relay's follow mask: bits 0-9 are footswitches 1-10, this bit is bank mode (the UP +
 // DOWN toggle, DIRECT SELECT lit).
-#define SW_CC_BIT       ((uint16_t)1 << STOMP_COUNT)
+// Every footswitch's bit.
+#define ALL_SWITCHES    (((uint16_t)1 << STOMP_COUNT) - 1)
 // On a SWITCH page a pedal must move this many CC steps (or reach 0 or 127) to set a
 // new trigger value, so ADC noise does not keep changing it.
 #define SW_PEDAL_STEP   2
@@ -265,7 +273,7 @@ static BIT_T          mode_cycle_pending;
 #define NP_NUM          30      // + switch: number (CC or note; unused for a program change)
 #define NP_ON           40      // + switch: on value (a program change's program sent on)
 #define NP_OFF          50      // + switch: off value (a program change's program sent off)
-#define NP_FOLLOW1      60      // + switch 0-9 (+ 10: the UP + DOWN switch): SWITCH 1 follows it, 0 / 1
+#define NP_FOLLOW1      60      // + switch 0-9: SWITCH 1 follows it, 0 / 1 (70 was program mode, gone)
 #define NP_FOLLOW2      72      // the same for SWITCH 2
 #define NP_TRIGGER      84      // + relay * 2 + pedal: trigger value 1-127, 0 = off
 #define NP_CAL          88      // heel A, toe A, heel B, toe B: raw readings 0-255 (read only)
@@ -380,7 +388,7 @@ static IDATA uint8_t  ref_raw[2];
 // ref_raw is the run-mode pedal reference (set again from the first reading after
 // configuration mode) and the calibration heel reading kept from page 3 for page 4.
 
-// Relay (SWITCH 1 / 2) triggers, saved: follow masks (SW_CC_BIT and footswitches) and
+// Relay (SWITCH 1 / 2) triggers, saved: follow masks (one bit per footswitch) and
 // pedal trigger values (index relay * 2 + pedal, 0 = off). relay_out is what the
 // relays are set to now (bit 0 = SWITCH 1).
 static IDATA uint16_t sw_mask[2];
@@ -501,6 +509,21 @@ static void rec_read(void)
             hal_rec[0] = (uint8_t)(MT_CC | (DEFAULT_PEDAL_MODE << 2));
             hal_rec[1] = stomp_cc[rec_n];
             hal_rec[2] = 127;
+            // The note banks: momentary notes, one note higher per switch.
+#if NOTE_BANK_1 > 0
+            if (hal_bank == NOTE_BANK_1 - 1)
+            {
+                hal_rec[0] = (uint8_t)(MT_NOTE | (PM_MOMENTARY << 2));
+                hal_rec[1] = (uint8_t)(NOTE_BANK_1_FIRST + rec_n);
+            }
+#endif
+#if NOTE_BANK_2 > 0
+            if (hal_bank == NOTE_BANK_2 - 1)
+            {
+                hal_rec[0] = (uint8_t)(MT_NOTE | (PM_MOMENTARY << 2));
+                hal_rec[1] = (uint8_t)(NOTE_BANK_2_FIRST + rec_n);
+            }
+#endif
         }
         else if (rec_n == HAL_REC_CAL)
         {
@@ -527,7 +550,8 @@ static void rec_read(void)
     }
     else if (rec_n < HAL_REC_CAL)
     {
-        hal_rec[1] &= 0x07;
+        // Footswitches 9 and 10 (bit 10, following program mode, is no longer used).
+        hal_rec[1] &= 0x03;
 
         if (hal_rec[2] > 127)
         {
@@ -1259,7 +1283,7 @@ static void config_show(void)
     }
 
     // A SWITCH page (its SWITCH LED lit) shows that relay's triggers: footswitch LEDs for
-    // the switches it follows, DIRECT SELECT for program mode, EXP 1 / EXP 2 for a pedal
+    // the switches it follows, EXP 1 / EXP 2 for a pedal
     // trigger value. The display is blank until a pedal is moved, then shows the value.
     if (IS_SW_PAGE(cfg_page))
     {
@@ -1274,11 +1298,6 @@ static void config_show(void)
         if (sw_thr[r * 2 + 1])
         {
             led_aux |= LED_BIT(HAL_LED_EXP_2);
-        }
-
-        if (sw_mask[r] & SW_CC_BIT)
-        {
-            led_aux |= LED_BIT(HAL_LED_DIRECT_SELECT);
         }
 
         led_stomp = sw_mask[r];
@@ -1338,6 +1357,7 @@ static void config_goto_page(uint8_t page)
     {
         resync_pedals();
         edit_typing = 0;
+        pc_typing   = 0;
     }
     // Page 8 starts with the "riban" scroll's lead-in.
     else if (page == PAGE_VERSION)
@@ -1824,8 +1844,10 @@ static void exit_config(uint8_t save)
         edit_end(1);
     }
 
-    // Stop a two-digit channel entry that could still take a second digit.
+    // Stop a two-digit channel entry that could still take a second digit, and page 7's
+    // "--" entry (its dot goes out on the next tick).
     chan_digit_pending = 0;
+    pc_typing          = 0;
     // Leaving from page 8 ends the lamp test and its dots.
     hal_lamp_test(HAL_LAMP_NORMAL);
     hal_display_dots(0);
@@ -1962,7 +1984,9 @@ static void nav_key_press(uint8_t code)
         if (chord_state == CHORD_NONE)
         {
             chord_state = CHORD_ACTIVE;
-            nav_ticks = 0;
+            // In configuration mode it saves and leaves at once: on the next tick, from
+            // ctl_tick's chord timer (not this key handler's deeper stack).
+            nav_ticks = (mode == MODE_CONFIG) ? CHORD_TICKS - 1 : 0;
             nav_cancel();
         }
 
@@ -1996,34 +2020,37 @@ static void nav_key_release(uint8_t code)
     {
         if (chord_state == CHORD_ACTIVE)
         {
-            // Let go before the hold time: in run mode it toggles bank mode. In
-            // configuration mode UP + DOWN does nothing.
+            // Let go before the hold time (run mode only: in configuration mode the
+            // chord has already saved and left): toggles program mode.
             chord_state = CHORD_DONE;
-
-            if (mode == MODE_RUN)
-            {
-                pc_mode_toggle();
-            }
-            // On a SWITCH page it toggles whether that relay follows bank mode.
-            else if (IS_SW_PAGE(cfg_page))
-            {
-                sw_mask[cfg_page - PAGE_SW1] ^= SW_CC_BIT;
-                config_changed();
-                hal_aux_led(HAL_LED_DIRECT_SELECT, (sw_mask[cfg_page - PAGE_SW1] & SW_CC_BIT) != 0);
-            }
-            // On page 7 it turns the bank's program change off ("--").
-            else if (cfg_page == PAGE_BANK_PC)
-            {
-                bank_pc = 0;
-                edit_typing = 0;
-                config_changed();
-                show_bank_pc();
-            }
+            pc_mode_toggle();
         }
 
         if (keys_down == 0)
         {
             chord_state = CHORD_NONE;
+        }
+
+        return;
+    }
+
+    // Page 7 after footswitch 10 ("--"): UP (ENTER) turns the bank's program change off,
+    // DOWN (ESCAPE) goes back to showing it; neither changes page. Not after a hold.
+    if (pc_typing && mode == MODE_CONFIG)
+    {
+        if (code == nav_code)
+        {
+            nav_code      = NAV_NONE;
+            nav_repeating = 0;
+            pc_typing     = 0;
+
+            if (code == CTL_KEY_UP)
+            {
+                bank_pc = 0;
+                config_changed();
+            }
+
+            show_bank_pc();
         }
 
         return;
@@ -2419,12 +2446,28 @@ void ctl_key_press(uint8_t code)
         {
             version_jump(stomp_index(code));
         }
-        // Page 7: types a digit of the bank's program change.
+        // Page 7: types a digit of the bank's program change. Footswitch 10 with no number
+        // being typed shows "--" (the right-hand dot flashing): UP then turns the program
+        // change off; a digit starts a number (10 again is 0).
         else if (cfg_page == PAGE_BANK_PC)
         {
-            bank_pc_digit(stomp_index(code));
-            config_changed();
-            show_bank_pc();
+            index = stomp_index(code);
+
+            if (index == STOMP_COUNT - 1 && !edit_typing && !pc_typing)
+            {
+                pc_typing        = 1;
+                pc_dot           = 1;
+                chan_flash_ticks = 0;
+                hal_display_text(HAL_TEXT_DASHES);
+                hal_display_dots(1);
+            }
+            else
+            {
+                pc_typing = 0;
+                bank_pc_digit(index);
+                config_changed();
+                show_bank_pc();
+            }
         }
         else
         {
@@ -2625,8 +2668,8 @@ static void remote_cc(uint8_t cc, uint8_t value)
 static uint8_t np_kind(uint8_t p)
 {
     if (p == NP_CHANNEL || p == NP_BANK || (p >= NP_MODE && p < NP_MODE + STOMP_COUNT) ||
-        (p >= NP_TYPE && p < NP_OFF + STOMP_COUNT) || (p >= NP_FOLLOW1 && p <= NP_FOLLOW1 + STOMP_COUNT) ||
-        (p >= NP_FOLLOW2 && p <= NP_FOLLOW2 + STOMP_COUNT) || (p >= NP_TRIGGER && p < NP_TRIGGER + 4) ||
+        (p >= NP_TYPE && p < NP_OFF + STOMP_COUNT) || (p >= NP_FOLLOW1 && p < NP_FOLLOW1 + STOMP_COUNT) ||
+        (p >= NP_FOLLOW2 && p < NP_FOLLOW2 + STOMP_COUNT) || (p >= NP_TRIGGER && p < NP_TRIGGER + 4) ||
         p == NP_BANK_PC || p == NP_BANK_PC_ON)
     {
         return NK_SET;
@@ -2835,7 +2878,7 @@ static void nrpn_command(void)
     {
         load_settings();
         // Every switch goes to its resting state under the reloaded settings (next tick).
-        cfg_dirty = (uint16_t)(SW_CC_BIT - 1);
+        cfg_dirty = ALL_SWITCHES;
         resync_pedals();
     }
     else if (rx_data1 == NC_HEEL || rx_data1 == NC_TOE)
@@ -3165,11 +3208,6 @@ static uint8_t relays_compute(void)
     uint8_t  i;
     uint8_t  bit;
 
-    if (pc_mode)
-    {
-        on |= SW_CC_BIT;
-    }
-
     // i = relay * 2 + pedal.
     for (i = 0; i < 4; i++)
     {
@@ -3398,7 +3436,7 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_EDIT:          return edit_open ? (uint8_t)(edit_param + 1) : 0;
     case CTL_INSPECT_BANK:          return hal_bank;
     case CTL_INSPECT_BANK_PC:       return bank_pc;
-    case CTL_INSPECT_PC_MODE:       return (uint8_t)(pc_mode + pc_typing);
+    case CTL_INSPECT_PC_MODE:       return (uint8_t)(pc_mode | (pc_typing << 1));
     default:                        return 0;
     }
 }

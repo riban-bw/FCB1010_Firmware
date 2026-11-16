@@ -161,7 +161,7 @@ check("the repeat moved several steps (400 ms delay, then 4 Hz)", p >= 5 && p <=
 // Held 6 s: 4 Hz to about 4 s (16 steps), then 20 Hz (about 37 more by 6 s).
 const WRAP = Number(cfgText.match(/#define PROGRAM_WRAP (\d)/)[1]);
 // Repeat steps after holding T ms, from the timings in config.h (as ctl.c counts them).
-const cfgNum = (name) => Number(cfgText.match(new RegExp("#define " + name + " (\\d+)"))[1]);
+const cfgNum = (name) => Number(cfgText.match(new RegExp("#define " + name + "\\s+(\\d+)"))[1]);
 const RD = cfgNum("PROGRAM_REPEAT_DELAY_MS"), RP = 1000 / cfgNum("PROGRAM_REPEAT_HZ");
 const RF = 1000 / cfgNum("PROGRAM_REPEAT_FAST_HZ"), RA = cfgNum("PROGRAM_REPEAT_FAST_AFTER_MS");
 const FAST_STEPS = Math.ceil((RA - RD) / RP) + 1, FAST_AT = RD + (FAST_STEPS - 1) * RP;
@@ -237,7 +237,7 @@ const longKey = (k) => { fcb.down(k); wait(1300); fcb.up(k); wait(200); };
 fcb.down(UP); fcb.down(DOWN); wait(1100); fcb.up(UP); fcb.up(DOWN); wait(200);
 check("each footswitch shows its CC number", STOMP_CC.map((n, i) => sandbox.document.getElementById("cc" + i).textContent), STOMP_CC.map((n) => "CC " + n));
 check("the UP and DOWN switches are labelled UP [ENTER] and DOWN [ESCAPE]",
-      [...sandbox.document.getElementById("rows").innerHTML.matchAll(/class="num">([^<]*)</g)].map((m) => m[1]).filter((t) => /UP|DOWN/.test(t)), ["UP [ENTER]", "DOWN [ESCAPE]"]);
+      [...sandbox.document.getElementById("rows").innerHTML.matchAll(/class="num">(UP|DOWN)<\/span><span class="sub">([^<]*)</g)].map((m) => m[1] + " " + m[2]), ["UP [ENTER]", "DOWN [ESCAPE]"]);
 check("UP + DOWN held 1s opens config mode on page 1", [fcb.state().mode, fcb.hw.status, fcb.state().cfgPage], [1, 1, 0]);
 check("page 1 lights MIDI FUNCTION only", pageLeds(), [0, 1, 0, 0]);
 check("DIRECT SELECT is dark while editing", fcb.hw.aux[4], 0);
@@ -272,8 +272,9 @@ press(1, 100);
 check("then switch 2 enters channel 2", fcb.state().midiChannel, 2);
 check("footswitches send nothing in config mode", sent(), []);
 chordTap();
-check("UP + DOWN tapped in config mode does nothing", [fcb.state().mode, fcb.state().cfgPage, fcb.hw.aux[4]], [1, 1, 0]);
-press(UP, 100);
+check("UP + DOWN tapped in config mode saves and leaves at once", [fcb.state().mode, fcb.hw.status, JSON.parse(store["fcb1010-eeprom-v2"]).cfg[0]], [0, 0, 2]);
+fcb.down(UP); fcb.down(DOWN); wait(1100); fcb.up(UP); fcb.up(DOWN); wait(200);
+press(UP, 100); press(UP, 100);
 check("page 3 lights both EXP LEDs and shows Lo", [pageLeds(), fcb.hw.text], [[0, 0, 1, 1], TEXT_LO]);
 fcb.setRaw(0, 0); wait(100);
 press(0, 100);
@@ -287,8 +288,8 @@ press(0, 100);
 check("toe at 255 (heel 0, the default range, so later checks hold): 0", [fcb.hw.text, fcb.hw.display], [0, 0]);
 press(UP, 100);
 check("page 5 lights SWITCH 1, the display is blank", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.blank], [4, 1, 0, 7]);
-press(3, 100); chordTap();
-check("switch 4 and UP + DOWN are relay 1 triggers (their LEDs lit)", [fcb.state().swMask[0], fcb.hw.leds[3], fcb.hw.aux[4]], [8 | 1024, 1, 1]);
+press(3, 100);
+check("switch 4 is a relay 1 trigger (its LED lit), DIRECT SELECT dark", [fcb.state().swMask[0], fcb.hw.leds[3], fcb.hw.aux[4]], [8, 1, 0]);
 fcb.setRaw(255, 255); wait(100); fcb.setRaw(128, 255); wait(100);
 check("moving pedal A sets relay 1's trigger value, shown, EXP 1 lit", [fcb.state().swThr[0] > 0, fcb.hw.display === fcb.state().swThr[0], fcb.hw.aux[2]], [true, true, 1]);
 press(UP, 100);
@@ -298,8 +299,10 @@ press(UP, 100);
 check("UP goes to page 7: DIRECT SELECT lit, \"--\"", [fcb.state().cfgPage, fcb.hw.aux[4], fcb.hw.aux[6], fcb.hw.text, fcb.hw.lamp, fcb.state().bankPc], [6, 1, 0, 13, 0, 0]);
 press(1, 100); press(4, 100);
 check("footswitches 2 and 5 type program 25", [fcb.hw.display, fcb.state().bankPc, sent()], [25, 26, []]);
-chordTap();
-check("a short UP + DOWN: none (\"--\")", [fcb.hw.text, fcb.state().bankPc], [13, 0]);
+press(10, 100);
+check("after a complete number, footswitch 10 shows \"--\", changing nothing yet", [fcb.hw.text, fcb.state().bankPc, fcb.state().pcMode & 2], [13, 26, 2]);
+press(UP, 100);
+check("then UP [ENTER]: none (\"--\"), still on page 7", [fcb.hw.text, fcb.state().bankPc, fcb.state().cfgPage], [13, 0, 6]);
 // Page 8: every LED lit at once while "riban" scrolls, then the version from version.h,
 // repeating.
 const verText = readFileSync(new URL("../src/version.h", import.meta.url), "utf8");
@@ -392,7 +395,7 @@ check("and a cancel leaves with nothing changed", [fcb.state().mode, fcb.hw.stat
 // is sent. No program change either way.
 check("with nothing sent and no program change", [sent(), fcb.state().program], [[], p]);
 check("switch 3's LED after saving", fcb.hw.leds[2], DEF_MODE === 3 ? 1 : 0);
-check("the SWITCH 1 record was stored", JSON.parse(store["fcb1010-eeprom-v2"]).sw1.slice(0, 2), [8, 4]);
+check("the SWITCH 1 record was stored", JSON.parse(store["fcb1010-eeprom-v2"]).sw1.slice(0, 2), [8, 0]);
 check("the settings record was stored", JSON.parse(store["fcb1010-eeprom-v2"]).cfg[0], 2);
 fcb.down(UP); fcb.down(DOWN); wait(1100); fcb.up(UP); fcb.up(DOWN); wait(200);
 press(UP, 100);
@@ -535,9 +538,12 @@ fcb.confChanged(NP.NUM + 9, 98); wait(20);
 fcb.confCommand(NC.RELOAD, "dropped"); wait(600);
 check("Discard goes back to the saved settings", [fcb.state().msgs[9].num, conf.v[NP.NUM + 9]], [99, 99]);
 check("the dump has the bank (1) and the bank count", [conf.v[NP.BANK], conf.v[NP.BANKS] > 0], [1, true]);
+// A never-saved bank's footswitch number: the note banks (config.h) count up from their first note.
+const bankNum = (b, i) => b === cfgNum("NOTE_BANK_1") ? cfgNum("NOTE_BANK_1_FIRST") + i :
+  b === cfgNum("NOTE_BANK_2") ? cfgNum("NOTE_BANK_2_FIRST") + i : STOMP_CC[i];
 fcb.confBank(3); wait(600);
 check("choosing bank 3 switches the pedal and reads that bank back",
-      [fcb.state().bank, conf.v[NP.BANK], conf.known, conf.v[NP.NUM + 9], fcb.state().msgs[9].num], [2, 3, true, STOMP_CC[9], STOMP_CC[9]]);
+      [fcb.state().bank, conf.v[NP.BANK], conf.known, conf.v[NP.NUM + 9], fcb.state().msgs[9].num], [2, 3, true, bankNum(3, 9), bankNum(3, 9)]);
 fcb.confChanged(NP.NUM + 0, 88); wait(20);
 fcb.confCommand(NC.SAVE, "saved"); wait(600);
 check("Store keeps bank 3's footswitches in its own records", [rec().b3fs0 && rec().b3fs0[1], rec().fs0 === undefined || rec().fs0[1] !== 88], [88, true]);
@@ -558,14 +564,14 @@ check("a saved file has the pedal's settings in readable form",
       ["fcb1010-settings", fcb.state().midiChannel, { mode: ["stomp", "stomp + momentary", "momentary", "inverted momentary"][DEF_MODE], type: "note", number: 60, on: 100, off: 20 }, "program", 2]);
 const oldCh = file.channel;
 file.footswitches[1] = { mode: "momentary", type: "note", number: 77, on: 90, off: 10 };
-file.relays[0] = { follows: [3, 7], followsUpDown: true, pedalA: 0, pedalB: 64 };
+file.relays[0] = { follows: [3, 7], pedalA: 0, pedalB: 64 };
 file.channel = oldCh % 16 + 1;
 check("loading it is accepted", fcb.confLoad(file), true);
 wait(600);
 const st = fcb.state();
 check("the pedal took the file's settings, the channel last",
       [st.msgs[1], st.pedalModes[1], st.swMask[0], st.swThr[1], st.midiChannel, conf.ch, conf.unsaved],
-      [{ type: 1, num: 77, on: 90, off: 10 }, 2, (1 << 2) | (1 << 6) | (1 << 10), 64, file.channel, file.channel, true]);
+      [{ type: 1, num: 77, on: 90, off: 10 }, 2, (1 << 2) | (1 << 6), 64, file.channel, file.channel, true]);
 check("and reading it back gives the same file", fcb.confToFile(), file);
 check("an invalid file is refused and changes nothing",
       [fcb.confLoad({ format: "fcb1010-settings", version: 1, channel: 1, footswitches: [], relays: [] }),
@@ -665,7 +671,7 @@ fcb.confRead(false);
 check("Read says it needs an input", [conf.waiting, /need a MIDI input/.test(el("confStatus").textContent)], ["", true]);
 const oneWay = fcb.confToFile();
 oneWay.footswitches[5] = { mode: "stomp", type: "cc", number: 33, on: 100, off: 1 };
-oneWay.relays[1] = { follows: [10], followsUpDown: false, pedalA: 12, pedalB: 0 };
+oneWay.relays[1] = { follows: [10], pedalA: 12, pedalB: 0 };
 check("a file loads with no read first", fcb.confLoad(oneWay), true);
 waitMidi(800);
 check("every setting was sent (no read, so nothing is assumed), and the pedal took them",
