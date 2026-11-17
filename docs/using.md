@@ -17,16 +17,16 @@ Everything uses a single MIDI channel (channel 1 by default but can be changed i
 
 | LED | While playing | In configuration mode |
 |---|---|---|
-| Footswitches 1 to 10 | Lit while that footswitch is ON | Depends on the page: the selected footswitch (page 1), the footswitch being edited (editor), the footswitches a relay follows (pages 3 and 4), the pedal setting last chosen (page 2) |
-| SWITCH 1, SWITCH 2 | Lit while that relay is closed | Marks page 3 (SWITCH 1) or page 4 (SWITCH 2) |
-| DIRECT SELECT | Lit in program mode: UP, DOWN and the footswitches change program. Dark while UP and DOWN choose footswitch banks | Page 5: lit (it marks the page). Dark on the other pages |
+| Footswitches 1 to 10 | Lit while that footswitch is ON | Depends on the page: the selected footswitch (page 1), the footswitch being edited (editor), the footswitches a relay follows (pages 5 and 6), the pedal setting last chosen (pages 3 and 4) |
+| SWITCH 1, SWITCH 2 | Lit while that relay is closed | Marks page 5 (SWITCH 1) or page 6 (SWITCH 2) |
+| DIRECT SELECT | Lit in program mode: UP, DOWN and the footswitches change program. Dark while UP and DOWN choose footswitch banks | Page 7: lit (it marks the page). Dark on the other pages |
 | MIDI FUNCTION | Flickers when MIDI is sent | Marks page 1 (pedal modes) |
-| MIDI CHAN | Flickers when MIDI arrives | Marks page 6 (MIDI channel) |
-| EXP 1, EXP 2 | Flashing while that pedal waits to pick up (faster the closer it is), otherwise dark | Page 2: the pedal whose setting is shown. Pages 3 and 4: lit while the relay follows that pedal |
-| SELECT, NUMBER, VALUE 1, VALUE 2 | Dark | Footswitch editor: the setting being edited (type, number, ON value, OFF value). NUMBER also lights in page 2's pedal CC editor |
+| MIDI CHAN | Flickers when MIDI arrives | Marks page 2 (MIDI channel) |
+| EXP 1, EXP 2 | Flashing while that pedal waits to pick up (faster the closer it is), otherwise dark | Mark page 3 (EXP 1, pedal A) and page 4 (EXP 2, pedal B). Pages 5 and 6: lit while the relay follows that pedal |
+| SELECT, NUMBER, VALUE 1, VALUE 2 | Dark | Footswitch editor: the setting being edited (type, number, ON value, OFF value). NUMBER also lights in the pedal CC editor (pages 3 and 4) |
 | CONFIG | Dark | Lit; flashes while a change is not saved |
 
-For a second at power-on, and throughout configuration page 7, every LED is lit (on page 7 the CONFIG LED still flashes for an unsaved change, and the footswitch LEDs show the steps).
+For a second at power-on, and throughout configuration page 8, every LED is lit (on page 8 the CONFIG LED still flashes for an unsaved change, and the footswitch LEDs show the steps).
 
 ## Footswitch modes
 
@@ -72,7 +72,7 @@ Configuration mode edits the bank in use, and saving stores that bank (with the 
 
 ## Expression pedals
 
-Each bank sets the controller (CC) number each expression pedal sends, and how it responds; both are set on configuration page 2, with the pedal calibration (see [Configuration](configuration.md#expression-pedals-page)). Each pedal works in one of two ways:
+Each bank sets the controller (CC) number each expression pedal sends, and how it responds; both are set on configuration pages 3 (pedal A) and 4 (pedal B), with the pedal calibration (see [Configuration](configuration.md#expression-pedal-pages)). Each pedal works in one of two ways:
 
 - **Immediate** (the default): every move is sent at once.
 - **Pickup**: when its controller's value has changed somewhere else, the pedal sends nothing until it reaches that value. This avoids a jump in, say, volume when your DAW or a footswitch has moved it, or when you change to a bank where the pedal sends another controller. The value changes elsewhere when a footswitch sends that controller or your DAW sends it to MIDI IN; at power-on it counts as 0. The pedal picks up when it comes within 2 steps of that value, or passes it, and then sends as usual.

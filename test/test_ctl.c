@@ -1249,21 +1249,21 @@ static void test_config_channel(void)
     printf("config: MIDI channel, pages, save\n");
     reset_world();
     chord_long();
-    // Page 1 is pedal modes; the MIDI channel is page 6, before the version page.
+    // Page 1 is pedal modes, page 2 the MIDI channel (user's order), page 8 the version.
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_MODES);
-    to_page(PAGE_CHANNEL);
-    CHECK(cfg_page == PAGE_CHANNEL && display == MIDI_CHANNEL && PAGE_CHANNEL == 5 && PAGE_VERSION == 6);
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_CHANNEL && display == MIDI_CHANNEL && PAGE_CHANNEL == 1 && PAGE_VERSION == 7);
 
     // UP / DOWN change the page and never the channel; they do not auto-repeat.
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_BANK_PC && midi_channel == MIDI_CHANNEL);
+    CHECK(cfg_page == PAGE_MODES && midi_channel == MIDI_CHANNEL);
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_CHANNEL && display == MIDI_CHANNEL);
     ctl_key_press(CTL_KEY_UP);
     ticks(REPEAT_DELAY_TICKS + 3 * REPEAT_PERIOD_TICKS);
     CHECK(cfg_page == PAGE_CHANNEL);
     ctl_key_release(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_VERSION && midi_channel == MIDI_CHANNEL);
+    CHECK(cfg_page == PAGE_EXP_A && midi_channel == MIDI_CHANNEL);
     tap(CTL_KEY_DOWN);
 
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_CHANNEL);
@@ -1386,7 +1386,7 @@ static void test_config_cancel(void)
     to_page(PAGE_CHANNEL);
     tap(sw_code(7));
     CHECK(midi_channel == 7 && pedal_mode_get(2) == PM_STOMP_MOM);
-    to_page(PAGE_PEDALS);
+    to_page(PAGE_EXP_A);
     pedal(0, 20);
     cal_take(4);
     pedal(0, 220);
@@ -1488,7 +1488,7 @@ static void test_config_modes(void)
 
     // UP / DOWN only change the page here, never a mode.
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_PEDALS && pedal_mode_get(9) == PM_MOMENTARY);
+    CHECK(cfg_page == PAGE_CHANNEL && pedal_mode_get(9) == PM_MOMENTARY);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_MODES && pedal_mode_get(9) == PM_MOMENTARY && cfg_sel == 9);
 
@@ -1734,7 +1734,7 @@ static void test_config_channel_digits(void)
     ticks(CHAN_FLASH_TICKS);
     CHECK(blank == 1);
     tap(CTL_KEY_DOWN);
-    CHECK(chan_digit_pending == 0 && cfg_page == PAGE_BANK_PC && midi_channel == 10);
+    CHECK(chan_digit_pending == 0 && cfg_page == PAGE_MODES && midi_channel == 10);
     tap(CTL_KEY_UP);
     CHECK(display == 10 && blank == 0);
     tap(sw_code(4));
@@ -1775,13 +1775,20 @@ static void test_config_page_leds(void)
     CHECK(cfg_page == PAGE_MODES && aux[HAL_LED_MIDI_CHAN] == 0 && aux[HAL_LED_MIDI_FUNC] == 1);
     CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0);
     CHECK(display == SHOWN_MODE(pedal_mode_get(0)) && leds[0] == 1);
-    // Page 2 the pedals: footswitch 1 (pedal A's response) and EXP 1 lit.
+    // Page 2 the MIDI channel (user's order).
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_PEDALS && aux[HAL_LED_MIDI_CHAN] == 0 && aux[HAL_LED_MIDI_FUNC] == 0);
+    CHECK(cfg_page == PAGE_CHANNEL && aux[HAL_LED_MIDI_CHAN] == 1 && aux[HAL_LED_MIDI_FUNC] == 0);
+    CHECK(display == MIDI_CHANNEL && leds[0] == 0);
+    // Page 3 EXP A: footswitch 1 (its response) and EXP 1 lit; page 4 EXP B, EXP 2 lit.
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_EXP_A && aux[HAL_LED_MIDI_CHAN] == 0 && aux[HAL_LED_MIDI_FUNC] == 0);
     CHECK(aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0 && aux[HAL_LED_NUMBER] == 0);
     CHECK(display == SHOWN_TEXT((pk_mask & 1) ? HAL_TEXT_MODE + PM_MOMENTARY : HAL_TEXT_ABS) && leds[0] == 1 && leds[1] == 0);
     CHECK(lamp == HAL_LAMP_NORMAL);
-    // Pages 3 and 4 light SWITCH 1 / SWITCH 2.
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_EXP_B && aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 1 && pcc_b == 1);
+    CHECK(display == SHOWN_TEXT((pk_mask & 2) ? HAL_TEXT_MODE + PM_MOMENTARY : HAL_TEXT_ABS) && leds[0] == 1 && leds[1] == 0);
+    // Pages 5 and 6 light SWITCH 1 / SWITCH 2.
     CHECK(aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 0);
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_SW1 && aux[HAL_LED_SWITCH_1] == 1 && aux[HAL_LED_SWITCH_2] == 0);
@@ -1789,32 +1796,30 @@ static void test_config_page_leds(void)
     CHECK(display == 0 && blank == 7);
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_SW2 && aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 1);
-    // Page 5 the bank's program change: DIRECT SELECT, "Pr" first.
+    // Page 7 the bank's program change: DIRECT SELECT, "Pr" first.
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_BANK_PC && aux[HAL_LED_SWITCH_2] == 0 && aux[HAL_LED_DIRECT_SELECT] == 1 && lamp == HAL_LAMP_NORMAL && dots == 0);
     CHECK(display == SHOWN_TEXT(HAL_TEXT_PROG));
-    // Page 6 the MIDI channel, page 7 the version, the last (no wrap).
+    // Page 8 the version, the last (no wrap).
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_CHANNEL && aux[HAL_LED_MIDI_CHAN] == 1 && aux[HAL_LED_DIRECT_SELECT] == 0);
-    CHECK(display == MIDI_CHANNEL && leds[0] == 0);
-    tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_VERSION && aux[HAL_LED_MIDI_CHAN] == 0 && lamp == HAL_LAMP_LEDS_STOMPS);
+    CHECK(cfg_page == PAGE_VERSION && aux[HAL_LED_DIRECT_SELECT] == 0 && lamp == HAL_LAMP_LEDS_STOMPS);
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_VERSION);
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_CHANNEL && aux[HAL_LED_MIDI_CHAN] == 1 && lamp == HAL_LAMP_NORMAL && dots == 0);
-    // Leaving page 6 with a "10" waiting keeps channel 10.
-    tap(sw_code(10));
-    tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_BANK_PC && chan_digit_pending == 0 && midi_channel == 10 && aux[HAL_LED_DIRECT_SELECT] == 1);
+    CHECK(cfg_page == PAGE_BANK_PC && lamp == HAL_LAMP_NORMAL && dots == 0 && aux[HAL_LED_DIRECT_SELECT] == 1);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_SW2 && aux[HAL_LED_SWITCH_2] == 1 && aux[HAL_LED_DIRECT_SELECT] == 0);
     tap(CTL_KEY_DOWN);
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_PEDALS && aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_EXP_1] == 1);
+    CHECK(cfg_page == PAGE_EXP_B && aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_EXP_2] == 1);
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_MODES && aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_EXP_1] == 0);
-    CHECK(display == SHOWN_MODE(pedal_mode_get(0)));
+    tap(CTL_KEY_DOWN);
+    CHECK(cfg_page == PAGE_CHANNEL && aux[HAL_LED_MIDI_CHAN] == 1 && aux[HAL_LED_EXP_1] == 0);
+    // Leaving page 2 with a "10" waiting keeps channel 10.
+    tap(sw_code(10));
+    tap(CTL_KEY_DOWN);
+    CHECK(cfg_page == PAGE_MODES && chan_digit_pending == 0 && midi_channel == 10 && aux[HAL_LED_MIDI_CHAN] == 0);
+    CHECK(aux[HAL_LED_MIDI_FUNC] == 1 && display == SHOWN_MODE(pedal_mode_get(0)));
     // DOWN on page 1 stays on page 1 (no wrap).
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_MODES && aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_EXP_1] == 0);
@@ -1968,11 +1973,11 @@ static void test_config_version(void)
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_VERSION && midi_len == 0);
     CHECK(sw_thr[0] == 0 && sw_thr[1] == 0 && sw_thr[2] == 0 && sw_thr[3] == 0 && sw_mask[1] == 0);
 
-    // DOWN during the lamp test: page 6, LEDs back to normal, and no more steps.
+    // DOWN during the lamp test: page 7, LEDs back to normal, and no more steps.
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_CHANNEL && lamp == HAL_LAMP_NORMAL && dots == 0 && aux[HAL_LED_MIDI_CHAN] == 1);
-    ticks(VER_STEP_TICKS * 20);
-    CHECK(lamp == HAL_LAMP_NORMAL && display == MIDI_CHANNEL);
+    CHECK(cfg_page == PAGE_BANK_PC && lamp == HAL_LAMP_NORMAL && dots == 0 && aux[HAL_LED_DIRECT_SELECT] == 1);
+    ticks(VER_STEP_TICKS * 5);
+    CHECK(lamp == HAL_LAMP_NORMAL && display == SHOWN_TEXT(HAL_TEXT_PROG));
 
     // Leaving from page 7 (long UP, or a long UP + DOWN) ends the lamp test and dots.
     tap(CTL_KEY_UP);
@@ -2090,12 +2095,12 @@ static void test_config_version_jump(void)
     CHECK(display == SHOWN_TEXT(HAL_TEXT_SCROLL) && stomp_leds_but(0));
     CHECK(midi_len == 0 && cfg_changed == 0 && mode == MODE_CONFIG && cfg_page == PAGE_VERSION);
 
-    // DOWN while a switch is held leaves page 7; the release then does nothing.
+    // DOWN while a switch is held leaves page 8; the release then does nothing.
     ctl_key_press(sw_code(5));
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_CHANNEL && ver_paused == 0 && lamp == HAL_LAMP_NORMAL);
+    CHECK(cfg_page == PAGE_BANK_PC && ver_paused == 0 && lamp == HAL_LAMP_NORMAL);
     ctl_key_release(sw_code(5));
-    CHECK(cfg_page == PAGE_CHANNEL && midi_channel == MIDI_CHANNEL && midi_len == 0);
+    CHECK(cfg_page == PAGE_BANK_PC && bank_pc == 0 && midi_len == 0);
 
     // Leaving config mode while a switch is held: run mode works as usual afterwards.
     tap(CTL_KEY_UP);
@@ -2457,11 +2462,11 @@ static void test_config_calibration(void)
     printf("config: calibration (pedal page)\n");
     reset_world();
     chord_long();
-    to_page(PAGE_PEDALS);
+    to_page(PAGE_EXP_A);
     CHECK(aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0);
     CHECK(aux[HAL_LED_MIDI_FUNC] == 0 && aux[HAL_LED_MIDI_CHAN] == 0);
 
-    // Footswitch 4 takes pedal A's heel, 9 its toe; 5 and 10 pedal B's (user's layout).
+    // On EXP A footswitch 4 takes pedal A's heel, 9 its toe (user's layout).
     // The first press selects it: "Lo" / "Hi" flashing (every CHAN_FLASH_TICKS), its
     // footswitch and its pedal's EXP LED lit, nothing taken. The second takes the
     // reading: "Lo" / "Hi" steady (user's request).
@@ -2484,55 +2489,61 @@ static void test_config_calibration(void)
     CHECK(cal_armed && heel[0] == 20);
     ticks(CHAN_FLASH_TICKS);
     CHECK(blank == 7);
-    // Another footswitch selects itself: pedal B's heel, flashing from lit.
-    tap(sw_code(5));
-    CHECK(display == SHOWN_LO && cal_armed && heel[1] == 0 && leds[4] == 1 && leds[3] == 0 && aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 1);
-    tap(sw_code(5));
-    CHECK(display == SHOWN_LO && heel[1] == 30);
     pedal(0, 220);
     pedal(1, 230);
     cal_take(9);
     CHECK(display == SHOWN_HI && toe[0] == 220 && toe[1] == 255 && leds[8] == 1 && aux[HAL_LED_EXP_1] == 1);
-    cal_take(10);
-    CHECK(display == SHOWN_HI && toe[1] == 230 && leds[9] == 1 && aux[HAL_LED_EXP_2] == 1);
+    // Page 4, EXP B: the same footswitches for pedal B (user's request), EXP 2 lit.
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_EXP_B && pcc_b == 1 && ped_sel == 0 && aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 1 && leds[0] == 1);
+    pedal(1, 30);
+    tap(sw_code(4));
+    CHECK(display == SHOWN_LO && cal_armed && heel[1] == 0 && leds[3] == 1 && leds[0] == 0);
+    tap(sw_code(4));
+    CHECK(display == SHOWN_LO && heel[1] == 30 && heel[0] == 20);
+    pedal(1, 230);
+    cal_take(9);
+    CHECK(display == SHOWN_HI && toe[1] == 230 && toe[0] == 220 && leds[8] == 1 && aux[HAL_LED_EXP_2] == 1);
     CHECK(heel[0] == 20 && heel[1] == 30 && toe[0] == 220 && toe[1] == 230 && midi_len == 0);
 
-    // Footswitches 3 and 8 do nothing.
+    // Only footswitches 1, 4, 6 and 9 do anything.
+    tap(sw_code(2));
     tap(sw_code(3));
+    tap(sw_code(5));
+    tap(sw_code(7));
     tap(sw_code(8));
-    CHECK(ped_sel == 9 && display == SHOWN_HI && leds[2] == 0 && leds[7] == 0);
+    tap(sw_code(10));
+    CHECK(ped_sel == 8 && display == SHOWN_HI && leds[8] == 1 && leds[1] == 0 && leds[9] == 0 && !cal_armed);
     // A footswitch acts when let go, and only with UP and DOWN up at both ends: with UP
     // down (the simulator's row 2) nothing happens, and UP's release changes page.
+    // Footswitch 6 first shows the CC (user's request), then opens its editor.
     ctl_key_press(sw_code(6));
-    CHECK(!pcc_open && ped_sel == 9);
+    CHECK(!pcc_open && ped_sel == 8);
     ctl_key_release(sw_code(6));
-    CHECK(pcc_open && ped_sel == 5);
+    CHECK(!pcc_open && ped_sel == 5 && display == pedal_cc[1] && leds[5] == 1 && aux[HAL_LED_NUMBER] == 0);
+    tap(sw_code(6));
+    CHECK(pcc_open && pcc_b == 1 && aux[HAL_LED_NUMBER] == 1);
     tap(CTL_KEY_DOWN);
-    CHECK(!pcc_open && cfg_page == PAGE_PEDALS);
+    CHECK(!pcc_open && cfg_page == PAGE_EXP_B && ped_sel == 5);
     ctl_key_press(CTL_KEY_UP);
     tap(sw_code(6));
     tap(sw_code(1));
     CHECK(!pcc_open && ped_sel == 5 && pk_mask == (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1)));
     ctl_key_release(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_SW1);
-    ctl_key_press(sw_code(7));
-    ctl_key_press(CTL_KEY_DOWN);
-    ctl_key_release(sw_code(7));
-    CHECK(!pcc_open && cfg_page == PAGE_SW1);
-    ctl_key_release(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_PEDALS);
-    ctl_key_press(sw_code(7));
+    tap(CTL_KEY_DOWN);
+    tap(sw_code(6));
+    CHECK(cfg_page == PAGE_EXP_B && ped_sel == 5 && !pcc_open);
+    ctl_key_press(sw_code(6));
     ctl_key_press(CTL_KEY_DOWN);
     ctl_key_release(CTL_KEY_DOWN);
-    ctl_key_release(sw_code(7));
-    CHECK(!pcc_open && cfg_page == PAGE_MODES);
-    to_page(PAGE_PEDALS);
-    tap(sw_code(10));
+    ctl_key_release(sw_code(6));
+    CHECK(!pcc_open && cfg_page == PAGE_EXP_A);
 
     // Coming back to the page starts on footswitch 1 again; nothing is sent.
     tap(CTL_KEY_UP);
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_PEDALS && ped_sel == 0 && leds[0] == 1 && midi_len == 0);
+    CHECK(cfg_page == PAGE_EXP_A && ped_sel == 0 && pcc_b == 0 && leds[0] == 1 && midi_len == 0);
 
     save_exit();
     CHECK(cal_saved == 1);
@@ -2556,7 +2567,7 @@ static void test_config_calibration(void)
     // pressing twice more retakes it.
     reset_world();
     chord_long();
-    to_page(PAGE_PEDALS);
+    to_page(PAGE_EXP_A);
     pedal(0, 100);
     cal_take(4);
     CHECK(display == SHOWN_LO && heel[0] == 100);
@@ -2577,11 +2588,11 @@ static void test_config_calibration(void)
     // A wired-the-other-way pedal (toe below heel) is accepted.
     reset_world();
     chord_long();
-    to_page(PAGE_PEDALS);
+    to_page(PAGE_EXP_B);
     pedal(1, 200);
-    cal_take(5);
+    cal_take(4);
     pedal(1, 20);
-    cal_take(10);
+    cal_take(9);
     CHECK(display == SHOWN_HI);
     save_exit();
     CHECK(saved_heel[1] == 200 && saved_toe[1] == 20);
@@ -2753,7 +2764,7 @@ static void test_config_led_eeprom(void)
     CHECK(heel[0] == 10 && toe[1] == 210);
     chord_long();
     CHECK(status_led == 1);
-    to_page(PAGE_PEDALS);
+    to_page(PAGE_EXP_A);
     pedal(0, 200);
     pedal(1, 210);
     cal_take(9);
@@ -4082,7 +4093,7 @@ static void test_bank_pc(void)
     ticks(1);
     CHECK(display == SHOWN_TEXT(HAL_TEXT_PROG) && BANK_PC_LABEL_MS == VER_STEP_MS * BANK_LABEL_STEPS);
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_CHANNEL);
+    CHECK(cfg_page == PAGE_VERSION);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_BANK_PC && lamp == HAL_LAMP_NORMAL && display == SHOWN_TEXT(HAL_TEXT_PROG));
 
@@ -4152,15 +4163,15 @@ static void test_bank_pc(void)
     tap(sw_code(10));
     CHECK(!pc_typing && display == 99);
     ctl_key_release(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_CHANNEL && bank_pc == 100);
+    CHECK(cfg_page == PAGE_VERSION && bank_pc == 100);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_BANK_PC);
     ctl_key_press(sw_code(10));
     CHECK(!pc_typing && display == SHOWN_TEXT(HAL_TEXT_PROG));
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_CHANNEL);
+    CHECK(cfg_page == PAGE_VERSION);
     ctl_key_release(sw_code(10));
-    CHECK(!pc_typing && cfg_page == PAGE_CHANNEL && midi_channel == MIDI_CHANNEL);
+    CHECK(!pc_typing && cfg_page == PAGE_VERSION && midi_channel == MIDI_CHANNEL);
     tap(CTL_KEY_DOWN);
     tap(sw_code(10));
     tap(CTL_KEY_UP);
@@ -4781,11 +4792,13 @@ static void test_pedal_cc_config(void)
     reset_world();
     CHECK(pedal_cc[0] == cc_a && pedal_cc[1] == cc_b && cc_a != 44 && cc_b != 44);
     chord_long();
-    to_page(PAGE_PEDALS);
-    CHECK(cfg_page == PAGE_PEDALS && !pcc_open);
+    to_page(PAGE_EXP_A);
+    CHECK(cfg_page == PAGE_EXP_A && !pcc_open);
 
-    // Footswitch 6 opens pedal A's CC editor: EXP 1, NUMBER and footswitch 6 lit, the CC
-    // shown.
+    // Footswitch 6 first shows pedal A's CC (user's request), then opens its editor:
+    // EXP 1, NUMBER and footswitch 6 lit, the CC shown.
+    tap(sw_code(6));
+    CHECK(!pcc_open && display == cc_a && leds[5] == 1 && aux[HAL_LED_NUMBER] == 0);
     tap(sw_code(6));
     CHECK(pcc_open && !pcc_b && pk_mask == pk_def && display == cc_a);
     CHECK(aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0 && aux[HAL_LED_NUMBER] == 1 && leds[5] == 1 && leds[0] == 0);
@@ -4799,25 +4812,29 @@ static void test_pedal_cc_config(void)
     // A short DOWN [ESCAPE] puts the old CC back, back on the pedal page (still showing
     // the CC, NUMBER dark).
     tap(CTL_KEY_DOWN);
-    CHECK(mode == MODE_CONFIG && cfg_page == PAGE_PEDALS && !pcc_open && pedal_cc[0] == cc_a && display == cc_a);
+    CHECK(mode == MODE_CONFIG && cfg_page == PAGE_EXP_A && !pcc_open && pedal_cc[0] == cc_a && display == cc_a);
     CHECK(aux[HAL_LED_NUMBER] == 0 && leds[5] == 1);
     ticks(1);
     CHECK(cfg_changed == 0);
-    // Pedal B's (footswitch 7): a pedal, once moved, sets it to its CC value; a short UP
-    // [ENTER] keeps it. A long UP is a short one here: it does not save and leave.
-    tap(sw_code(7));
-    CHECK(pcc_open && pcc_b && aux[HAL_LED_EXP_2] == 1 && leds[6] == 1 && display == cc_b);
+    // Pedal B's, on page 4 with the same footswitch 6 (pressed once, since the page starts
+    // on footswitch 1, then again): a pedal, once moved, sets it to its CC value; a short
+    // UP [ENTER] keeps it. A long UP is a short one here: it does not save and leave.
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_EXP_B);
+    tap(sw_code(6));
+    tap(sw_code(6));
+    CHECK(pcc_open && pcc_b && aux[HAL_LED_EXP_2] == 1 && leds[5] == 1 && display == cc_b);
     pedal(0, 0);
     pedal(0, raw_for(44));
     CHECK(pedal_cc[1] == 44 && display == 44 && midi_len == 0);
     long_nav(CTL_KEY_UP);
-    CHECK(mode == MODE_CONFIG && cfg_page == PAGE_PEDALS && !pcc_open && pedal_cc[1] == 44 && cfg_saved == 0);
-    // Footswitch 2 shows pedal B's pickup, then toggles it.
-    tap(sw_code(2));
-    CHECK(pk_mask == pk_def && leds[1] == 1 && leds[6] == 0);
-    tap(sw_code(2));
-    CHECK(pk_mask == (pk_def ^ 2) && leds[1] == 1 && leds[6] == 0);
-    tap(sw_code(2));
+    CHECK(mode == MODE_CONFIG && cfg_page == PAGE_EXP_B && !pcc_open && pedal_cc[1] == 44 && cfg_saved == 0);
+    // Footswitch 1 shows pedal B's pickup, then toggles it.
+    tap(sw_code(1));
+    CHECK(pk_mask == pk_def && leds[0] == 1 && leds[5] == 0);
+    tap(sw_code(1));
+    CHECK(pk_mask == (pk_def ^ 2) && leds[0] == 1 && leds[5] == 0);
+    tap(sw_code(1));
     CHECK(pk_mask == pk_def);
     // Saving stores it with the bank; run mode sends pedal B on CC 44.
     save_exit();
@@ -5039,35 +5056,38 @@ static void test_pedal_pickup(void)
     pedal(0, raw_for(1));
     CHECK(midi_len == 0 && !pk_waiting(0));
 
-    // The pedal page: "Ab" immediate, "Pu" pickup; footswitches 1 and 2 turn pickup on
-    // and off for pedals A and B (the footswitch and the pedal's EXP LED lit for the one
-    // shown); saved with the bank.
+    // The EXP pages: "Ab" immediate, "Pu" pickup; footswitch 1 turns pickup on and off
+    // for the page's pedal (its EXP LED lit); saved with the bank.
     reset_world();
     pk_mask = 0;
     chord_long();
-    to_page(PAGE_PEDALS);
-    CHECK(cfg_page == PAGE_PEDALS && display == SHOWN_TEXT(HAL_TEXT_ABS));
+    to_page(PAGE_EXP_A);
+    CHECK(cfg_page == PAGE_EXP_A && display == SHOWN_TEXT(HAL_TEXT_ABS));
     CHECK(aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0 && leds[0] == 1 && leds[1] == 0);
-    // Footswitch 2 not selected: the first press only shows pedal B's response (user's
-    // request), the second toggles it.
-    tap(sw_code(2));
-    CHECK(pk_mask == 0 && aux[HAL_LED_EXP_2] == 1 && aux[HAL_LED_EXP_1] == 0 && leds[1] == 1 && leds[0] == 0);
-    CHECK(display == SHOWN_TEXT(HAL_TEXT_ABS));
-    tap(sw_code(2));
+    // Page 3, EXP A: footswitch 1 is selected, so its first press toggles pedal A.
+    tap(sw_code(1));
     ticks(1);
-    CHECK(pk_mask == 2 && aux[HAL_LED_EXP_2] == 1 && aux[HAL_LED_EXP_1] == 0 && leds[1] == 1 && leds[0] == 0);
-    CHECK(display == SHOWN_TEXT(HAL_TEXT_MODE + PM_MOMENTARY) && cfg_changed == (pk_mask != (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1))));
+    CHECK(pk_mask == 1 && display == SHOWN_TEXT(HAL_TEXT_MODE + PM_MOMENTARY) && leds[0] == 1);
+    CHECK(cfg_changed == (pk_mask != (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1))));
+    // Another footswitch selected, then footswitch 1 again: the first press only shows
+    // the response (user's request), the second toggles it.
+    tap(sw_code(6));
+    CHECK(ped_sel == 5 && pk_mask == 1);
     tap(sw_code(1));
-    CHECK(pk_mask == 2 && aux[HAL_LED_EXP_1] == 1 && leds[0] == 1 && display == SHOWN_TEXT(HAL_TEXT_ABS));
+    CHECK(pk_mask == 1 && leds[0] == 1 && display == SHOWN_TEXT(HAL_TEXT_MODE + PM_MOMENTARY));
     tap(sw_code(1));
-    CHECK(pk_mask == 3 && aux[HAL_LED_EXP_1] == 1 && leds[0] == 1 && display == SHOWN_TEXT(HAL_TEXT_MODE + PM_MOMENTARY));
-    // The pedals do nothing here, nor do footswitches 3 and 8.
+    CHECK(pk_mask == 0 && display == SHOWN_TEXT(HAL_TEXT_ABS));
+    // Page 4, EXP B, the same footswitch 1 for pedal B, its EXP 2 lit.
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_EXP_B && aux[HAL_LED_EXP_2] == 1 && aux[HAL_LED_EXP_1] == 0 && leds[0] == 1 && display == SHOWN_TEXT(HAL_TEXT_ABS));
+    tap(sw_code(1));
+    CHECK(pk_mask == 2 && display == SHOWN_TEXT(HAL_TEXT_MODE + PM_MOMENTARY));
+    // The pedals do nothing here, nor do the other footswitches.
+    tap(sw_code(2));
     tap(sw_code(3));
     pedal(0, 200);
     pedal(0, 10);
-    CHECK(pk_mask == 3 && midi_len == 0 && leds[2] == 0 && leds[0] == 1);
-    tap(sw_code(1));
-    CHECK(pk_mask == 2 && aux[HAL_LED_EXP_1] == 1 && leds[0] == 1 && display == SHOWN_TEXT(HAL_TEXT_ABS));
+    CHECK(pk_mask == 2 && midi_len == 0 && leds[2] == 0 && leds[1] == 0 && leds[0] == 1);
     save_exit();
     CHECK(mode == MODE_RUN && cfg_saved == 1 && saved_cfg[0] == MIDI_CHANNEL && saved_cfg[1] == 0);
     CHECK(saved_cfg[2] == 0 && saved_cfg[3] == 0);
@@ -5124,17 +5144,24 @@ static void test_save_bank(void)
     long_nav(CTL_KEY_UP);
     CHECK(save_prompt && mode == MODE_CONFIG && display == 1 && cfg_saved == 0 && msg_saved == 0);
     CHECK(aux[HAL_LED_MIDI_FUNC] == 0 && leds[0] == 0);
-    // Its dot flashes, starting lit.
+    // The number and the dot alternate (user's request): the number first, no dot;
+    // then a blank display with the dot.
     ticks(1);
-    CHECK(dots == 0x01);
+    CHECK(dots == 0 && display == 1 && blank == 0);
     ticks(CHAN_FLASH_TICKS);
-    CHECK(dots == 0);
+    CHECK(dots == 0x01 && blank == 7);
     ticks(CHAN_FLASH_TICKS);
-    CHECK(dots == 0x01);
+    CHECK(dots == 0 && display == 1 && blank == 0);
+    ticks(CHAN_FLASH_TICKS);
+    // A digit shows its number at once.
+    tap(sw_code(2));
+    ticks(1);
+    CHECK(display == 2 && blank == 0 && dots == 0 && save_bank == 2);
     // The pedals do nothing; a footswitch types a bank when let go.
     pedal(0, 0);
     pedal(0, 200);
-    CHECK(display == 1 && save_bank == 1);
+    CHECK(display == 2 && save_bank == 2);
+    tap(sw_code(4));
     tap(sw_code(3));
     CHECK(display == 3 && save_bank == 3);
 #if BANK_COUNT >= 12
@@ -5239,7 +5266,8 @@ static void test_entry_dot(void)
     CHECK(!edit_open && dots == 0);
     ticks(CHAN_FLASH_TICKS);
     CHECK(dots == 0);
-    to_page(PAGE_PEDALS);
+    to_page(PAGE_EXP_A);
+    tap(sw_code(6));
     tap(sw_code(6));
     CHECK(pcc_open);
     ticks(1);

@@ -285,8 +285,8 @@ check("with the mode back as it was, the CONFIG LED is steady again", statusOver
 const TEXT_PROG = 12, TEXT_ABS = 14, TEXT_PU = 17;   // HAL_TEXT_PROG, _ABS, _MODE + 2, + 1
 const BANK_LABEL = cfgMs("BANK_PC_LABEL_MS");
 const toPage = (n) => { while (fcb.state().cfgPage < n) press(UP, 100); while (fcb.state().cfgPage > n) press(DOWN, 100); };
-toPage(5);
-check("five UPs go to page 6, which lights MIDI CHANNEL only", [fcb.state().cfgPage, pageLeds()], [5, [1, 0, 0, 0]]);
+toPage(1);
+check("one UP goes to page 2, which lights MIDI CHANNEL only", [fcb.state().cfgPage, pageLeds()], [1, [1, 0, 0, 0]]);
 press(0, 100); press(6, 100);
 check("footswitches 1 then 6 enter channel 1, then 6", fcb.state().midiChannel, 6);
 fcb.down(10); wait(60);
@@ -305,25 +305,20 @@ check("footswitches send nothing in config mode", sent(), []);
 chordTap();
 check("UP + DOWN tapped in config mode saves and leaves at once", [fcb.state().mode, fcb.hw.status, JSON.parse(store["fcb1010-eeprom-v2"]).cfg[0]], [0, 0, 2]);
 fcb.down(UP); fcb.down(DOWN); wait(1100); fcb.up(UP); fcb.up(DOWN); wait(200);
-// Page 2: the pedals, from one page (user's layout): footswitch 1 / 2 pickup, 4 / 5 heel,
-// 6 / 7 CC, 9 / 10 toe; the footswitch pressed and its pedal's EXP LED lit.
-press(UP, 100);
+// Pages 3 and 4: EXP A and EXP B, the same footswitches on both (user's layout): 1
+// pickup, 4 heel, 6 CC, 9 toe; the page's EXP LED lit. A footswitch first shows its
+// setting, pressed again it acts.
+press(UP, 100); press(UP, 100);
 const pk0 = fcb.state().pickup & 3;
 const pkText = (b) => (b ? TEXT_PU : TEXT_ABS), pkWord = (b) => (b ? "Display Pu" : "Display Ab");
-check("UP goes to page 2, the pedals: footswitch 1 and EXP 1 lit, pedal A's response shown",
+check("two UPs go to page 3, EXP A: footswitch 1 and EXP 1 lit, pedal A's response shown",
       [fcb.state().cfgPage, pageLeds(), fcb.hw.leds[0], fcb.hw.leds[1], fcb.hw.aux[4], fcb.hw.text, el0("display").getAttribute("aria-label")],
-      [1, [0, 0, 1, 0], 1, 0, 0, pkText(pk0 & 1), pkWord(pk0 & 1)]);
-press(0, 100);
-check("footswitch 1 switches pedal A (\"Pu\" / \"Ab\")", [fcb.state().pickup & 1, fcb.hw.text], [(pk0 & 1) ^ 1, pkText((pk0 & 1) ^ 1)]);
-press(0, 100);
+      [2, [0, 0, 1, 0], 1, 0, 0, pkText(pk0 & 1), pkWord(pk0 & 1)]);
 check("each footswitch's label says what it does on this page", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => el0("mode" + i).textContent),
-      ["Pickup A", "Pickup B", "", "Calib low A", "Calib low B", "CC A", "CC B", "", "Calib high A", "Calib high B"]);
-// Footswitch 2 not selected: the first press shows pedal B's response, the second toggles it.
-press(1, 100);
-check("footswitch 2 first shows pedal B's response, its LED and EXP 2 lit", [fcb.state().pickup & 3, fcb.hw.leds[1], fcb.hw.leds[0], pageLeds(), fcb.hw.text], [pk0, 1, 0, [0, 0, 0, 1], pkText(pk0 >> 1)]);
-press(1, 100);
-check("pressed again it switches pedal B", [fcb.state().pickup & 3, fcb.hw.text], [pk0 ^ 2, pkText((pk0 >> 1) ^ 1)]);
-press(1, 100);
+      ["Pickup", "", "", "Calib low", "", "CC", "", "", "Calib high", ""]);
+press(0, 100);
+check("footswitch 1 (selected) switches pedal A (\"Pu\" / \"Ab\")", [fcb.state().pickup & 1, fcb.hw.text], [(pk0 & 1) ^ 1, pkText((pk0 & 1) ^ 1)]);
+press(0, 100);
 check("and back", fcb.state().pickup & 3, pk0);
 fcb.setRaw(0, 0); wait(100);
 const heel0 = fcb.state().heel[0];
@@ -340,37 +335,47 @@ check("footswitch 9 (twice) with pedal A still at the heel: \"Er\"", fcb.hw.text
 fcb.setRaw(255, 255); wait(100);
 press(9, 100); press(9, 100);
 check("at the toe: \"Hi\" (heel 0, toe 255, the default range, so later checks hold)", [fcb.hw.text, fcb.hw.leds[8], heel0], [TEXT_HI, 1, 0]);
-press(10, 100); press(10, 100);
-check("footswitch 10 (twice) takes pedal B's toe, EXP 2 lit", [fcb.hw.text, pageLeds()], [TEXT_HI, [0, 0, 0, 1]]);
-// Footswitch 6 opens pedal A's CC editor: NUMBER lit, the CC shown and typed.
+// Footswitch 6: first the CC, then (pressed again) its editor, NUMBER lit, typed.
 const ccA0 = fcb.state().pedalCc[0];
 press(6, 100);
-check("footswitch 6 opens pedal A's CC editor, NUMBER and EXP 1 lit", [fcb.state().pcc, fcb.hw.display, fcb.hw.aux[8], fcb.hw.aux[2], fcb.hw.leds[5], fcb.state().pickup & 3], [1, ccA0, 1, 1, 1, pk0]);
-press(2, 100); press(2, 100);
+check("footswitch 6 first shows pedal A's CC", [fcb.state().pcc & 1, fcb.hw.display, fcb.hw.aux[8], fcb.hw.leds[5]], [0, ccA0, 0, 1]);
+press(6, 100);
+check("pressed again it opens pedal A's CC editor, NUMBER and EXP 1 lit", [fcb.state().pcc, fcb.hw.display, fcb.hw.aux[8], fcb.hw.aux[2], fcb.hw.leds[5], fcb.state().pickup & 3], [1, ccA0, 1, 1, 1, pk0]);
 check("in the CC editor the labels are digits", [el0("mode0").textContent, el0("mode9").textContent], ["Digit 1", "Digit 0"]);
+press(2, 100); press(2, 100);
 check("footswitches 3, 3 type CC 33, and the panel's pedal label follows", [fcb.state().pedalCc[0], fcb.hw.display, String(el0("ccA").textContent)], [33, 33, "33"]);
 press(DOWN, 100);
-check("a short DOWN [ESCAPE] puts the old CC back, still on page 2", [fcb.state().pcc, fcb.state().pedalCc[0], fcb.state().cfgPage, fcb.hw.display, fcb.hw.aux[8]], [0, ccA0, 1, ccA0, 0]);
+check("a short DOWN [ESCAPE] puts the old CC back, still on page 3", [fcb.state().pcc, fcb.state().pedalCc[0], fcb.state().cfgPage, fcb.hw.display, fcb.hw.aux[8]], [0, ccA0, 2, ccA0, 0]);
+// Page 4, EXP B: the same footswitches for pedal B.
+press(UP, 100);
+check("UP goes to page 4, EXP B: EXP 2 and footswitch 1 lit, pedal B's response", [fcb.state().cfgPage, pageLeds(), fcb.hw.leds[0], fcb.hw.text], [3, [0, 0, 0, 1], 1, pkText(pk0 >> 1)]);
+press(0, 100);
+check("footswitch 1 switches pedal B", fcb.state().pickup & 3, pk0 ^ 2);
+press(0, 100);
+check("and back", fcb.state().pickup & 3, pk0);
+press(9, 100); press(9, 100);
+check("footswitch 9 (twice) takes pedal B's toe, EXP 2 lit", [fcb.hw.text, pageLeds()], [TEXT_HI, [0, 0, 0, 1]]);
 const ccB0 = fcb.state().pedalCc[1];
-press(7, 100); press(4, 100); press(4, 100); press(UP, 100);
-check("footswitch 7, then 5, 5 and a short UP [ENTER]: pedal B on CC 55", [fcb.state().pcc & 1, fcb.state().pedalCc[1], fcb.state().cfgPage, fcb.hw.display], [0, 55, 1, 55]);
+press(6, 100); press(6, 100); press(4, 100); press(4, 100); press(UP, 100);
+check("footswitch 6 (twice), then 5, 5 and a short UP [ENTER]: pedal B on CC 55", [fcb.state().pcc & 1, fcb.state().pedalCc[1], fcb.state().cfgPage, fcb.hw.display], [0, 55, 3, 55]);
 check("the panel's pedal B label follows", String(el0("ccB").textContent), "55");
-// Type its CC back (footswitch 10 types 0, 1-5 are codes 0-4, 6-9 codes 6-9).
-press(7, 100);
+// Type its CC back (footswitch 10 types 0, 1-5 are codes 0-4, 6-9 codes 6-9); 6 is
+// still selected, so one press opens the editor.
+press(6, 100);
 String(ccB0).split("").map(Number).forEach((d) => press(d === 0 ? 10 : d <= 5 ? d - 1 : d, 100));
 press(UP, 100);
 check("and typed back", [fcb.state().pcc & 1, fcb.state().pedalCc[1]], [0, ccB0]);
 press(UP, 100);
-check("page 3 lights SWITCH 1, the display is blank", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.blank], [2, 1, 0, 7]);
+check("page 5 lights SWITCH 1, the display is blank", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.blank], [4, 1, 0, 7]);
 press(3, 100);
 check("switch 4 is a relay 1 trigger (its LED lit), DIRECT SELECT dark", [fcb.state().swMask[0], fcb.hw.leds[3], fcb.hw.aux[4]], [8, 1, 0]);
 fcb.setRaw(255, 255); wait(100); fcb.setRaw(128, 255); wait(100);
 check("moving pedal A sets relay 1's trigger value, shown, EXP 1 lit", [fcb.state().swThr[0] > 0, fcb.hw.display === fcb.state().swThr[0], fcb.hw.aux[2]], [true, true, 1]);
 press(UP, 100);
-check("page 4 lights SWITCH 2", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.leds[3]], [3, 0, 1, 0]);
+check("page 6 lights SWITCH 2", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.leds[3]], [5, 0, 1, 0]);
 fcb.down(UP); wait(60); fcb.up(UP); wait(40);
-// Page 5: the bank's program change, DIRECT SELECT lit, "Pr" and "--" (none) in turn.
-check("UP goes to page 5: DIRECT SELECT lit, \"Pr\" first", [fcb.state().cfgPage, fcb.hw.aux[4], fcb.hw.aux[6], fcb.hw.text, fcb.hw.lamp, fcb.state().bankPc], [4, 1, 0, TEXT_PROG, 0, 0]);
+// Page 7: the bank's program change, DIRECT SELECT lit, "Pr" and "--" (none) in turn.
+check("UP goes to page 7: DIRECT SELECT lit, \"Pr\" first", [fcb.state().cfgPage, fcb.hw.aux[4], fcb.hw.aux[6], fcb.hw.text, fcb.hw.lamp, fcb.state().bankPc], [6, 1, 0, TEXT_PROG, 0, 0]);
 wait(BANK_LABEL);
 check("then \"--\" (none)", fcb.hw.text, TEXT_DASHES);
 wait(BANK_LABEL);
@@ -380,9 +385,7 @@ check("footswitches 2 and 5 type program 25", [fcb.hw.display, fcb.hw.text, fcb.
 press(10, 100);
 check("after a complete number, footswitch 10 shows \"--\", changing nothing yet", [fcb.hw.text, fcb.state().bankPc, fcb.state().pcMode & 2], [13, 26, 2]);
 press(UP, 100);
-check("then UP [ENTER]: none (\"--\"), still on page 5", [fcb.hw.text, fcb.state().bankPc, fcb.state().cfgPage], [13, 0, 4]);
-press(UP, 100);
-check("page 6 is the MIDI channel", [fcb.state().cfgPage, fcb.hw.display, pageLeds()], [5, 2, [1, 0, 0, 0]]);
+check("then UP [ENTER]: none (\"--\"), still on page 7", [fcb.hw.text, fcb.state().bankPc, fcb.state().cfgPage], [13, 0, 6]);
 // Page 8: every LED lit at once while "riban" scrolls, then the version from version.h,
 // repeating.
 const verText = readFileSync(new URL("../src/version.h", import.meta.url), "utf8");
@@ -392,7 +395,7 @@ const verText2 = verText + readFileSync(new URL("../src/version_build.inc", impo
 const VER_N = ["MAJOR", "MINOR", "BUILD"].map((k) => Number(verText2.match(new RegExp("#define FW_VERSION_" + k + " (0x[0-9A-Fa-f]+|[0-9]+)"))[1]));
 const VER = VER_N.map((v, i) => i < 2 ? Math.floor(v / 10) * 16 + v % 10 : v);
 fcb.down(UP); wait(60); fcb.up(UP); wait(40);
-check("UP goes to page 7: every LED lit at once, the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [6, 4, 0, 7, 1]);
+check("UP goes to page 8: every LED lit at once, the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [7, 4, 0, 7, 1]);
 // Page 7 opened at most 40 ms ago; the lead-in and the text are eight frames.
 const pageFrames = [];
 for (let t = 0; t < FRAME * 8 - 104; t += 8) { wait(8); if (fcb.hw.text && pageFrames[pageFrames.length - 1] !== fcb.hw.text) pageFrames.push(fcb.hw.text); }
@@ -454,17 +457,19 @@ fcb.up(0); wait(FRAME + 100);
 check("then \"ri\"", fcb.hw.text, SCROLL_TEXT[1]);
 check("and nothing is sent", sent(), []);
 press(UP, 100);
-check("UP on page 7 stays on page 7 (no wrap)", fcb.state().cfgPage, 6);
+check("UP on page 8 stays on page 8 (no wrap)", fcb.state().cfgPage, 7);
 press(DOWN, 100);
-check("DOWN leaves page 7 for page 6: lamp test off, dots off, MIDI CHANNEL lit", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.dots, fcb.hw.display, pageLeds()], [5, 0, 0, 2, [1, 0, 0, 0]]);
+check("DOWN leaves page 8 for page 7: lamp test off, dots off, \"Pr\", DIRECT SELECT lit", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.dots, fcb.hw.text, fcb.hw.aux[4]], [6, 0, 0, TEXT_PROG, 1]);
 press(DOWN, 100);
-check("then page 5, \"Pr\", DIRECT SELECT lit", [fcb.state().cfgPage, fcb.hw.text, fcb.hw.aux[4]], [4, TEXT_PROG, 1]);
+check("then page 6", fcb.state().cfgPage, 5);
 press(DOWN, 100);
-check("then page 4", fcb.state().cfgPage, 3);
+check("then page 5", fcb.state().cfgPage, 4);
 press(DOWN, 100);
-check("then page 3", fcb.state().cfgPage, 2);
+check("then page 4, EXP B", [fcb.state().cfgPage, pageLeds()], [3, [0, 0, 0, 1]]);
 press(DOWN, 100);
-check("then page 2, the pedals", [fcb.state().cfgPage, fcb.hw.text, fcb.hw.leds[0]], [1, pkText(pk0 & 1), 1]);
+check("then page 3, EXP A", [fcb.state().cfgPage, fcb.hw.text, fcb.hw.leds[0], pageLeds()], [2, pkText(pk0 & 1), 1, [0, 0, 1, 0]]);
+press(DOWN, 100);
+check("then page 2, MIDI CHANNEL lit", [fcb.state().cfgPage, fcb.hw.display, pageLeds()], [1, 2, [1, 0, 0, 0]]);
 press(DOWN, 100);
 check("DOWN back to page 1", fcb.state().cfgPage, 0);
 press(DOWN, 100);
@@ -473,6 +478,8 @@ fcb.setRaw(0, 0); wait(100);
 longKey(UP);
 check("a long UP asks which bank to save to: the bank in use, page LEDs dark", [fcb.state().mode, fcb.state().save, fcb.hw.display, pageLeds()], [1, 1, 1, [0, 0, 0, 0]]);
 check("its dot flashes", (() => { const a = fcb.hw.dots & 1; wait(250); return [a, fcb.hw.dots & 1].sort().join(); })(), "0,1");
+check("the number and the dot alternate", [0, 1, 2, 3].map(() => { wait(125); const r = (fcb.hw.dots & 1) + ":" + fcb.hw.blank; wait(125); return r; })
+      .every((r) => r === "1:7" || r === "0:0"), true);
 check("the footswitches type a bank", [el0("mode0").textContent, el0("mode9").textContent], ["Bank digit 1", "Bank digit 0"]);
 press(UP, 100);
 check("a short UP then saves (bank 1) and leaves", [fcb.state().mode, fcb.hw.status, fcb.state().bank], [0, 0, 0]);
@@ -490,7 +497,7 @@ check("switch 3's LED after saving", fcb.hw.leds[2], DEF_MODE === 3 ? 1 : 0);
 check("SWITCH 1 following switch 4 was stored with bank 1 (its record's bit 4)", JSON.parse(store["fcb1010-eeprom-v2"]).fs3[0] & 0x10, 0x10);
 check("the settings record was stored", JSON.parse(store["fcb1010-eeprom-v2"]).cfg[0], 2);
 fcb.down(UP); fcb.down(DOWN); wait(1100); fcb.up(UP); fcb.up(DOWN); wait(200);
-toPage(5);
+toPage(1);
 press(8, 100);
 check("in config again, switch 8 enters channel 8 on page 6", fcb.state().midiChannel, 8);
 longKey(DOWN);
@@ -498,11 +505,11 @@ check("a long DOWN cancels and leaves: channel 2 again", [fcb.state().mode, fcb.
 check("with no program change", [sent(), fcb.state().program], [[], p]);
 // A long UP + DOWN in config mode saves and leaves too.
 const longChord = () => { fcb.down(UP); fcb.down(DOWN); wait(1100); fcb.up(UP); fcb.up(DOWN); wait(200); };
-longChord(); toPage(5); press(4, 100);
+longChord(); toPage(1); press(4, 100);
 longChord();
 check("a long UP + DOWN saves and leaves: channel 5 stored", [fcb.state().mode, fcb.hw.status, JSON.parse(store["fcb1010-eeprom-v2"]).cfg[0]], [0, 0, 5]);
 check("without toggling DIRECT SELECT or changing the program", [sent(), fcb.hw.aux[4], fcb.state().program], [[], 0, p]);
-longChord(); toPage(5); press(1, 100); longChord();
+longChord(); toPage(1); press(1, 100); longChord();
 check("and back to channel 2", [fcb.state().mode, fcb.state().midiChannel], [0, 2]);
 fcb.reset(); wait(400);
 check("after a power cycle the channel is still 2", fcb.state().midiChannel, 2);

@@ -40,7 +40,7 @@ The settings out of the box (footswitches 3 to 9 left out here; a real file alwa
 | `channel` | The pedal's MIDI channel, 1 to 16 |
 | `footswitches` | Exactly 10 entries, footswitch 1 first (see below) |
 | `relays` | Exactly 2 entries, SWITCH 1 then SWITCH 2 (see below) |
-| `bankProgram` | The program change (0 to 127) the bank sends when it is chosen with UP / DOWN (configuration page 5), or `null` for none. Optional: a file without it leaves the bank's setting as it is (files saved before it existed, or from firmware without it) |
+| `bankProgram` | The program change (0 to 127) the bank sends when it is chosen with UP / DOWN (configuration page 7), or `null` for none. Optional: a file without it leaves the bank's setting as it is (files saved before it existed, or from firmware without it) |
 | `pedals` | Exactly 2 entries, expression pedal A then pedal B, each with `"response"`, `"immediate"` or `"pickup"` (see [Expression pedals](using.md#expression-pedals)), and `"cc"`, the controller number 0 to 127. Optional: a file without it leaves the pedals as they are; it is left out when the pedal did not report it (older firmware). An entry without `"cc"` leaves that pedal's controller as it is; `"cc"` is left out when the pedal did not report it |
 | `firmware` | The firmware version the settings were read from, as major.minor.build, major and minor in decimal and the build in hex, as the pedal shows it (`"00.03.00"`). Only written when the settings came from a Read of the pedal; ignored when loading |
 

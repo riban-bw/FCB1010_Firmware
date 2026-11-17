@@ -40,14 +40,14 @@
 // Run mode: the MIDI FUNCTION LED lights for this long after each message sent.
 #define MIDI_TX_FLASH_MS          60
 
-// Configuration page 5 (the bank's program change) shows "Pr" and the program in turn,
+// Configuration page 7 (the bank's program change) shows "Pr" and the program in turn,
 // each for this long. A multiple of 50, up to 6350.
 #define BANK_PC_LABEL_MS          1000
 
-// Power-on and configuration page 7: every LED lights (once, and stays lit) while
+// Power-on and configuration page 8: every LED lights (once, and stays lit) while
 // ". riban ." scrolls across the display, one frame per SCROLL_FRAME_MS (ten frames, so
 // power-on takes 10 x SCROLL_FRAME_MS, the start-up settling included). Power-on then
-// goes to run mode. Page 7 then shows the firmware version, each part (major, minor,
+// goes to run mode. Page 8 then shows the firmware version, each part (major, minor,
 // build) for VERSION_SHOW_MS, then a blank display for the same time, and repeats.
 // Both are multiples of 50, SCROLL_FRAME_MS at least 100, and 10 x SCROLL_FRAME_MS +
 // 4 x VERSION_SHOW_MS at most 12750. Smaller SCROLL_FRAME_MS scrolls faster (200:
@@ -57,7 +57,7 @@
 #endif
 #define VERSION_SHOW_MS           1000
 // At power-on every LED lights for BOOT_LAMP_MS (from power-on, a multiple of 50), then
-// shows its normal state while the scroll finishes. Page 7 keeps them lit throughout.
+// shows its normal state while the scroll finishes. Page 8 keeps them lit throughout.
 #ifndef BOOT_LAMP_MS
 #define BOOT_LAMP_MS              1000
 #endif
@@ -91,10 +91,10 @@
 #endif
 
 // Controller numbers sent by expression pedal A and pedal B until changed on
-// configuration page 2 (each bank has its own). 7 = channel volume, 11 = expression.
+// configuration pages 3 / 4 (each bank has its own). 7 = channel volume, 11 = expression.
 #define PEDAL_CC_LIST 7, 11
 
-// Expression pedal response until changed on configuration page 2 (each bank has its
+// Expression pedal response until changed on configuration pages 3 / 4 (each bank has its
 // own): 0 = immediate (every move is sent), 1 = pickup: after its CC's value has changed
 // elsewhere (a footswitch or MIDI IN; at power-on it counts as 0), the pedal sends
 // nothing until it reaches that value (within PEDAL_PICKUP_WINDOW CC steps) or passes

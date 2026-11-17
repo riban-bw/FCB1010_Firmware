@@ -69,7 +69,7 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 // The bank's program change: 0 none, else the program + 1 (after the ten pedal modes).
 #define CTL_INSPECT_BANK_PC        30
 // Bit 0: program mode (DIRECT SELECT lit); bit 1: a program number being typed (run mode)
-// or page 5's "--" after footswitch 10 (config mode).
+// or page 7's "--" after footswitch 10 (config mode).
 #define CTL_INSPECT_PC_MODE        31
 // Relay trigger values at 32 + relay * 2 + pedal; follow masks at 36 + relay * 2 (low
 // byte) and 37 + relay * 2 (high byte). Pages 3 and 4 are SWITCH 1 / 2.
@@ -87,7 +87,7 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 #define CTL_INSPECT_PED_SEL        74
 // The bank the save prompt shows (1 to BANK_COUNT), 0 when it is not open.
 #define CTL_INSPECT_SAVE           75
-// Page 2: 1 while a heel / toe footswitch's Lo / Hi flashes (the next press takes it).
+// EXP pages: 1 while a heel / toe footswitch's Lo / Hi flashes (the next press takes it).
 #define CTL_INSPECT_CAL_ARMED      76
 
 uint8_t ctl_inspect(uint8_t what);
