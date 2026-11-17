@@ -85,6 +85,10 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 #define CTL_INSPECT_PEDAL_CC       71
 #define CTL_INSPECT_PCC            73
 #define CTL_INSPECT_PED_SEL        74
+// The bank the save prompt shows (1 to BANK_COUNT), 0 when it is not open.
+#define CTL_INSPECT_SAVE           75
+// Page 2: 1 while a heel / toe footswitch's Lo / Hi flashes (the next press takes it).
+#define CTL_INSPECT_CAL_ARMED      76
 
 uint8_t ctl_inspect(uint8_t what);
 #endif

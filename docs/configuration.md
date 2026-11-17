@@ -4,7 +4,9 @@
 
 Hold UP and DOWN together for 1 second. The CONFIG LED lights. It flashes while any setting differs from what is saved in the pedal's memory, and stops flashing if you revert every change. If it flashes as soon as you open configuration mode, the last save did not reach the persistent memory. Footswitches and pedals send no MIDI while you are in configuration mode, and incoming MIDI is ignored.
 
-Tap UP or DOWN to move to the next or previous page (1 to 7). To leave, press UP + DOWN together (saves at once), or hold UP (ENTER) for 0.6 seconds, to save, or hold DOWN (ESCAPE) for 0.6 seconds to cancel every change. Configuration mode always opens on page 1, and each page is marked by a panel LED.
+Tap UP or DOWN to move to the next or previous page (1 to 7). To leave, press UP + DOWN together (saves at once), or hold UP (ENTER) for 0.6 seconds to choose a bank to save to (see [Saving](#saving)), or hold DOWN (ESCAPE) for 0.6 seconds to cancel every change. Configuration mode always opens on page 1, and each page is marked by a panel LED.
+
+While you type a number (a footswitch's number or values, a pedal's CC, the bank's program change, or the bank to save to), the dot at the right of the display flashes. In the [editor page](https://riban-bw.github.io/FCB1010_Firmware/editor/), each footswitch shows what it does on the page you are on, under its usual message.
 
 Inside an editor (a footswitch's message, or a pedal's CC) UP and DOWN work with a tap instead: UP (ENTER) keeps the value shown and DOWN (ESCAPE) puts it back, and either takes you back to the page the editor was opened from. Holding them there does the same as a tap, so you cannot leave configuration mode from an editor except with UP + DOWN, which keeps the editor's changes, saves and leaves.
 
@@ -24,12 +26,12 @@ Page 2 sets up both expression pedals. The footswitches are laid out by pedal: p
 
 | Footswitch | Pedal A | Pedal B | Display | What it does |
 |---|---|---|---|---|
-| Response | 1 | 2 | `Ab` (immediate) or `Pu` (pickup) | Switches the pedal between immediate (every move is sent) and pickup (see [Expression pedals](using.md#expression-pedals)). |
+| Response | 1 | 2 | `Ab` (immediate) or `Pu` (pickup) | The first press shows the pedal's response; each press after that switches it between immediate (every move is sent) and pickup (see [Expression pedals](using.md#expression-pedals)). |
 | CC | 6 | 7 | The controller number | Opens the pedal's CC editor (below). |
-| Heel | 4 | 5 | `Lo` | Takes the pedal's heel reading: put the pedal at the heel first. |
-| Toe | 9 | 10 | `Hi` | Takes the pedal's toe reading: put the pedal at the toe first. |
+| Heel | 4 | 5 | `Lo` | The first press flashes `Lo`: put the pedal at the heel and press again to take the reading (`Lo` then stays lit). |
+| Toe | 9 | 10 | `Hi` | The first press flashes `Hi`: put the pedal at the toe and press again to take the reading (`Hi` then stays lit). |
 
-The page opens showing pedal A's response, with footswitch 1 lit. A footswitch acts when you let go of it, then its LED and its pedal's EXP LED light, and the display shows its setting. Footswitches 3 and 8 do nothing. A heel or toe reading that is too close to the pedal's other end shows `Er` and is not taken; move the pedal fully and press again. Calibrating with the heel and toe swapped reverses the pedal. Each bank has its own pedal responses and CCs, saved with the bank; a bank never saved uses the default ones (see [Using the pedal](using.md)). The calibration belongs to the pedal and is the same in every bank.
+The page opens showing pedal A's response, with footswitch 1 lit, so a press of footswitch 1 switches it straight away. A footswitch acts when you let go of it, then its LED and its pedal's EXP LED light, and the display shows its setting. After a reading, the next press of that footswitch flashes again, ready to retake it. Footswitches 3 and 8 do nothing. A heel or toe reading that is too close to the pedal's other end shows `Er` and is not taken; move the pedal fully and press twice more. Calibrating with the heel and toe swapped reverses the pedal. Each bank has its own pedal responses and CCs, saved with the bank; a bank never saved uses the default ones (see [Using the pedal](using.md)). The calibration belongs to the pedal and is the same in every bank.
 
 ### Pedal CC editor
 
@@ -49,6 +51,12 @@ On page 1, hold a footswitch to edit its message. That footswitch's LED stays li
 Tap UP (ENTER) to keep the setting shown and go on to the next one; after the OFF value the editor closes and you are back on page 1. Tap DOWN (ESCAPE) to put the setting shown back as it was and go back to page 1; settings you already kept with UP stay. For example, to change only the type: set it, tap UP, then tap DOWN on the number, which leaves the number as it was.
 
 A number is complete once no more digits would fit (13 and up, or three digits), so the next digit you press starts a new number. Like other settings, the message is only stored when you save and leave configuration mode. If the switch was ON when you kept a change to its message, the old message's OFF is sent and the switch turns OFF.
+
+## Saving
+
+Hold UP (ENTER) for 0.6 seconds to save. The display shows the number of the bank in use, with its dot flashing, and the page LEDs go dark. Tap UP (ENTER) to save into that bank and leave configuration mode. To save into another bank instead, type its number on the footswitches first (1 to 9 are digits 1 to 9, 10 is 0; for example 1 then 2 for bank 12); tap DOWN (ESCAPE) to go back to the page without saving.
+
+Saving into another bank stores everything you see in configuration mode (the footswitch messages and modes, the relays, the expression pedal settings and the bank's program change) in that bank, and the pedal then plays that bank. The bank you started from keeps what it last had saved. So you can copy a bank: open configuration mode in it and save into another; or use one bank as a template: open it, change what you need and save the result into a new bank. The MIDI channel and the pedal calibration are shared by every bank, and are saved either way. UP + DOWN together always saves into the bank in use at once.
 
 When you save, each footswitch whose mode or message you changed is put in its new mode's resting state, so it does not carry a stale state into its new mode: ON for inverted momentary, OFF for the other modes. If that changes the switch, its new value is sent, so the receiving device stays in step. If a save fails it is not reported: the new settings apply until power-off.
 

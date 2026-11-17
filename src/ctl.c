@@ -32,6 +32,12 @@
 #error DEFAULT_PEDAL_MODE must be 0 to 3
 #endif
 
+// 30 banks at most (user's request): the EEPROM layout has room for 36, and banks 31-36
+// stay spare for later settings, so a future layout need not move the user's banks.
+#if BANK_COUNT < 1 || BANK_COUNT > 30
+#error BANK_COUNT must be 1 to 30
+#endif
+
 #if NOTE_BANK_1 > BANK_COUNT || NOTE_BANK_2 > BANK_COUNT
 #error NOTE_BANK_1 and NOTE_BANK_2 must be 0 (none) or a bank up to BANK_COUNT
 #endif
@@ -384,6 +390,17 @@ static IDATA uint8_t  pc_entry;
 static BIT_T          pc_dot;
 // Page 5: footswitch 10 pressed with no number being typed; its release starts "--".
 static BIT_T          bank_none_ready;
+// Config mode: a free-running blink, toggled every CHAN_FLASH_TICKS (blink_ticks), for
+// the right-hand dot while a number is entered (user's request) and a flashing Lo / Hi.
+static BIT_T          blink_on;
+static IDATA uint8_t  blink_ticks;
+// Page 2: a heel or toe footswitch pressed once, its Lo / Hi flashing; the next press
+// takes the reading (user's request).
+static BIT_T          cal_armed;
+// A long UP asks which bank to save to (user's request): the bank shown (1 to
+// BANK_COUNT), typed on the footswitches; short UP saves there, short DOWN goes back.
+static BIT_T          save_prompt;
+static XDATA uint8_t  save_bank;
 #define PC_ENTRY_NONE 0xFF
 #define PC_SHOWN_MAX  (127 + DISPLAY_PROGRAM_OFFSET)
 // Whether a typed (shown) number is a program: with no offset every number is.
@@ -1469,9 +1486,44 @@ static void edit_show(void)
 }
 
 // Redraw the display and panel LEDs for the open page.
+// Restart the config-mode blink lit (a new flashing thing starts lit).
+static void blink_restart(void)
+{
+    blink_ticks = 0;
+    blink_on    = 1;
+}
+
+// Whether a number is being entered (its right-hand dot flashes, user's request): the
+// bank to save to, the pedal CC editor, the footswitch editor's number and values, and
+// page 5's program while it shows. A leaf.
+static uint8_t num_entry(void)
+{
+    if (save_prompt || pcc_open)
+    {
+        return 1;
+    }
+
+    if (edit_open)
+    {
+        return (uint8_t)(edit_param != EP_TYPE);
+    }
+
+    return (uint8_t)(cfg_page == PAGE_BANK_PC && !(bank_label & BANK_LABEL_ON) && bank_pc != 0);
+}
+
 static void config_show(void)
 {
     uint8_t r;
+
+    // Saving: only the bank number (its dot flashing, from ctl_tick), page LEDs dark.
+    if (save_prompt)
+    {
+        led_aux   = 0;
+        led_stomp = 0;
+        show_leds();
+        hal_display(save_bank);
+        return;
+    }
 
     if (edit_open)
     {
@@ -1516,6 +1568,12 @@ static void config_show(void)
         else if (ped_sel == 5 || ped_sel == 6)
         {
             hal_display(pedal_cc[pcc_b]);
+        }
+        // Armed: Lo / Hi flashing; then steady once taken, or Er.
+        else if (cal_armed && !blink_on)
+        {
+            hal_display(0);
+            hal_display_blank(7);
         }
         else
         {
@@ -1602,9 +1660,10 @@ static void config_goto_page(uint8_t page)
     // The pedal page starts on footswitch 1, pedal A's response (user's request).
     if (page == PAGE_PEDALS)
     {
-        ped_sel  = 0;
-        pcc_b    = 0;
-        cal_step = CAL_DONE;
+        ped_sel   = 0;
+        pcc_b     = 0;
+        cal_step  = CAL_DONE;
+        cal_armed = 0;
     }
     // A SWITCH page (and page 5) takes the next pedal readings as the reference, so only
     // a pedal that is then moved sets a value; page 5's first digit starts a new number,
@@ -1946,37 +2005,56 @@ static void ped_press(uint8_t index)
         return;
     }
 
-    ped_sel = index;
-    pcc_b   = ped_of(index);
+    // A footswitch not yet selected only shows its setting (user's request): pickup or
+    // immediate, or a flashing Lo / Hi; pressed again it toggles, or takes the reading.
+    // After a reading the next press flashes again. 6 / 7 open the CC editor at once.
+    if (index != ped_sel || (index >= 2 && !cal_armed) || index == 5 || index == 6)
+    {
+        ped_sel   = index;
+        pcc_b     = ped_of(index);
+        cal_armed = 0;
 
-    if (index < 2)
+        if (index == 5 || index == 6)
+        {
+            pcc_begin();
+            return;
+        }
+
+        if (index >= 2)
+        {
+            cal_armed = 1;
+            cal_step  = (index < 5) ? CAL_HEEL : CAL_TOE;
+            blink_restart();
+        }
+    }
+    else if (index < 2)
     {
         pk_mask ^= (uint8_t)(pcc_b ? 2 : 1);
         config_changed();
     }
-    else if (index == 5 || index == 6)
-    {
-        pcc_begin();
-        return;
-    }
-    else if (span_of(last_raw[pcc_b], (index < 5) ? toe[pcc_b] : heel[pcc_b]) < CAL_MIN_SPAN)
-    {
-        cal_step = CAL_ERROR;
-    }
     else
     {
-        if (index < 5)
+        cal_armed = 0;
+
+        if (span_of(last_raw[pcc_b], (index < 5) ? toe[pcc_b] : heel[pcc_b]) < CAL_MIN_SPAN)
         {
-            heel[pcc_b] = last_raw[pcc_b];
-            cal_step    = CAL_HEEL;
+            cal_step = CAL_ERROR;
         }
         else
         {
-            toe[pcc_b] = last_raw[pcc_b];
-            cal_step   = CAL_TOE;
-        }
+            if (index < 5)
+            {
+                heel[pcc_b] = last_raw[pcc_b];
+                cal_step    = CAL_HEEL;
+            }
+            else
+            {
+                toe[pcc_b] = last_raw[pcc_b];
+                cal_step   = CAL_TOE;
+            }
 
-        config_changed();
+            config_changed();
+        }
     }
 
     config_show();
@@ -2132,7 +2210,8 @@ static void settle_dirty(void)
     cfg_dirty = 0;
 }
 
-// Leave configuration mode. save = 1 (long UP) stores the settings and calibration;
+// Leave configuration mode. save = 1 (the save prompt's UP, or UP + DOWN) stores the
+// settings and calibration in bank hal_bank;
 // save = 0 (long DOWN) drops every change by reloading what the EEPROM holds.
 static void exit_config(uint8_t save)
 {
@@ -2144,7 +2223,8 @@ static void exit_config(uint8_t save)
         edit_end(1);
     }
 
-    pcc_open = 0;
+    pcc_open    = 0;
+    save_prompt = 0;
 
     // Stop a two-digit channel entry that could still take a second digit, and page 5's
     // "--" entry (its dot goes out on the next tick).
@@ -2190,6 +2270,64 @@ static void exit_config(uint8_t save)
     nrpn_lsb = NRPN_NONE;
 }
 
+// A long UP: ask which bank to save to, starting at the bank in use (user's request).
+// Whatever the page was doing stops; DOWN goes back to the page from its start.
+static void save_begin(void)
+{
+    save_prompt        = 1;
+    save_bank          = (uint8_t)(hal_bank + 1);
+    edit_typing        = 0;
+    chan_digit_pending = 0;
+    ver_paused         = 0;
+    bank_none_ready    = 0;
+    pc_typing          = 0;
+    pc_dot             = 0;
+    mode_press_live    = 0;
+    mode_cycle_pending = 0;
+    hal_lamp_test(HAL_LAMP_NORMAL);
+    blink_restart();
+    config_show();
+}
+
+// A footswitch in the save prompt types the bank (1-9, 10 = 0): added to the number while
+// that stays a bank, otherwise starting a new one; a 0 cannot start one.
+static void save_digit(uint8_t index)
+{
+    uint8_t d = (uint8_t)((index == STOMP_COUNT - 1) ? 0 : index + 1);
+
+    if (edit_typing && save_bank * 10 + d <= BANK_COUNT)
+    {
+        save_bank   = (uint8_t)(save_bank * 10 + d);
+        edit_typing = 0;
+    }
+    else if (d != 0 && d <= BANK_COUNT)
+    {
+        save_bank   = d;
+        edit_typing = (d * 10 <= BANK_COUNT) ? 1 : 0;
+    }
+
+    config_show();
+}
+
+// Short UP saves into the bank shown and leaves, in that bank (another bank: the bank in
+// use keeps what it had saved); short DOWN goes back to the page.
+static void save_end(uint8_t save)
+{
+    save_prompt = 0;
+
+    if (save)
+    {
+        hal_bank  = (uint8_t)(save_bank - 1);
+        bank_next = hal_bank;
+        exit_config(1);
+    }
+    else
+    {
+        edit_typing = 0;
+        config_goto_page(cfg_page);
+    }
+}
+
 // ---------------------------------------------------------------
 // UP / DOWN keys: Program change, auto-repeat, and the UP + DOWN chord
 // ---------------------------------------------------------------
@@ -2201,7 +2339,11 @@ static void nav_step(uint8_t code)
     {
         program_step(code);
     }
-    // The editors: UP [ENTER] accepts, DOWN [ESCAPE] undoes.
+    // The save prompt and the editors: UP [ENTER] accepts, DOWN [ESCAPE] undoes.
+    else if (save_prompt)
+    {
+        save_end((uint8_t)(code == CTL_KEY_UP));
+    }
     else if (edit_open)
     {
         edit_end((uint8_t)(code == CTL_KEY_UP));
@@ -2455,6 +2597,8 @@ void ctl_init(void)
     pc_mode       = 0;
     pc_typing     = 0;
     pc_dot        = 0;
+    save_prompt   = 0;
+    cal_armed     = 0;
     bank_busy     = 0;
     nav_ticks   = 0;
     cfg_page      = PAGE_MODES;
@@ -2583,11 +2727,22 @@ void ctl_key_hold(uint8_t code)
     {
         // In the footswitch and pedal CC editors a long press is a short one: it acts
         // on release.
-        if (mode == MODE_CONFIG && chord_state == CHORD_NONE && nav_code == code && !edit_open && !pcc_open)
+        // A long UP asks which bank to save to; a long DOWN cancels and leaves. In the
+        // save prompt, as in the editors, a long press acts as a short one.
+        if (mode == MODE_CONFIG && chord_state == CHORD_NONE && nav_code == code && !edit_open && !pcc_open &&
+            !save_prompt)
         {
             nav_code      = NAV_NONE;
             nav_repeating = 0;
-            exit_config((code == CTL_KEY_UP) ? 1 : 0);
+
+            if (code == CTL_KEY_UP)
+            {
+                save_begin();
+            }
+            else
+            {
+                exit_config(0);
+            }
         }
 
         return;
@@ -2647,6 +2802,19 @@ void ctl_key_release(uint8_t code)
 
     if (mode == MODE_CONFIG)
     {
+        // The save prompt: a footswitch types a bank digit when let go, if UP and DOWN
+        // were up at both ends (the simulator presses switches 6-10 with UP).
+        if (save_prompt)
+        {
+            if (mode_press_live && keys_down == 0)
+            {
+                save_digit(index);
+            }
+
+            mode_press_live = 0;
+            return;
+        }
+
         // Page 5: footswitch 10 let go with UP and DOWN up (so "10, then UP", not the two
         // together, which only changes page) shows "--", the right-hand dot flashing: UP
         // then turns the bank's program change off.
@@ -2753,9 +2921,14 @@ void ctl_key_press(uint8_t code)
 
     if (mode != MODE_RUN)
     {
+        // The save prompt: the digit is typed on release.
+        if (save_prompt)
+        {
+            mode_press_live = (keys_down == 0) ? 1 : 0;
+        }
         // Channel page: types a digit. Modes page: selects a switch, or changes the
         // selected one's mode.
-        if (cfg_page == PAGE_CHANNEL)
+        else if (cfg_page == PAGE_CHANNEL)
         {
             channel_digit(stomp_index(code));
         }
@@ -3517,6 +3690,11 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
 
     if (mode != MODE_RUN)
     {
+        if (save_prompt)
+        {
+            return;
+        }
+
         // In the footswitch editor a pedal sets the parameter; on a SWITCH page it sets
         // that relay's trigger value. Nothing is sent.
         if (edit_open)
@@ -3755,12 +3933,34 @@ void ctl_tick(void)
     {
         channel_digit_tick();
     }
-    else if (mode == MODE_CONFIG && cfg_page == PAGE_BANK_PC && !pc_typing)
+    else if (mode == MODE_CONFIG && cfg_page == PAGE_BANK_PC && !pc_typing && !save_prompt)
     {
         bank_label_tick();
     }
 
-    if (boot_anim || (mode == MODE_CONFIG && cfg_page == PAGE_VERSION))
+    // Config mode: the blink. A number being entered flashes the right-hand dot (set
+    // every tick, so a redraw cannot leave it wrong), and an armed heel / toe its Lo / Hi.
+    // Not on page 7, whose dots are the version's, nor during page 5's "--" (pc_dot).
+    if (mode == MODE_CONFIG)
+    {
+        if (++blink_ticks >= CHAN_FLASH_TICKS)
+        {
+            blink_ticks = 0;
+            blink_on    = !blink_on;
+
+            if (cfg_page == PAGE_PEDALS && cal_armed && !pcc_open && !save_prompt)
+            {
+                config_show();
+            }
+        }
+
+        if ((save_prompt || cfg_page != PAGE_VERSION) && !pc_typing)
+        {
+            hal_display_dots((num_entry() && blink_on) ? 1 : 0);
+        }
+    }
+
+    if (boot_anim || (mode == MODE_CONFIG && cfg_page == PAGE_VERSION && !save_prompt))
     {
         version_tick();
     }
@@ -3875,6 +4075,8 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_PEDAL_CC + 1:  return pedal_cc[1];
     case CTL_INSPECT_PCC:           return (uint8_t)(pcc_open | (pcc_b << 1));
     case CTL_INSPECT_PED_SEL:       return ped_sel;
+    case CTL_INSPECT_SAVE:          return save_prompt ? save_bank : 0;
+    case CTL_INSPECT_CAL_ARMED:     return cal_armed;
     default:                        return 0;
     }
 }

@@ -7,14 +7,14 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 ## Features
 
 - 10 footswitches, each sending its own MIDI controller (CC), note or program change, with a choice of four switch behaviours
-- 36 banks, chosen with UP and DOWN, each with its own footswitch, expression pedal and relay settings
+- 30 banks, chosen with UP and DOWN, each with its own footswitch, expression pedal and relay settings
 - Program mode (UP + DOWN tapped): program change from UP and DOWN, with fast scrolling when held, or typed on the footswitches
 - 2 expression pedals, each sending its own CC (set per bank), every move or picking up the current value first, so a value set elsewhere does not jump
 - 2 relay outputs (the SWITCH 1 and SWITCH 2 jacks), triggered by any footswitch or pedal, to switch amp channels or other gear
 - Footswitches that send the same controller or note share its state, in every bank
 - Follows incoming MIDI, so its LEDs stay in step with your DAW or synth
 - Selectable MIDI channel
-- Simple configuration on the pedal, saved in its memory
+- Simple configuration on the pedal, saved in its memory, into the bank in use or another one (to copy a bank, or start from one as a template)
 - Or configure it from a computer over MIDI, with a web page (no special software or SysEx), which can also copy a bank's settings to another bank
 
 [Open the editor in your browser](https://riban-bw.github.io/FCB1010_Firmware/editor/). It runs this firmware's own control code, so you can try the footswitches, pedals and configuration pages before flashing a chip, and its "Configure over MIDI" panel sets up a real pedal too. Its on-screen hints explain each control as you use it.

@@ -20,7 +20,7 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser editor in `editor/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 14.3KB (14670 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 14.9KB (15229 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
 
 Each build also updates the documentation: the code size above, the firmware version on configuration page 7 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
@@ -46,7 +46,7 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `MOMENTARY_HOLD_MS` | 600 | Long press time (ms): stomp with momentary reverts after it, and the configuration save / cancel hold |
 | `CONFIG_HOLD_MS` | 1000 | UP + DOWN hold (ms) that opens configuration mode |
 | `PROGRAM_WRAP` | 0 | 1: program change wraps between 127 and 0 (and the bank between the last and 1); 0: both stop at the ends |
-| `BANK_COUNT` | 36 | Number of footswitch banks, 1 to 36 (each takes 55 bytes of the EEPROM, eleven 5-byte records; 36 is all that fit below the shared records) |
+| `BANK_COUNT` | 30 | Number of footswitch banks, 1 to 30 (each takes 55 bytes of the EEPROM, eleven 5-byte records; 36 would fit below the shared records, and the room of banks 31 to 36 is kept spare for later settings) |
 | `NOTE_BANK_1` | 3 | A bank (1 to `BANK_COUNT`, 0 for none) whose footswitches default to momentary notes until it is saved, footswitch 1 playing the first note and the others `NOTE_BANK_SCALE` above it |
 | `NOTE_BANK_1_FIRST` | 33 | The first note of that bank (33 is A1, with middle C, C4, at 60) |
 | `NOTE_BANK_2` | 4 | A second such bank |

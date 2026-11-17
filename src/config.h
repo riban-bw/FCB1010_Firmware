@@ -16,8 +16,9 @@
 #endif
 
 // Pressing UP and DOWN together for this long opens configuration mode.
-// In configuration mode UP + DOWN does nothing; a long UP (MOMENTARY_HOLD_MS, the
-// key hold threshold) saves and closes it, and a long DOWN cancels and closes it.
+// In configuration mode UP + DOWN saves and closes it at once; a long UP (MOMENTARY_HOLD_MS,
+// the key hold threshold) asks which bank to save to (the footswitches type it, a short
+// UP saves and closes, a short DOWN goes back), and a long DOWN cancels and closes it.
 #ifndef CONFIG_HOLD_MS
 #define CONFIG_HOLD_MS 1000
 #endif
@@ -83,9 +84,10 @@
 // switches to program mode and back), UP / DOWN choose one of this many banks, each with
 // its own message and pedal mode for every footswitch, its own expression pedal CCs and
 // responses, and its own relay settings. Each bank takes 55 bytes (eleven 5-byte
-// records) of the 2KB settings EEPROM, so 1 to 36 fit.
+// records) of the 2KB settings EEPROM: 1 to 30 (user's request; 36 would fit, and the
+// room of banks 31-36 is kept for later settings).
 #ifndef BANK_COUNT
-#define BANK_COUNT 36
+#define BANK_COUNT 30
 #endif
 
 // Controller numbers sent by expression pedal A and pedal B until changed on

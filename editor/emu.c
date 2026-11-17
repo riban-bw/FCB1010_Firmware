@@ -348,6 +348,7 @@ uint16_t emu_const(uint8_t what)
     case 18: return fw_version[0];
     case 19: return fw_version[1];
     case 20: return fw_version[2];
+    case 21: return BANK_COUNT;
     default: return 0;
     }
 }

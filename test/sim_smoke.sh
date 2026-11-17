@@ -169,11 +169,13 @@ EOF
 run_sim "$TMP/s3.txt" "$TMP/s3.out"
 check "no MIDI output while idle" "$(hex_of "$TMP/s3.out")" ""
 
-echo "scenario 4: UP + DOWN held opens config mode; a long UP saves and leaves, a long DOWN cancels, a long UP + DOWN saves and leaves"
+echo "scenario 4: UP + DOWN held opens config mode; a long UP asks for a bank and a short UP saves and leaves, a long DOWN cancels, a long UP + DOWN saves and leaves"
 # 0xff presses both key rows, so UP, DOWN and switches 1-10 are all down together. The
 # chord opens config mode after about 1s; the stomp presses sent their CCs at the start.
 # 0xbf presses row 2 only (switches 6-10 and UP): held over 1s in config mode that is
-# a long UP (save and leave; the switches type channel digits first). 0xdf presses
+# a long UP (the switches type channel digits first), which opens the save prompt, still
+# in config mode; a short tap of row 2 then saves to the bank shown (switches 6-10 type
+# no bank digit while UP is down) and leaves. 0xdf presses
 # row 1 only (switches 1-5 and DOWN): a long DOWN (cancel, which reads the EEPROM).
 # Last, 0xff held again opens config mode, and held a second time (after letting go)
 # saves and leaves.
@@ -191,6 +193,11 @@ dump iram $MODE_ADDR $MODE_ADDR 1
 set hardware port[1] 0xbf
 step 900000
 dump iram $MODE_ADDR $MODE_ADDR 1
+set hardware port[1] 0x9f
+step 300000
+dump iram $MODE_ADDR $MODE_ADDR 1
+set hardware port[1] 0xbf
+step 60000
 set hardware port[1] 0x9f
 step 300000
 dump iram $MODE_ADDR $MODE_ADDR 1
@@ -222,8 +229,8 @@ quit
 EOF4
 s51 -t 80C32 -X 12M -S out="$TMP/s4.out" "$IHX" < "$TMP/s4.txt" > "$TMP/s4.console" 2>&1
 MODES=$(grep -E "^0x$(printf '%02x' "$MODE_ADDR") " "$TMP/s4.console" | awk '{print $2}' | tr '\n' ' ')
-check "mode: chord, release, long UP, release, chord, long DOWN, release, chord, release, chord, release (1 1 0 0 1 0 0 1 1 0 0)" \
-      "$MODES" "01 01 00 00 01 00 00 01 01 00 00 "
+check "mode: chord, release, long UP, release, short UP, chord, long DOWN, release, chord, release, chord, release (1 1 1 1 0 1 0 0 1 1 0 0)" \
+      "$MODES" "01 01 01 01 00 01 00 00 01 01 00 00 "
 check "no program change was sent by the chords or the long UP / DOWN" \
       "$(messages "$TMP/s4.out" | tr ' ' '\n' | grep -c '^c')" "0"
 MAXSP4=$(grep -E "Max value of stack pointer" "$TMP/s4.console" | tail -1 | sed -E 's/.*= *0x0*([0-9a-fA-F]+),.*/\1/')

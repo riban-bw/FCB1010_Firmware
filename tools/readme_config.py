@@ -67,9 +67,10 @@ modes = ["stomp", "stomp with momentary", "momentary", "inverted momentary"]
 show = num("VERSION_SHOW_MS")
 wrap = num("PROGRAM_WRAP") != 0
 banks = num("BANK_COUNT")
-BANK_ENDS = r"stopping at banks 1 and \d+|wrapping from bank \d+ back to 1, and from 1 to \d+"
-WRAP_TEXT = "wrapping from 127 back to 0, and from 0 to 127"
-STOP_TEXT = "stopping at 0 and 127; a press that cannot change the number sends nothing"
+# The user's wording says nothing about the ends when they stop (the default); with
+# PROGRAM_WRAP a clause saying they wrap is added before the full stop.
+WRAP_TEXT = ", wrapping from 127 back to 0, and from 0 to 127"
+BANK_WRAP = ", wrapping from bank %d back to 1, and from 1 to %d" % (banks, banks)
 CC_PATTERN = r"(CC [0-9][0-9, ]*(?: to [0-9]+)?)"
 
 RULES = [
@@ -77,7 +78,7 @@ RULES = [
     (r"Volume \(CC (\d+)\)", [pedal_cc[0]]),
     (r"Expression \(CC (\d+)\)", [pedal_cc[1]]),
     (r"UP \+ DOWN held ([\d.]+)s ", [secs(config_hold)]),
-    (r"channel (\d+) unless you change it", [channel]),
+    (r"single MIDI channel \(channel (\d+) by default", [channel]),
     (r"Footswitches 1 to 10 send " + CC_PATTERN + ", with value", [cc_words(stomp_cc)]),
     (r"chosen in configuration mode \(default: ([a-z ]+)\)", [modes[num("DEFAULT_PEDAL_MODE") & 3]]),
     (r"a hold of more than ([\d.]+)s undoes it", [secs(hold)]),
@@ -85,15 +86,15 @@ RULES = [
     (r"Released after more than ([\d.]+ seconds?)", [sec_words(hold)]),
     (r"If you let go within (a second|[\d.]+ seconds?) it stays",
      ["a second" if hold == 1000 else sec_words(hold)]),
-    (r"from 0 to 127 \((" + re.escape(WRAP_TEXT) + "|" + re.escape(STOP_TEXT) + r")\)",
-     [WRAP_TEXT if wrap else STOP_TEXT]),
+    (r"step the program number by one, from 0 to 127(|" + re.escape(WRAP_TEXT) + r")\.",
+     [WRAP_TEXT if wrap else ""]),
     (r"Held: after (\d+)ms the number auto-repeats at (\d+)Hz",
      [num("PROGRAM_REPEAT_DELAY_MS"), num("PROGRAM_REPEAT_HZ")]),
     (r"speeding up to about (\d+)Hz", [num("PROGRAM_REPEAT_FAST_HZ")]),
     (r"(\d+) banks, chosen with UP and DOWN", [banks]),
     (r"The pedal holds (\d+) banks", [banks]),
-    (r"step through the banks \((" + BANK_ENDS + r")\)",
-     ["wrapping from bank %d back to 1, and from 1 to %d" % (banks, banks) if wrap else "stopping at banks 1 and %d" % banks]),
+    (r"UP and DOWN step through the banks(|, wrapping from bank \d+ back to 1, and from 1 to \d+)\.",
+     [BANK_WRAP if wrap else ""]),
     # Configuration
     (r"Hold UP and DOWN together for ([\d.]+ seconds?)", [sec_words(config_hold)]),
     (r"[Hh]old UP \(ENTER\) for ([\d.]+ seconds?)", [sec_words(hold)]),

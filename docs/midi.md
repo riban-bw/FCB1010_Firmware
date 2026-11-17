@@ -33,7 +33,7 @@ Settings travel as NRPN controllers on the pedal's channel, so any MIDI tool can
 | 4 | Command (never sent) | 1 dump, 2 save, 3 discard unsaved changes, 4 heel from the pedals' positions, 5 toe from the pedals' positions |
 | 5 | End of a dump (sent only) | 0 |
 | 6 | Footswitch bank | 1 to `BANK_COUNT`; setting it changes bank, as UP / DOWN do while DIRECT SELECT is dark |
-| 7 | Number of banks, `BANK_COUNT` (read only) | 1 to 36, as CC 6 + CC 38 |
+| 7 | Number of banks, `BANK_COUNT` (read only) | 1 to 30, as CC 6 + CC 38 |
 | 8 to 17 | Footswitch 1 to 10 mode (of the bank in use, as are parameters 20 to 87 and 92 to 97) | 0 stomp, 1 stomp with momentary, 2 momentary, 3 inverted momentary |
 | 20 to 29 | Footswitch 1 to 10 message type | 0 CC, 1 note, 2 program change |
 | 30 to 39 | Footswitch 1 to 10 number | 0 to 127: controller or note (not used by a program change) |
