@@ -306,7 +306,7 @@ chordTap();
 check("UP + DOWN tapped in config mode saves and leaves at once", [fcb.state().mode, fcb.hw.status, JSON.parse(store["fcb1010-eeprom-v2"]).cfg[0]], [0, 0, 2]);
 fcb.down(UP); fcb.down(DOWN); wait(1100); fcb.up(UP); fcb.up(DOWN); wait(200);
 // Pages 3 and 4: EXP A and EXP B, the same footswitches on both (user's layout): 1
-// pickup, 4 heel, 6 CC, 9 toe; the page's EXP LED lit. A footswitch first shows its
+// pickup, 2 CC, 3 calibration; the page's EXP LED lit. A footswitch first shows its
 // setting, pressed again it acts.
 press(UP, 100); press(UP, 100);
 const pk0 = fcb.state().pickup & 3;
@@ -315,33 +315,42 @@ check("two UPs go to page 3, EXP A: footswitch 1 and EXP 1 lit, pedal A's respon
       [fcb.state().cfgPage, pageLeds(), fcb.hw.leds[0], fcb.hw.leds[1], fcb.hw.aux[4], fcb.hw.text, el0("display").getAttribute("aria-label")],
       [2, [0, 0, 1, 0], 1, 0, 0, pkText(pk0 & 1), pkWord(pk0 & 1)]);
 check("each footswitch's label says what it does on this page", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => el0("mode" + i).textContent),
-      ["Pickup", "", "", "Calib low", "", "CC", "", "", "Calib high", ""]);
+      ["Pickup", "CC", "Calibrate", "", "", "", "", "", "", ""]);
 press(0, 100);
 check("footswitch 1 (selected) switches pedal A (\"Pu\" / \"Ab\")", [fcb.state().pickup & 1, fcb.hw.text], [(pk0 & 1) ^ 1, pkText((pk0 & 1) ^ 1)]);
 press(0, 100);
 check("and back", fcb.state().pickup & 3, pk0);
+// Footswitch 3: the pedal's value, then "Lo" flashing, the heel with "Hi" flashing, the toe.
+fcb.setRaw(255, 0); wait(100);
+press(2, 100);
+check("footswitch 3 first shows pedal A's value, taking nothing", [fcb.hw.display, fcb.hw.leds[2], fcb.state().calStep, fcb.state().calArmed], [127, 1, 0, 0]);
 fcb.setRaw(0, 0); wait(100);
-const heel0 = fcb.state().heel[0];
-press(3, 100);
-check("footswitch 4 first flashes \"Lo\", taking nothing", [fcb.hw.text, fcb.hw.leds[3], pageLeds(), fcb.state().calArmed], [TEXT_LO, 1, [0, 0, 1, 0], 1]);
+check("following the pedal", fcb.hw.display, 0);
+press(2, 100);
+check("pressed again: \"Lo\" flashing", [fcb.hw.text, fcb.state().calStep, fcb.state().calArmed, pageLeds()], [TEXT_LO, 1, 1, [0, 0, 1, 0]]);
 wait(260);
 check("(blank half the time)", fcb.hw.blank, 7);
-press(3, 100);
-check("pressed again it takes pedal A's heel: \"Lo\" steady", [fcb.hw.text, fcb.hw.blank, fcb.state().calArmed, fcb.state().heel[0]], [TEXT_LO, 0, 0, 0]);
-wait(300);
-check("(and stays lit)", [fcb.hw.text, fcb.hw.blank], [TEXT_LO, 0]);
-press(9, 100); press(9, 100);
-check("footswitch 9 (twice) with pedal A still at the heel: \"Er\"", fcb.hw.text, TEXT_ER);
+press(2, 100);
+check("again it takes the heel: \"Hi\" flashing", [fcb.state().calStep, fcb.state().calArmed], [2, 1]);
+press(2, 100);
+check("again with the pedal still at the heel: \"Er\", the calibration unchanged", [fcb.hw.text, fcb.state().calStep, fcb.state().heel[0], fcb.state().toe[0]], [TEXT_ER, 3, 0, 255]);
+wait(cfgMs("CAL_ERROR_SHOW_MS") + 100);
+check("CAL_ERROR_SHOW_MS later, the pedal's value again", [fcb.state().calStep, fcb.hw.display, fcb.hw.blank], [0, 0, 0]);
+press(2, 100); press(2, 100);
 fcb.setRaw(255, 255); wait(100);
-press(9, 100); press(9, 100);
-check("at the toe: \"Hi\" (heel 0, toe 255, the default range, so later checks hold)", [fcb.hw.text, fcb.hw.leds[8], heel0], [TEXT_HI, 1, 0]);
-// Footswitch 6: first the CC, then (pressed again) its editor, NUMBER lit, typed.
+press(2, 100);
+check("Lo, the heel, the toe: taken (heel 0, toe 255, the default range, so later checks hold), the value shown",
+      [fcb.state().calStep, fcb.hw.display, fcb.state().heel[0], fcb.state().toe[0]], [0, 127, 0, 255]);
+// Footswitch 2: first the CC, then (pressed again) its editor, NUMBER lit, typed; a
+// pedal sets nothing (user's request).
 const ccA0 = fcb.state().pedalCc[0];
-press(6, 100);
-check("footswitch 6 first shows pedal A's CC", [fcb.state().pcc & 1, fcb.hw.display, fcb.hw.aux[8], fcb.hw.leds[5]], [0, ccA0, 0, 1]);
-press(6, 100);
-check("pressed again it opens pedal A's CC editor, NUMBER and EXP 1 lit", [fcb.state().pcc, fcb.hw.display, fcb.hw.aux[8], fcb.hw.aux[2], fcb.hw.leds[5], fcb.state().pickup & 3], [1, ccA0, 1, 1, 1, pk0]);
+press(1, 100);
+check("footswitch 2 first shows pedal A's CC", [fcb.state().pcc & 1, fcb.hw.display, fcb.hw.aux[8], fcb.hw.leds[1]], [0, ccA0, 0, 1]);
+press(1, 100);
+check("pressed again it opens pedal A's CC editor, NUMBER and EXP 1 lit", [fcb.state().pcc, fcb.hw.display, fcb.hw.aux[8], fcb.hw.aux[2], fcb.hw.leds[1], fcb.state().pickup & 3], [1, ccA0, 1, 1, 1, pk0]);
 check("in the CC editor the labels are digits", [el0("mode0").textContent, el0("mode9").textContent], ["Digit 1", "Digit 0"]);
+fcb.setRaw(0, 0); wait(100); fcb.setRaw(128, 128); wait(100);
+check("moving a pedal leaves the CC alone", fcb.state().pedalCc[0], ccA0);
 press(2, 100); press(2, 100);
 check("footswitches 3, 3 type CC 33, and the panel's pedal label follows", [fcb.state().pedalCc[0], fcb.hw.display, String(el0("ccA").textContent)], [33, 33, "33"]);
 press(DOWN, 100);
@@ -353,15 +362,18 @@ press(0, 100);
 check("footswitch 1 switches pedal B", fcb.state().pickup & 3, pk0 ^ 2);
 press(0, 100);
 check("and back", fcb.state().pickup & 3, pk0);
-press(9, 100); press(9, 100);
-check("footswitch 9 (twice) takes pedal B's toe, EXP 2 lit", [fcb.hw.text, pageLeds()], [TEXT_HI, [0, 0, 0, 1]]);
+fcb.setRaw(255, 0); wait(100);
+press(2, 100);
+check("footswitch 3 shows pedal B's value, EXP 2 lit", [fcb.hw.display, pageLeds()], [0, [0, 0, 0, 1]]);
+// Both pedals back at the toe, where the SWITCH page below expects pedal B.
+fcb.setRaw(255, 255); wait(100);
 const ccB0 = fcb.state().pedalCc[1];
-press(6, 100); press(6, 100); press(4, 100); press(4, 100); press(UP, 100);
-check("footswitch 6 (twice), then 5, 5 and a short UP [ENTER]: pedal B on CC 55", [fcb.state().pcc & 1, fcb.state().pedalCc[1], fcb.state().cfgPage, fcb.hw.display], [0, 55, 3, 55]);
+press(1, 100); press(1, 100); press(4, 100); press(4, 100); press(UP, 100);
+check("footswitch 2 (twice), then 5, 5 and a short UP [ENTER]: pedal B on CC 55", [fcb.state().pcc & 1, fcb.state().pedalCc[1], fcb.state().cfgPage, fcb.hw.display], [0, 55, 3, 55]);
 check("the panel's pedal B label follows", String(el0("ccB").textContent), "55");
-// Type its CC back (footswitch 10 types 0, 1-5 are codes 0-4, 6-9 codes 6-9); 6 is
+// Type its CC back (footswitch 10 types 0, 1-5 are codes 0-4, 6-9 codes 6-9); 2 is
 // still selected, so one press opens the editor.
-press(6, 100);
+press(1, 100);
 String(ccB0).split("").map(Number).forEach((d) => press(d === 0 ? 10 : d <= 5 ? d - 1 : d, 100));
 press(UP, 100);
 check("and typed back", [fcb.state().pcc & 1, fcb.state().pedalCc[1]], [0, ccB0]);

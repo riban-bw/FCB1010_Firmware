@@ -136,8 +136,10 @@
 #define PEDAL_END_SNAP 2
 #endif
 
-// Calibration is rejected if heel and toe are closer than this.
+// Calibration is rejected if heel and toe are closer than this; "Er" then shows for
+// CAL_ERROR_SHOW_MS (a multiple of CHANNEL_DIGIT_FLASH_MS), then the pedal's value.
 #define CAL_MIN_SPAN 40
+#define CAL_ERROR_SHOW_MS 2000
 
 // A footswitch held for longer than this acts as a momentary switch: the state it
 // toggled to is undone when the switch is released. Released sooner, it stays latched.

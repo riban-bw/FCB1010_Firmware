@@ -618,14 +618,26 @@ static uint8_t sw_code(int sw)
 
 // Page 2: take a heel / toe reading with footswitch sw (1-10): the first press arms it
 // (Lo / Hi flashing), the next takes it.
-static void cal_take(int sw)
+// On pedal ch's EXP page: footswitch 3 (selected first if need be) until "Lo" flashes,
+// then the heel reading lo, then the toe reading hi.
+static void calibrate(uint8_t ch, uint8_t lo, uint8_t hi)
 {
-    if (!(cal_armed && ped_sel == sw - 1))
+    int n;
+
+    if (ped_sel != PED_CAL)
     {
-        tap(sw_code(sw));
+        tap(sw_code(3));
     }
 
-    tap(sw_code(sw));
+    for (n = 0; n < 3 && cal_step != CAL_HEEL; n++)
+    {
+        tap(sw_code(3));
+    }
+
+    pedal(ch, lo);
+    tap(sw_code(3));
+    pedal(ch, hi);
+    tap(sw_code(3));
 }
 
 // ---------------------------------------------------------------
@@ -1387,10 +1399,7 @@ static void test_config_cancel(void)
     tap(sw_code(7));
     CHECK(midi_channel == 7 && pedal_mode_get(2) == PM_STOMP_MOM);
     to_page(PAGE_EXP_A);
-    pedal(0, 20);
-    cal_take(4);
-    pedal(0, 220);
-    cal_take(9);
+    calibrate(0, 20, 220);
     CHECK(heel[0] == 20 && toe[0] == 220);
     clear_log();
     cancel_exit();
@@ -2459,85 +2468,92 @@ static void test_midi_flash(void)
 
 static void test_config_calibration(void)
 {
-    printf("config: calibration (pedal page)\n");
+    int k;
+
+    printf("config: calibration (EXP pages)\n");
     reset_world();
     chord_long();
     to_page(PAGE_EXP_A);
     CHECK(aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0);
     CHECK(aux[HAL_LED_MIDI_FUNC] == 0 && aux[HAL_LED_MIDI_CHAN] == 0);
 
-    // On EXP A footswitch 4 takes pedal A's heel, 9 its toe (user's layout).
-    // The first press selects it: "Lo" / "Hi" flashing (every CHAN_FLASH_TICKS), its
-    // footswitch and its pedal's EXP LED lit, nothing taken. The second takes the
-    // reading: "Lo" / "Hi" steady (user's request).
-    pedal(0, 20);
+    // Footswitch 3 calibrates the page's pedal (user's design). Selected, it shows the
+    // pedal's value, following the pedal, and takes nothing.
+    pedal(0, 128);
     pedal(1, 30);
-    tap(sw_code(4));
-    CHECK(display == SHOWN_LO && cal_armed && heel[0] == 0 && cfg_changed == 0);
-    CHECK(leds[3] == 1 && leds[0] == 0 && aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0);
+    tap(sw_code(3));
+    CHECK(ped_sel == PED_CAL && cal_step == CAL_DONE && !cal_armed && display == ctl_scale(128, 0, 255));
+    CHECK(leds[2] == 1 && leds[0] == 0 && aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0 && cfg_changed == 0);
+    pedal(0, 255);
+    CHECK(display == 127);
+    // The other pedal does not show.
+    pedal(1, 200);
+    CHECK(display == 127);
+    // Pressed again: "Lo" flashing (blank half the time), nothing taken.
+    pedal(0, 20);
+    tap(sw_code(3));
+    CHECK(display == SHOWN_LO && cal_armed && cal_step == CAL_HEEL && heel[0] == 0 && cfg_changed == 0);
     ticks(CHAN_FLASH_TICKS);
     CHECK(blank == 7 && cal_armed);
     ticks(CHAN_FLASH_TICKS);
     CHECK(display == SHOWN_LO && blank == 0);
-    tap(sw_code(4));
-    CHECK(display == SHOWN_LO && !cal_armed && heel[0] == 20 && heel[1] == 0 && cal_step == CAL_HEEL);
-    CHECK(leds[3] == 1 && leds[0] == 0 && aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0 && cfg_changed == 1);
-    ticks(CHAN_FLASH_TICKS * 3);
-    CHECK(display == SHOWN_LO && blank == 0);
-    // Pressed again it flashes again, ready to retake.
-    tap(sw_code(4));
-    CHECK(cal_armed && heel[0] == 20);
+    // A pedal move does not show while it flashes.
+    pedal(0, 21);
+    CHECK(display == SHOWN_LO);
+    pedal(0, 20);
+    // Again: the heel reading is taken (kept until the toe is good), "Hi" flashing.
+    tap(sw_code(3));
+    CHECK(display == SHOWN_HI && cal_armed && cal_step == CAL_TOE && heel[0] == 0 && cfg_changed == 0);
     ticks(CHAN_FLASH_TICKS);
     CHECK(blank == 7);
+    ticks(CHAN_FLASH_TICKS);
+    CHECK(display == SHOWN_HI && blank == 0);
+    // Again: the toe reading. Both are stored, and the pedal's value shows again.
     pedal(0, 220);
-    pedal(1, 230);
-    cal_take(9);
-    CHECK(display == SHOWN_HI && toe[0] == 220 && toe[1] == 255 && leds[8] == 1 && aux[HAL_LED_EXP_1] == 1);
+    tap(sw_code(3));
+    CHECK(heel[0] == 20 && toe[0] == 220 && heel[1] == 0 && toe[1] == 255 && cfg_changed == 1);
+    CHECK(cal_step == CAL_DONE && !cal_armed && display == 127 && blank == 0);
+    ticks(CHAN_FLASH_TICKS * 3);
+    CHECK(display == 127 && blank == 0);
+    pedal(0, 120);
+    CHECK(display == ctl_scale(120, 20, 220));
     // Page 4, EXP B: the same footswitches for pedal B (user's request), EXP 2 lit.
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_EXP_B && pcc_b == 1 && ped_sel == 0 && aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 1 && leds[0] == 1);
-    pedal(1, 30);
-    tap(sw_code(4));
-    CHECK(display == SHOWN_LO && cal_armed && heel[1] == 0 && leds[3] == 1 && leds[0] == 0);
-    tap(sw_code(4));
-    CHECK(display == SHOWN_LO && heel[1] == 30 && heel[0] == 20);
-    pedal(1, 230);
-    cal_take(9);
-    CHECK(display == SHOWN_HI && toe[1] == 230 && toe[0] == 220 && leds[8] == 1 && aux[HAL_LED_EXP_2] == 1);
-    CHECK(heel[0] == 20 && heel[1] == 30 && toe[0] == 220 && toe[1] == 230 && midi_len == 0);
+    CHECK(cfg_page == PAGE_EXP_B && pcc_b == 1 && ped_sel == PED_PICKUP && aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 1 && leds[0] == 1);
+    calibrate(1, 30, 230);
+    CHECK(display == 127 && heel[1] == 30 && toe[1] == 230 && heel[0] == 20 && toe[0] == 220 && midi_len == 0);
 
-    // Only footswitches 1, 4, 6 and 9 do anything.
-    tap(sw_code(2));
-    tap(sw_code(3));
-    tap(sw_code(5));
-    tap(sw_code(7));
-    tap(sw_code(8));
-    tap(sw_code(10));
-    CHECK(ped_sel == 8 && display == SHOWN_HI && leds[8] == 1 && leds[1] == 0 && leds[9] == 0 && !cal_armed);
+    // Only footswitches 1, 2 and 3 do anything.
+    for (k = 4; k <= 10; k++)
+    {
+        tap(sw_code(k));
+    }
+
+    CHECK(ped_sel == PED_CAL && cal_step == CAL_DONE && leds[2] == 1 && leds[3] == 0 && leds[9] == 0 && !cal_armed);
     // A footswitch acts when let go, and only with UP and DOWN up at both ends: with UP
     // down (the simulator's row 2) nothing happens, and UP's release changes page.
-    // Footswitch 6 first shows the CC (user's request), then opens its editor.
-    ctl_key_press(sw_code(6));
-    CHECK(!pcc_open && ped_sel == 8);
-    ctl_key_release(sw_code(6));
-    CHECK(!pcc_open && ped_sel == 5 && display == pedal_cc[1] && leds[5] == 1 && aux[HAL_LED_NUMBER] == 0);
-    tap(sw_code(6));
+    // Footswitch 2 first shows the CC (user's request), then opens its editor.
+    ctl_key_press(sw_code(2));
+    CHECK(!pcc_open && ped_sel == PED_CAL);
+    ctl_key_release(sw_code(2));
+    CHECK(!pcc_open && ped_sel == PED_CC && display == pedal_cc[1] && leds[1] == 1 && aux[HAL_LED_NUMBER] == 0);
+    tap(sw_code(2));
     CHECK(pcc_open && pcc_b == 1 && aux[HAL_LED_NUMBER] == 1);
     tap(CTL_KEY_DOWN);
-    CHECK(!pcc_open && cfg_page == PAGE_EXP_B && ped_sel == 5);
+    CHECK(!pcc_open && cfg_page == PAGE_EXP_B && ped_sel == PED_CC);
     ctl_key_press(CTL_KEY_UP);
-    tap(sw_code(6));
+    tap(sw_code(2));
     tap(sw_code(1));
-    CHECK(!pcc_open && ped_sel == 5 && pk_mask == (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1)));
+    CHECK(!pcc_open && ped_sel == PED_CC && pk_mask == (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1)));
     ctl_key_release(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_SW1);
     tap(CTL_KEY_DOWN);
-    tap(sw_code(6));
-    CHECK(cfg_page == PAGE_EXP_B && ped_sel == 5 && !pcc_open);
-    ctl_key_press(sw_code(6));
+    tap(sw_code(2));
+    CHECK(cfg_page == PAGE_EXP_B && ped_sel == PED_CC && !pcc_open);
+    ctl_key_press(sw_code(2));
     ctl_key_press(CTL_KEY_DOWN);
     ctl_key_release(CTL_KEY_DOWN);
-    ctl_key_release(sw_code(6));
+    ctl_key_release(sw_code(2));
     CHECK(!pcc_open && cfg_page == PAGE_EXP_A);
 
     // Coming back to the page starts on footswitch 1 again; nothing is sent.
@@ -2563,23 +2579,24 @@ static void test_config_calibration(void)
     pedal(1, 130);
     CHECK(cc_number(2) == 11 && cc_value(2) == ctl_scale(130, 30, 230));
 
-    // A reading less than CAL_MIN_SPAN from the other end shows "Er" and changes nothing;
-    // pressing twice more retakes it.
+    // A toe less than CAL_MIN_SPAN from the heel shows "Er" (steady) for
+    // CAL_ERROR_SHOW_MS, then the pedal's value, and changes nothing.
     reset_world();
     chord_long();
     to_page(PAGE_EXP_A);
-    pedal(0, 100);
-    cal_take(4);
-    CHECK(display == SHOWN_LO && heel[0] == 100);
-    pedal(0, 100 + CAL_MIN_SPAN - 1);
-    cal_take(9);
-    CHECK(display == SHOWN_ER && cal_step == CAL_ERROR && toe[0] == 255);
-    pedal(0, 255 - CAL_MIN_SPAN + 1);
-    cal_take(4);
-    CHECK(display == SHOWN_ER && heel[0] == 100);
-    pedal(0, 200);
-    cal_take(9);
-    CHECK(display == SHOWN_HI && heel[0] == 100 && toe[0] == 200);
+    calibrate(0, 100, 100 + CAL_MIN_SPAN - 1);
+    CHECK(display == SHOWN_ER && cal_step == CAL_ERROR && !cal_armed && heel[0] == 0 && toe[0] == 255 && cfg_changed == 0);
+    ticks(CAL_ERROR_BLINKS * CHAN_FLASH_TICKS - 1);
+    CHECK(display == SHOWN_ER && blank == 0);
+    ticks(1);
+    CHECK(cal_step == CAL_DONE && display == ctl_scale(100 + CAL_MIN_SPAN - 1, 0, 255));
+    // The same below the heel; a press while "Er" shows starts again ("Lo").
+    calibrate(0, 100, 100 - CAL_MIN_SPAN + 1);
+    CHECK(display == SHOWN_ER && heel[0] == 0);
+    tap(sw_code(3));
+    CHECK(display == SHOWN_LO && cal_step == CAL_HEEL && cal_armed);
+    calibrate(0, 100, 200);
+    CHECK(cal_step == CAL_DONE && display == 127 && heel[0] == 100 && toe[0] == 200);
     // Each pedal on its own: pedal B is untouched.
     CHECK(heel[1] == 0 && toe[1] == 255);
     cancel_exit();
@@ -2589,11 +2606,8 @@ static void test_config_calibration(void)
     reset_world();
     chord_long();
     to_page(PAGE_EXP_B);
-    pedal(1, 200);
-    cal_take(4);
-    pedal(1, 20);
-    cal_take(9);
-    CHECK(display == SHOWN_HI);
+    calibrate(1, 200, 20);
+    CHECK(cal_step == CAL_DONE && display == 127);
     save_exit();
     CHECK(saved_heel[1] == 200 && saved_toe[1] == 20);
 
@@ -2765,13 +2779,9 @@ static void test_config_led_eeprom(void)
     chord_long();
     CHECK(status_led == 1);
     to_page(PAGE_EXP_A);
-    pedal(0, 200);
-    pedal(1, 210);
-    cal_take(9);
-    cal_take(10);
+    calibrate(0, 10, 200);
     CHECK(status_led == 1 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
-    pedal(0, 230);
-    cal_take(9);
+    calibrate(0, 10, 230);
     CHECK(toe[0] == 230 && status_led == 0 && status_toggles(CFG_FLASH_TICKS * 2) == 2);
     cancel_exit();
 
@@ -3479,44 +3489,32 @@ static void test_config_editor(void)
     cancel_exit();
     CHECK(MSG_OFF(0) == 0);
 
-    // Pedals in the editor: the first reading only records; moving sets the parameter.
-    // Type by thirds of the travel (default calibration 0-255).
+    // Pedals set nothing in the editor (user's request): neither the type nor a value.
     reset_world();
     chord_long();
     long_press(sw_code(4));
     pedal(0, 0);
-    CHECK(msg_type(3) == MT_CC);
     pedal(0, 128);
-    CHECK(msg_type(3) == MT_NOTE && display == SHOWN_TEXT(HAL_TEXT_NOTE));
     pedal(0, 255);
-    CHECK(msg_type(3) == MT_PROG);
     pedal(1, 255);
     pedal(1, 10);
-    CHECK(msg_type(3) == MT_CC);
-    // Values: the pedal's CC value; a pedal ends a typed number.
+    CHECK(msg_type(3) == MT_CC && display == SHOWN_TEXT(HAL_TEXT_CC));
     tap(CTL_KEY_UP);
-    tap(sw_code(1));
-    pedal(1, 10);
-    CHECK(MSG_NUM(3) == 1);
-    pedal(1, 128);
-    CHECK(MSG_NUM(3) == ctl_scale(128, 0, 255) && display == ctl_scale(128, 0, 255) && msg_type(3) == MT_CC);
     tap(sw_code(2));
-    CHECK(MSG_NUM(3) == 2);
-    // Small wobble is ignored.
-    pedal(1, 129);
-    CHECK(MSG_NUM(3) == 2);
-    // The off value from a pedal (a parameter change takes a new first reading).
+    pedal(1, 128);
+    pedal(1, 10);
+    CHECK(MSG_NUM(3) == 2 && display == 2 && msg_type(3) == MT_CC);
     tap(CTL_KEY_UP); tap(CTL_KEY_UP);
     pedal(0, 0);
-    CHECK(MSG_OFF(3) == 0);
     pedal(0, 200);
-    CHECK(MSG_OFF(3) == ctl_scale(200, 0, 255) && msg_type(3) == MT_CC && MSG_NUM(3) == 2);
+    CHECK(MSG_OFF(3) == 0 && MSG_NUM(3) == 2);
     // Nothing is sent, unless switch 4 was on (inverted momentary rests on): then
     // accepting its new number with UP sent the old message's off at once.
     CHECK(midi_len == ((DEFAULT_PEDAL_MODE == PM_MOM_INV) ? 3 : 0));
     // A long UP + DOWN saves and leaves with the editor open: the change is kept.
+    tap(sw_code(9));
     chord_long();
-    CHECK(mode == MODE_RUN && !edit_open && saved_msg[3][1] == 2 && saved_msg[3][3] == ctl_scale(200, 0, 255) &&
+    CHECK(mode == MODE_RUN && !edit_open && saved_msg[3][1] == 2 && saved_msg[3][3] == 9 &&
           msg_saved == 10);
 
     // A long press of the selected switch while DOWN is held does not open the editor
@@ -4193,10 +4191,10 @@ static void test_bank_pc(void)
     }
     CHECK(cfg_page == PAGE_BANK_PC);
 
-    // A pedal, once moved, sets its CC value; the next digit starts a new number.
+    // A pedal sets nothing (user's request); a digit starts a new number.
     pedal(0, 0);
     pedal(0, 128);
-    CHECK(sent[0] > 50 && sent[0] < 80 && bank_pc == sent[0] + 1 && display == sent[0]);
+    CHECK(bank_pc == 0);
     tap(sw_code(4));
     CHECK(bank_pc == 5 && display == 4);
 
@@ -4795,13 +4793,13 @@ static void test_pedal_cc_config(void)
     to_page(PAGE_EXP_A);
     CHECK(cfg_page == PAGE_EXP_A && !pcc_open);
 
-    // Footswitch 6 first shows pedal A's CC (user's request), then opens its editor:
-    // EXP 1, NUMBER and footswitch 6 lit, the CC shown.
-    tap(sw_code(6));
-    CHECK(!pcc_open && display == cc_a && leds[5] == 1 && aux[HAL_LED_NUMBER] == 0);
-    tap(sw_code(6));
+    // Footswitch 2 first shows pedal A's CC (user's request), then opens its editor:
+    // EXP 1, NUMBER and footswitch 2 lit, the CC shown.
+    tap(sw_code(2));
+    CHECK(!pcc_open && display == cc_a && leds[1] == 1 && aux[HAL_LED_NUMBER] == 0);
+    tap(sw_code(2));
     CHECK(pcc_open && !pcc_b && pk_mask == pk_def && display == cc_a);
-    CHECK(aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0 && aux[HAL_LED_NUMBER] == 1 && leds[5] == 1 && leds[0] == 0);
+    CHECK(aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0 && aux[HAL_LED_NUMBER] == 1 && leds[1] == 1 && leds[0] == 0);
     // Digits as in the footswitch editor: 4, 4 make 44.
     tap(sw_code(4));
     CHECK(pedal_cc[0] == 4 && display == 4 && heel[0] == 0);
@@ -4813,27 +4811,30 @@ static void test_pedal_cc_config(void)
     // the CC, NUMBER dark).
     tap(CTL_KEY_DOWN);
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_EXP_A && !pcc_open && pedal_cc[0] == cc_a && display == cc_a);
-    CHECK(aux[HAL_LED_NUMBER] == 0 && leds[5] == 1);
+    CHECK(aux[HAL_LED_NUMBER] == 0 && leds[1] == 1);
     ticks(1);
     CHECK(cfg_changed == 0);
-    // Pedal B's, on page 4 with the same footswitch 6 (pressed once, since the page starts
-    // on footswitch 1, then again): a pedal, once moved, sets it to its CC value; a short
+    // Pedal B's, on page 4 with the same footswitch 2 (pressed once, since the page starts
+    // on footswitch 1, then again): a pedal sets nothing (user's request), typed it is; a short
     // UP [ENTER] keeps it. A long UP is a short one here: it does not save and leave.
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_EXP_B);
-    tap(sw_code(6));
-    tap(sw_code(6));
-    CHECK(pcc_open && pcc_b && aux[HAL_LED_EXP_2] == 1 && leds[5] == 1 && display == cc_b);
+    tap(sw_code(2));
+    tap(sw_code(2));
+    CHECK(pcc_open && pcc_b && aux[HAL_LED_EXP_2] == 1 && leds[1] == 1 && display == cc_b);
     pedal(0, 0);
-    pedal(0, raw_for(44));
+    pedal(0, raw_for(100));
+    CHECK(pedal_cc[1] == cc_b && display == cc_b);
+    tap(sw_code(4));
+    tap(sw_code(4));
     CHECK(pedal_cc[1] == 44 && display == 44 && midi_len == 0);
     long_nav(CTL_KEY_UP);
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_EXP_B && !pcc_open && pedal_cc[1] == 44 && cfg_saved == 0);
     // Footswitch 1 shows pedal B's pickup, then toggles it.
     tap(sw_code(1));
-    CHECK(pk_mask == pk_def && leds[0] == 1 && leds[5] == 0);
+    CHECK(pk_mask == pk_def && leds[0] == 1 && leds[1] == 0);
     tap(sw_code(1));
-    CHECK(pk_mask == (pk_def ^ 2) && leds[0] == 1 && leds[5] == 0);
+    CHECK(pk_mask == (pk_def ^ 2) && leds[0] == 1 && leds[1] == 0);
     tap(sw_code(1));
     CHECK(pk_mask == pk_def);
     // Saving stores it with the bank; run mode sends pedal B on CC 44.
@@ -4893,12 +4894,21 @@ static void test_pedal_cc_config(void)
 // The relays' settings belong to the bank: bank 2's own follows and triggers.
 static void test_bank_relays(void)
 {
-    printf("relays: per bank\n");
+    printf("relays: per bank, moved only by their triggers\n");
     reset_world();
-    pk_mask = 0;
-    set_mode(2, PM_STOMP);
     store_relay(1, 0, 0x08, 0, 0);
     store_relay(1, 1, 0, 0, 100);
+    // Switch 4 a stomp in both banks, whatever DEFAULT_PEDAL_MODE is.
+    store_bank_mode(0, 3, PM_STOMP);
+    store_bank_mode(1, 3, PM_STOMP);
+    load_settings();
+    pk_mask = 0;
+    set_mode(2, PM_STOMP);
+    // Off to start with (inverted momentary, the power-on mode in mode 3, rests on).
+    if (stomp_on(3))
+    {
+        tap(3);
+    }
     tap(2);
     ticks(1);
     CHECK(relays == 0 && sw_mask[0] == 0);
@@ -4914,11 +4924,47 @@ static void test_bank_relays(void)
     pedal(1, 255);
     ticks(1);
     CHECK(relays == 3);
+    // A bank change does not move a relay (user's request): bank 1 has no triggers, so
+    // both stay closed.
     tap(CTL_KEY_DOWN);
     ticks(1);
     CHECK(hal_bank == 0 && sw_mask[0] == 0 && sw_thr[3] == 0);
     ticks(1);
+    CHECK(relays == 3 && aux[HAL_LED_SWITCH_1] == 1 && aux[HAL_LED_SWITCH_2] == 1);
+    pedal(1, 0);
+    tap(3);
+    ticks(1);
+    CHECK(relays == 3);
+    // Back in bank 2 (switch 4 now off, pedal B at the heel): still closed; then each
+    // opens when its trigger changes: pedal B crossing its threshold, switch 4 going on
+    // and off.
+    tap(CTL_KEY_UP);
+    ticks(2);
+    CHECK(hal_bank == 1 && relays == 3);
+    pedal(1, 255);
+    ticks(1);
+    CHECK(relays == 3);
+    pedal(1, 0);
+    ticks(1);
+    CHECK(relays == 1);
+    tap(3);
+    ticks(1);
+    CHECK(relays == 1 && stomp_on(3));
+    tap(3);
+    ticks(1);
     CHECK(relays == 0);
+    // A press straight after a bank change, before the next tick, still counts.
+    pedal(1, 255);
+    ticks(1);
+    CHECK(relays == 2);
+    tap(CTL_KEY_DOWN);
+    ticks(1);
+    tap(CTL_KEY_UP);
+    ticks(1);
+    CHECK(hal_bank == 1 && relays == 2);
+    tap(3);
+    ticks(1);
+    CHECK(relays == 3);
 }
 
 static void test_pedal_pickup(void)
@@ -5071,8 +5117,8 @@ static void test_pedal_pickup(void)
     CHECK(cfg_changed == (pk_mask != (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1))));
     // Another footswitch selected, then footswitch 1 again: the first press only shows
     // the response (user's request), the second toggles it.
-    tap(sw_code(6));
-    CHECK(ped_sel == 5 && pk_mask == 1);
+    tap(sw_code(2));
+    CHECK(ped_sel == PED_CC && pk_mask == 1);
     tap(sw_code(1));
     CHECK(pk_mask == 1 && leds[0] == 1 && display == SHOWN_TEXT(HAL_TEXT_MODE + PM_MOMENTARY));
     tap(sw_code(1));
@@ -5083,11 +5129,11 @@ static void test_pedal_pickup(void)
     tap(sw_code(1));
     CHECK(pk_mask == 2 && display == SHOWN_TEXT(HAL_TEXT_MODE + PM_MOMENTARY));
     // The pedals do nothing here, nor do the other footswitches.
-    tap(sw_code(2));
-    tap(sw_code(3));
+    tap(sw_code(4));
+    tap(sw_code(9));
     pedal(0, 200);
     pedal(0, 10);
-    CHECK(pk_mask == 2 && midi_len == 0 && leds[2] == 0 && leds[1] == 0 && leds[0] == 1);
+    CHECK(pk_mask == 2 && midi_len == 0 && leds[3] == 0 && leds[1] == 0 && leds[0] == 1);
     save_exit();
     CHECK(mode == MODE_RUN && cfg_saved == 1 && saved_cfg[0] == MIDI_CHANNEL && saved_cfg[1] == 0);
     CHECK(saved_cfg[2] == 0 && saved_cfg[3] == 0);
@@ -5267,8 +5313,8 @@ static void test_entry_dot(void)
     ticks(CHAN_FLASH_TICKS);
     CHECK(dots == 0);
     to_page(PAGE_EXP_A);
-    tap(sw_code(6));
-    tap(sw_code(6));
+    tap(sw_code(2));
+    tap(sw_code(2));
     CHECK(pcc_open);
     ticks(1);
     d = dots;

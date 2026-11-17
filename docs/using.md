@@ -81,7 +81,7 @@ While a pickup pedal waits, its EXP LED flashes: slowly when it is far from the 
 
 ## The relay outputs (SWITCH 1 and SWITCH 2)
 
-Each of the two relay jacks can follow any mix of footswitches and the expression pedals, set for each bank. The relay closes when any of the things it follows is ON, and opens when they are all OFF. For a pedal, ON means pushed past a threshold you set. The SWITCH 1 and SWITCH 2 LEDs show the relay states. Nothing is set up until you choose, so out of the box the relays stay open.
+Each of the two relay jacks can follow any mix of footswitches and the expression pedals, set for each bank. The relay closes when any of the things it follows turns ON, and opens when they are all OFF. For a pedal, ON means pushed past a threshold you set. A relay only moves when one of these changes: changing bank leaves both relays as they are, and in the new bank they then follow its own settings from the next change (a footswitch it follows switching, or a pedal crossing its threshold). The SWITCH 1 and SWITCH 2 LEDs show the relay states. Nothing is set up until you choose, so out of the box the relays stay open.
 
 ## Changing program
 

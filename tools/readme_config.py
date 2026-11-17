@@ -117,6 +117,7 @@ RULES = [
      ["per second" if show == 1000 else "every " + sec_words(show)]),
     (r"The ([\d.]+) second long-press threshold", [secs(hold)]),
     (r"Hold a footswitch for ([\d.]+ seconds?) to open its editor", [sec_words(hold)]),
+    (r"`Er` shows for ([\d.]+ seconds?), then the pedal's value", [sec_words(num("CAL_ERROR_SHOW_MS"))]),
     (r"in turn, (a second|[\d.]+ seconds?) each", ["a second" if num("BANK_PC_LABEL_MS") == 1000 else sec_words(num("BANK_PC_LABEL_MS"))]),
     # Expression pedal pickup
     (r"comes within (\d+) steps? of that value", [num("PEDAL_PICKUP_WINDOW")]),

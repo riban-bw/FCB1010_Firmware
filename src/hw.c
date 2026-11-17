@@ -189,11 +189,12 @@ static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
     0xB6, 0x1E, 0xB6, 0x1E, 0xCE, 0x38, 0xCE, 0x38
 };
 
-// The leftmost position's sign, lit with its "1" (B C). Which bits drive the "-" bar and
-// the "+" upright is a guess (unverified, not in jspyve's library): G for the bar, as on
-// the full digits, and F for the upright.
+// The leftmost position's sign, lit with its "1" (B C). G drives the "-" bar (seen on a
+// real unit); F does not drive the "+" upright, which is one of A, D or E (not in
+// jspyve's library), so "+" lights all of them: on this position only the sign, the "1"
+// and the dot have LEDs, so the others light nothing.
 #define SIGN_MINUS 0x02
-#define SIGN_PLUS  (0x02 | 0x04)
+#define SIGN_PLUS  (0x02 | 0x04 | 0x08 | 0x10 | 0x80)
 
 void hal_display_signed(uint8_t value)
 {

@@ -60,12 +60,11 @@
 // subtraction wraps for the pages below).
 #define IS_EXP_PAGE(p)  ((uint8_t)((p) - PAGE_EXP_A) < 2)
 #define IS_SW_PAGE(p)   ((uint8_t)((p) - PAGE_SW1) < 2)
-// The EXP pages' footswitches (user's layout, the same on both): 1 pickup, 4 heel
-// (low), 6 CC, 9 toe (high); as footswitch indexes.
+// The EXP pages' footswitches (user's layout, the same on both): 1 pickup, 2 CC, 3
+// calibration; as footswitch indexes.
 #define PED_PICKUP      0
-#define PED_HEEL        3
-#define PED_CC          5
-#define PED_TOE         8
+#define PED_CC          1
+#define PED_CAL         2
 
 // A relay's follow mask: bits 0-9 are footswitches 1-10, this bit is bank mode (the UP +
 // DOWN toggle, DIRECT SELECT lit).
@@ -81,12 +80,18 @@
 #define CHORD_ACTIVE    1
 #define CHORD_DONE      2
 
-// What the pedal page shows for a calibration footswitch: 1 heel taken ("Lo"), 2 toe
-// taken ("Hi"), 3 range too small ("Er"); 0 none yet.
+// The EXP pages' calibration footswitch (user's design), each press moving on: 0 the
+// pedal's value shown, live; 1 "Lo" flashing, waiting for the heel reading; 2 heel taken
+// (kept in cal_low), "Hi" flashing, waiting for the toe; 3 range too small, "Er" for
+// CAL_ERROR_SHOW_MS, then the value again (the old calibration kept).
 #define CAL_DONE        0
 #define CAL_HEEL        1
 #define CAL_TOE         2
 #define CAL_ERROR       3
+#if CAL_ERROR_SHOW_MS % CHANNEL_DIGIT_FLASH_MS || CAL_ERROR_SHOW_MS / CHANNEL_DIGIT_FLASH_MS < 1 || CAL_ERROR_SHOW_MS / CHANNEL_DIGIT_FLASH_MS > 255
+#error "CAL_ERROR_SHOW_MS must be 1 to 255 times CHANNEL_DIGIT_FLASH_MS"
+#endif
+#define CAL_ERROR_BLINKS (CAL_ERROR_SHOW_MS / CHANNEL_DIGIT_FLASH_MS)
 
 #define NAV_NONE        0xFF
 
@@ -111,10 +116,6 @@
 #define EP_NUM          1
 #define EP_ON           2
 #define EP_OFF          3
-
-// A pedal in the editor chooses the type by thirds of its travel.
-#define EDIT_TYPE_NOTE_FROM  43
-#define EDIT_TYPE_PROG_FROM  86
 
 static const CODE uint8_t stomp_cc[STOMP_COUNT] = { STOMP_CC_LIST };
 // The note banks' notes above their first, footswitch 1 to 10 (NOTE_BANK_SCALE).
@@ -404,9 +405,12 @@ static BIT_T          bank_none_ready;
 // the right-hand dot while a number is entered (user's request) and a flashing Lo / Hi.
 static BIT_T          blink_on;
 static IDATA uint8_t  blink_ticks;
-// EXP pages: a heel or toe footswitch pressed once, its Lo / Hi flashing; the next press
-// takes the reading (user's request).
+// EXP pages: calibration waiting for a reading (cal_step CAL_HEEL or CAL_TOE), its Lo /
+// Hi flashing; the heel reading taken, kept until the toe is good; and the blinks left
+// of a shown "Er".
 static BIT_T          cal_armed;
+static XDATA uint8_t  cal_low;
+static XDATA uint8_t  cal_err_left;
 // A long UP asks which bank to save to (user's request): the bank shown (1 to
 // BANK_COUNT), typed on the footswitches; short UP saves there, short DOWN goes back.
 static BIT_T          save_prompt;
@@ -490,10 +494,14 @@ static IDATA uint8_t  pk_i;
 
 // Relay (SWITCH 1 / 2) triggers, saved per bank: follow masks (one bit per footswitch)
 // and pedal trigger values (index relay * 2 + pedal, 0 = off). relay_out is what the
-// relays are set to now (bit 0 = SWITCH 1).
+// relays are set to now (bit 0 = SWITCH 1). relay_lvl is what the triggers gave at the
+// last tick: a relay only moves when its triggers' result changes (user's request), so a
+// bank change, which takes relay_lvl afresh, leaves the relays as they were.
 static IDATA uint16_t sw_mask[2];
 static IDATA uint8_t  sw_thr[4];
 static IDATA uint8_t  relay_out;
+static IDATA uint8_t  relay_lvl;
+static BIT_T          relay_resync;
 // Scan ticks left of the MIDI CHAN flash for received MIDI (run mode only).
 static IDATA uint8_t  rx_flash;
 // Scan ticks left of the MIDI FUNCTION flash for sent MIDI (run mode only).
@@ -1554,7 +1562,8 @@ static void config_show(void)
 
     // Pages 3 and 4, EXP A / EXP B: the page's EXP LED (NUMBER too in the CC editor),
     // the footswitch last pressed, and its setting: "Pu" pickup or "Ab" immediate
-    // (footswitch 1), the CC (6), or the calibration (4 heel, 9 toe).
+    // (footswitch 1), the CC (2), or the calibration (3): the pedal's value, a flashing
+    // Lo / Hi, or Er.
     if (IS_EXP_PAGE(cfg_page))
     {
         led_aux = bit16((uint8_t)(HAL_LED_EXP_1 + pcc_b));
@@ -1575,7 +1584,11 @@ static void config_show(void)
         {
             hal_display(pedal_cc[pcc_b]);
         }
-        // Armed: Lo / Hi flashing; then steady once taken, or Er.
+        else if (cal_step == CAL_DONE)
+        {
+            hal_display(ctl_scale(last_raw[pcc_b], heel[pcc_b], toe[pcc_b]));
+        }
+        // Armed: Lo / Hi flashing (blank half the time), or Er.
         else if (cal_armed && !blink_on)
         {
             hal_display(0);
@@ -1671,9 +1684,9 @@ static void config_goto_page(uint8_t page)
         cal_step  = CAL_DONE;
         cal_armed = 0;
     }
-    // A SWITCH page (and page 7) takes the next pedal readings as the reference, so only
-    // a pedal that is then moved sets a value; page 7's first digit starts a new number,
-    // and "Pr" shows first.
+    // A SWITCH page takes the next pedal readings as the reference, so only a pedal that
+    // is then moved sets a trigger; page 7's first digit starts a new number, and "Pr"
+    // shows first.
     else if (IS_SW_PAGE(page) || page == PAGE_BANK_PC)
     {
         resync_pedals();
@@ -1940,42 +1953,14 @@ static void edit_digit(uint8_t index)
     edit_set_value(index);
 }
 
-// A pedal in the editor, once moved: its CC value sets the value, or for the type, the
-// first third of its travel chooses CC, the middle note and the last program change.
-static void edit_pedal(uint8_t ch)
-{
-    if (!pedal_moved(ch))
-    {
-        return;
-    }
-
-    edit_typing = 0;
-
-    if (edit_param == EP_TYPE)
-    {
-        ch = (uint8_t)((sent[ch] >= EDIT_TYPE_PROG_FROM) ? MT_PROG :
-                       (sent[ch] >= EDIT_TYPE_NOTE_FROM) ? MT_NOTE : MT_CC);
-
-        if (ch != msg_type(cfg_sel))
-        {
-            edit_set_type(ch);
-        }
-
-        return;
-    }
-
-    edit_set_value(sent[ch]);
-}
-
-// An EXP page's pedal CC editor (footswitch 6, pressed twice): footswitches type the CC as the footswitch
-// editor types a value, a pedal once moved sets it to its CC value, a short UP [ENTER]
-// accepts and a short DOWN [ESCAPE] puts the old CC back, both back to the pedal page.
+// An EXP page's pedal CC editor (footswitch 2, pressed twice): footswitches type the CC
+// as the footswitch editor types a value, a short UP [ENTER] accepts and a short DOWN
+// [ESCAPE] puts the old CC back, both back to the pedal page.
 static void pcc_begin(void)
 {
     pcc_open    = 1;
     edit_typing = 0;
     edit_bak[0] = pedal_cc[pcc_b];
-    resync_pedals();
     config_show();
 }
 
@@ -1989,7 +1974,6 @@ static void pcc_end(uint8_t accept)
 
     pcc_open    = 0;
     edit_typing = 0;
-    resync_pedals();
     config_show();
 }
 
@@ -2001,30 +1985,23 @@ static void pcc_set(uint8_t v)
 }
 
 // A footswitch let go on an EXP page (the CC editor closed), the same on both pages
-// (user's layout): 1 pickup, 4 heel, 6 CC, 9 toe; the others do nothing. A footswitch not
-// yet selected only shows its setting (user's request): pickup or immediate, the CC, or a
-// flashing Lo / Hi. Pressed again it toggles pickup, opens the CC editor, or takes the
-// reading; after a reading the next press flashes again. A reading must be CAL_MIN_SPAN
-// from the other end, or "Er" shows and nothing changes.
+// (user's layout): 1 pickup, 2 CC, 3 calibration; the others do nothing. A footswitch not
+// yet selected only shows its setting (user's request): pickup or immediate, the CC, or
+// the pedal's value. Pressed again, 1 toggles pickup and 2 opens the CC editor; 3 steps
+// through the calibration (user's design): "Lo" flashing, then the heel reading with
+// "Hi" flashing, then the toe reading and the value again. The toe must be CAL_MIN_SPAN
+// from the heel, or "Er" shows for CAL_ERROR_SHOW_MS and the calibration is unchanged.
 static void ped_press(uint8_t index)
 {
-    uint8_t cal = (uint8_t)(index == PED_HEEL || index == PED_TOE);
-
-    if (!cal && index != PED_PICKUP && index != PED_CC)
+    if (index > PED_CAL)
     {
         return;
     }
 
-    if (index != ped_sel || (cal && !cal_armed))
+    if (index != ped_sel)
     {
-        ped_sel   = index;
-        cal_armed = cal;
-
-        if (cal)
-        {
-            cal_step = (index == PED_HEEL) ? CAL_HEEL : CAL_TOE;
-            blink_restart();
-        }
+        ped_sel  = index;
+        cal_step = CAL_DONE;
     }
     else if (index == PED_PICKUP)
     {
@@ -2036,31 +2013,35 @@ static void ped_press(uint8_t index)
         pcc_begin();
         return;
     }
-    else
+    else if (cal_step == CAL_HEEL)
     {
-        cal_armed = 0;
-
-        if (span_of(last_raw[pcc_b], (index == PED_HEEL) ? toe[pcc_b] : heel[pcc_b]) < CAL_MIN_SPAN)
+        cal_low  = last_raw[pcc_b];
+        cal_step = CAL_TOE;
+        blink_restart();
+    }
+    else if (cal_step == CAL_TOE)
+    {
+        if (span_of(last_raw[pcc_b], cal_low) < CAL_MIN_SPAN)
         {
-            cal_step = CAL_ERROR;
+            cal_step     = CAL_ERROR;
+            cal_err_left = CAL_ERROR_BLINKS;
+            blink_restart();
         }
         else
         {
-            if (index == PED_HEEL)
-            {
-                heel[pcc_b] = last_raw[pcc_b];
-                cal_step    = CAL_HEEL;
-            }
-            else
-            {
-                toe[pcc_b] = last_raw[pcc_b];
-                cal_step   = CAL_TOE;
-            }
-
+            heel[pcc_b] = cal_low;
+            toe[pcc_b]  = last_raw[pcc_b];
+            cal_step    = CAL_DONE;
             config_changed();
         }
     }
+    else
+    {
+        cal_step = CAL_HEEL;
+        blink_restart();
+    }
 
+    cal_armed = (uint8_t)(cal_step == CAL_HEEL || cal_step == CAL_TOE);
     config_show();
 }
 
@@ -2617,6 +2598,8 @@ void ctl_init(void)
     chan_digit_pending = 0;
     chan_flash_ticks = 0;
     relay_out     = 0;
+    relay_lvl     = 0;
+    relay_resync  = 0;
     rx_flash      = 0;
     tx_flash      = 0;
     cfg_changed   = 0;
@@ -3340,6 +3323,8 @@ static void midi_job_run(void)
 // its CC or note has a value, takes the state that value gives it (remote_on, as for MIDI
 // IN). No press is kept across the change, so a held switch does nothing on release. The
 // new bank's pedal CCs, responses and relay settings apply from the next reading or tick.
+static uint8_t relays_compute(void);
+
 static void bank_run(void)
 {
     // Static and IDATA: kept out of the directly addressed RAM, and not pushed around each
@@ -3396,6 +3381,10 @@ static void bank_run(void)
         send_program(program);
         show_program();
     }
+
+    // The new bank's relay triggers are only taken: the relays stay as they were.
+    relay_resync = 1;
+    relays_compute();
 }
 
 // A command (in rx_data1). Save and reload run at once, so a command that follows (a dump,
@@ -3700,32 +3689,17 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
             return;
         }
 
-        // In the footswitch editor a pedal sets the parameter; on a SWITCH page it sets
-        // that relay's trigger value. Nothing is sent.
-        if (edit_open)
-        {
-            edit_pedal(channel);
-        }
-        // An EXP page's CC editor: once moved, its CC value is the CC.
-        else if (pcc_open)
-        {
-            if (pedal_moved(channel))
-            {
-                edit_typing = 0;
-                pcc_set(sent[channel]);
-            }
-        }
-        else if (IS_SW_PAGE(cfg_page))
+        // On a SWITCH page a pedal sets that relay's trigger value (it sets no other
+        // value, user's request); on an EXP page with the calibration selected, the
+        // page's pedal shows its value. Nothing is sent.
+        if (IS_SW_PAGE(cfg_page))
         {
             sw_pedal(channel);
         }
-        // Page 7: once moved, its CC value is the bank's program change.
-        else if (cfg_page == PAGE_BANK_PC && pedal_moved(channel))
+        else if (IS_EXP_PAGE(cfg_page) && channel == pcc_b && ped_sel == PED_CAL &&
+                 cal_step == CAL_DONE && !pcc_open)
         {
-            edit_typing = 0;
-            bank_pc = (uint8_t)(sent[channel] + 1);
-            config_changed();
-            show_bank_pc();
+            hal_display(ctl_scale(raw, heel[channel], toe[channel]));
         }
 
         return;
@@ -3798,10 +3772,11 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
     ref_raw[channel] = raw;
 }
 
-// Run mode, every tick: each relay is on if any of its triggers is on (logical OR): a
-// followed footswitch that is on, bank mode if followed, or a pedal at or above its
-// trigger value (the last CC value sent). Until a pedal has a value again (after start-up
-// or configuration mode), its trigger keeps the relay as it was. The SWITCH LEDs follow.
+// Run mode, every tick: each relay's triggers give on if any is on (logical OR): a
+// followed footswitch that is on, or a pedal at or above its trigger value (the last CC
+// value sent); the relay moves only when that result changes. Until a pedal has a value
+// again (after start-up or configuration mode), its trigger keeps the result as it was.
+// The SWITCH LEDs follow.
 // The relay outputs (bit 0 SWITCH 1, bit 1 SWITCH 2) for relays_update. A leaf function,
 // so its locals stay in registers instead of the directly addressed RAM.
 static uint8_t relays_compute(void)
@@ -3823,9 +3798,10 @@ static uint8_t relays_compute(void)
 
         if (sw_thr[i])
         {
+            // No pedal value yet (after start-up or configuration mode): as it was.
             if (sent[i & 1] == NO_VALUE)
             {
-                out |= (uint8_t)(relay_out & bit);
+                out |= (uint8_t)(relay_lvl & bit);
             }
             else if (sent[i & 1] >= sw_thr[i])
             {
@@ -3834,7 +3810,20 @@ static uint8_t relays_compute(void)
         }
     }
 
-    return out;
+    // Only the relays whose triggers' result changed move (user's request); after a bank
+    // change the new bank's result is only taken (relay_resync), moving nothing.
+    if (relay_resync)
+    {
+        relay_resync = 0;
+        relay_lvl    = out;
+
+        return relay_out;
+    }
+
+    bit       = (uint8_t)((relay_out ^ out) & (relay_lvl ^ out));
+    relay_lvl = out;
+
+    return (uint8_t)(relay_out ^ bit);
 }
 
 static void relays_update(void)
@@ -3952,6 +3941,13 @@ void ctl_tick(void)
         {
             blink_ticks = 0;
             blink_on    = !blink_on;
+
+            // An "Er" from the calibration shows for CAL_ERROR_SHOW_MS, then the value.
+            if (IS_EXP_PAGE(cfg_page) && cal_step == CAL_ERROR && !pcc_open && --cal_err_left == 0)
+            {
+                cal_step = CAL_DONE;
+                config_show();
+            }
 
             if ((save_prompt || (IS_EXP_PAGE(cfg_page) && cal_armed && !pcc_open)))
             {

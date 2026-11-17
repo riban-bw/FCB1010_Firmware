@@ -3,10 +3,9 @@
 
 #include "platform.h"
 
-// Firmware version: major and minor in decimal, 0-99 (shown in decimal, user's request;
-// the build number is shown in hex).
+// Firmware version: major and minor in decimal, 0-99 (the build number is shown in hex).
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 3
+#define FW_VERSION_MINOR 4
 
 #if FW_VERSION_MAJOR > 99 || FW_VERSION_MINOR > 99
 #error FW_VERSION_MAJOR and FW_VERSION_MINOR must be 0-99
