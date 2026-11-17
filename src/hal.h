@@ -78,10 +78,10 @@ void    hal_display(uint8_t value);
 #define HAL_TEXT_CC             (HAL_TEXT_SCROLL + HAL_TEXT_SCROLL_FRAMES)
 #define HAL_TEXT_NOTE           (HAL_TEXT_CC + 1)
 #define HAL_TEXT_PROG           (HAL_TEXT_CC + 2)
-// "--": no value (page 7, a bank with no program change).
+// "--": no value (page 5, a bank with no program change).
 #define HAL_TEXT_DASHES         (HAL_TEXT_CC + 3)
-// "PU": the pedal pickup page.
-#define HAL_TEXT_PICKUP         (HAL_TEXT_CC + 4)
+// "Ab": an expression pedal in immediate (absolute) mode, on the pedal page.
+#define HAL_TEXT_ABS            (HAL_TEXT_CC + 4)
 // The footswitch pedal modes (page 1), mode 0-3: "St" (stomp), "+St" (stomp with
 // momentary), "Pu" (momentary, push), "-Pu" (inverted momentary), the sign on the
 // leftmost position.

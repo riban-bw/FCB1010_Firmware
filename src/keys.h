@@ -5,8 +5,8 @@
 #include "config.h"
 
 // Key-event detection (debounce, hold threshold, event queue), shared by the firmware,
-// the host tests and the browser emulator. The firmware expands KEY_SCAN inside the timer
-// interrupt in hw.c; keys.c wraps the same macros as functions for the host and the emulator.
+// the host tests and the browser editor. The firmware expands KEY_SCAN inside the timer
+// interrupt in hw.c; keys.c wraps the same macros as functions for the host and the editor.
 // It is a macro rather than a function so the 8051 interrupt makes no call: a call from the
 // interrupt makes SDCC save every register, and the stack has only about 18 bytes spare.
 
@@ -93,7 +93,7 @@
         (hist)[idx] = h_;                                                      \
     } while (0)
 
-// Function form in keys.c, for the host tests and the emulator (not linked into the firmware).
+// Function form in keys.c, for the host tests and the editor (not linked into the firmware).
 // keys_scan is one scan tick: bit n of pressed is 1 while key code n is held down.
 void    keys_init(void);
 void    keys_scan(uint16_t pressed);

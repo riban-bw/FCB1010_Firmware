@@ -37,7 +37,7 @@ jobs:
             exit 1
           fi
 
-      # Firmware images, host tests, emulator (WebAssembly build and smoke test) and the
+      # Firmware images, host tests, editor (WebAssembly build and smoke test) and the
       # uCsim simulator scenarios.
       - name: Build and run every test
         run: make check

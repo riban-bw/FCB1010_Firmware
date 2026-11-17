@@ -1,4 +1,4 @@
-// Host-side tests for the key-event detection shared by the firmware and emulator
+// Host-side tests for the key-event detection shared by the firmware and editor
 // (src/keys.h macros, via src/keys.c). Build and run with: make test
 
 #include <stdio.h>

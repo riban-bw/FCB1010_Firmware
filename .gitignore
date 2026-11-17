@@ -1,4 +1,4 @@
-# Build output (make, make test, make emulator)
+# Build output (make, make test, make editor)
 /build/
 /onerom/*/build/
 

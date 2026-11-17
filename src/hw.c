@@ -185,7 +185,7 @@ void hal_display(uint8_t value)
 static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
     0x9E, 0x8C, 0x1C, 0xFC, 0x6E, 0x0C,
     0x00, SCROLL_R, SCROLL_R, 0x0C, 0x0C, 0x3E, 0x3E, SCROLL_A, SCROLL_A, 0xEC, 0xEC, 0x00,
-    0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x0A, 0x02, 0x02, 0xCE, 0x7C,
+    0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x0A, 0x02, 0x02, 0xEE, 0x3E,
     0xB6, 0x1E, 0xB6, 0x1E, 0xCE, 0x38, 0xCE, 0x38
 };
 
@@ -314,7 +314,7 @@ static volatile BIT_T lamp_stomps;
 // Scans each key has been down since its debounced press (stops counting at the threshold).
 static XDATA uint8_t hold[KEY_COUNT];
 
-// Debounce, hold and event rules are shared with the host tests and emulator (keys.h).
+// Debounce, hold and event rules are shared with the host tests and editor (keys.h).
 // KEY_SCAN checks the queue has room first.
 #define PUSH_EVENT(e)                                                          \
     do {                                                                       \

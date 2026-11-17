@@ -2,9 +2,9 @@
 
 [Back to the README](../README.md)
 
-**Save to file** in the "Configure over MIDI" panel of the [emulator page](https://riban-bw.github.io/FCB1010_Firmware/emulator/) writes the pedal's settings to a file. Type the file name in the **File** box (default `fcb1010-settings.json`; `.json` is added if the name has no extension). In Chrome, Edge and Opera a save dialog opens, starting with that name, so you can choose the folder and change the name there. Other browsers (Firefox, Safari) download the file under that name, into the downloads folder, or ask where if the browser is set to ask where to save downloads. **Load from file** opens the browser's file chooser and **Load from file** sends a file's settings to the pedal (see [Configuring from a computer](configuration.md#configuring-from-a-computer)). The file is plain JSON, so it can be written or edited by hand or by another program.
+**Save to file** in the "Configure over MIDI" panel of the [editor page](https://riban-bw.github.io/FCB1010_Firmware/editor/) writes the pedal's settings to a file. Type the file name in the **File** box (default `fcb1010-settings.json`; `.json` is added if the name has no extension). In Chrome, Edge and Opera a save dialog opens, starting with that name, so you can choose the folder and change the name there. Other browsers (Firefox, Safari) download the file under that name, into the downloads folder, or ask where if the browser is set to ask where to save downloads. **Load from file** opens the browser's file chooser and **Load from file** sends a file's settings to the pedal (see [Configuring from a computer](configuration.md#configuring-from-a-computer)). The file is plain JSON, so it can be written or edited by hand or by another program.
 
-A file holds the MIDI channel and the settings of one bank (its footswitches, relays, expression pedals and program change): the bank that was in use when it was saved. Loading it fills the bank in use now, so the same file can set up any bank. The pedal calibration is not in the file, since it belongs to one pedal and cannot be set over MIDI.
+A file holds the MIDI channel and the settings of one bank (the editor page's **Copy bank** and **Paste bank** copy the same settings from one bank to another without a file) (its footswitches, relays, expression pedals and program change): the bank that was in use when it was saved. Loading it fills the bank in use now, so the same file can set up any bank. The pedal calibration is not in the file, since it belongs to one pedal and cannot be set over MIDI.
 
 ## Example
 
@@ -40,7 +40,7 @@ The settings out of the box (footswitches 3 to 9 left out here; a real file alwa
 | `channel` | The pedal's MIDI channel, 1 to 16 |
 | `footswitches` | Exactly 10 entries, footswitch 1 first (see below) |
 | `relays` | Exactly 2 entries, SWITCH 1 then SWITCH 2 (see below) |
-| `bankProgram` | The program change (0 to 127) the bank sends when it is chosen with UP / DOWN (configuration page 8), or `null` for none. Optional: a file without it leaves the bank's setting as it is (files saved before it existed, or from firmware without it) |
+| `bankProgram` | The program change (0 to 127) the bank sends when it is chosen with UP / DOWN (configuration page 5), or `null` for none. Optional: a file without it leaves the bank's setting as it is (files saved before it existed, or from firmware without it) |
 | `pedals` | Exactly 2 entries, expression pedal A then pedal B, each with `"response"`, `"immediate"` or `"pickup"` (see [Expression pedals](using.md#expression-pedals)), and `"cc"`, the controller number 0 to 127. Optional: a file without it leaves the pedals as they are; it is left out when the pedal did not report it (older firmware). An entry without `"cc"` leaves that pedal's controller as it is; `"cc"` is left out when the pedal did not report it |
 | `firmware` | The firmware version the settings were read from, as major.minor.build, major and minor in decimal and the build in hex, as the pedal shows it (`"00.03.00"`). Only written when the settings came from a Read of the pedal; ignored when loading |
 

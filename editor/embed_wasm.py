@@ -1,6 +1,6 @@
-# Puts the emulator's WebAssembly module into emulator/index.html as base64, between the
-# wasm:begin and wasm:end markers, so the emulator stays a single self-contained file.
-# Usage: python3 -I emulator/embed_wasm.py build/fcb1010_emu.wasm emulator/index.html
+# Puts the editor's WebAssembly module into editor/index.html as base64, between the
+# wasm:begin and wasm:end markers, so the editor stays a single self-contained file.
+# Usage: python3 -I editor/embed_wasm.py build/fcb1010_emu.wasm editor/index.html
 import base64
 import re
 import sys

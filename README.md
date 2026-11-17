@@ -15,9 +15,9 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 - Follows incoming MIDI, so its LEDs stay in step with your DAW or synth
 - Selectable MIDI channel
 - Simple configuration on the pedal, saved in its memory
-- Or configure it from a computer over MIDI, with a web page (no special software or SysEx)
+- Or configure it from a computer over MIDI, with a web page (no special software or SysEx), which can also copy a bank's settings to another bank
 
-[Try the emulator in your browser](https://riban-bw.github.io/FCB1010_Firmware/emulator/). It runs this firmware's own control code, so you can try the footswitches, pedals and configuration pages before flashing a chip. Its on-screen hints explain each control as you use it.
+[Open the editor in your browser](https://riban-bw.github.io/FCB1010_Firmware/editor/). It runs this firmware's own control code, so you can try the footswitches, pedals and configuration pages before flashing a chip, and its "Configure over MIDI" panel sets up a real pedal too. Its on-screen hints explain each control as you use it.
 ## Documentation
 
 For players:

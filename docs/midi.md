@@ -10,8 +10,8 @@ What the pedal sends and receives, and the NRPN messages that configure it.
 |---|---|---|
 | Control change, footswitches | CC 21 to 30 (`STOMP_CC_LIST`), 127 ON, 0 OFF by default; any controller number, ON value and OFF value per switch | A CC on channel 1 with a CC switch's controller number sets that switch: its ON value is ON, its OFF value OFF, and any other value 64 to 127 ON, 0 to 63 OFF |
 | Note on / off, footswitches | Note switches: note on (0x9n) with the ON value as velocity when ON, note off (0x8n) with the OFF value as velocity when OFF | A note on with velocity 1 to 127 sets a note switch with that note ON; a note off, or a note on with velocity 0, sets it OFF |
-| Control change, pedals | CC 7 and CC 11 (`PEDAL_CC_LIST`) by default, any controller per pedal and bank (configuration page 5, parameters 96 and 97), 0 to 127 | Ignored, except that a pickup pedal waits for its controller's value (see [Expression pedals](using.md#expression-pedals)) |
-| Program change | 0 to 127, on release of UP / DOWN; on choosing a footswitch bank that has a program change set (configuration page 8); a program change footswitch sends its ON value as the program when it turns ON and its OFF value when it turns OFF (with both the same, that program on every press) | Ignored |
+| Control change, pedals | CC 7 and CC 11 (`PEDAL_CC_LIST`) by default, any controller per pedal and bank (configuration page 2, parameters 96 and 97), 0 to 127 | Ignored, except that a pickup pedal waits for its controller's value (see [Expression pedals](using.md#expression-pedals)) |
+| Program change | 0 to 127, on release of UP / DOWN; on choosing a footswitch bank that has a program change set (configuration page 5); a program change footswitch sends its ON value as the program when it turns ON and its OFF value when it turns OFF (with both the same, that program on every press) | Ignored |
 | NRPN (CC 99, 98, 6, 38) | Every setting, when asked for a dump | Settings and commands (see [Configuration over MIDI](#configuration-over-midi)) |
 
 - Everything is on one channel: `MIDI_CHANNEL` until a channel is saved in configuration mode.
@@ -44,10 +44,10 @@ Settings travel as NRPN controllers on the pedal's channel, so any MIDI tool can
 | 84, 85 | SWITCH 1 trigger, pedal A, pedal B | 1 to 127, 0 off |
 | 86, 87 | SWITCH 2 trigger, pedal A, pedal B | 1 to 127, 0 off |
 | 88 to 91 | Calibration: heel A, toe A, heel B, toe B (read only) | 0 to 255 raw readings, as CC 6 + CC 38 |
-| 92 | The program change the bank in use sends when it is chosen (configuration page 8) | 0 to 127; setting it also turns it on. Reads 127 while it is off |
+| 92 | The program change the bank in use sends when it is chosen (configuration page 5) | 0 to 127; setting it also turns it on. Reads 127 while it is off |
 | 93 | Whether the bank in use sends that program change | 0 none (`--` on the pedal), 1 on (with the program parameter 92 reads) |
-| 94, 95 | Expression pedal A, pedal B response (configuration page 5) | 0 immediate, 1 pickup |
-| 96, 97 | Expression pedal A, pedal B controller number (configuration page 5) | 0 to 127 |
+| 94, 95 | Expression pedal A, pedal B response (configuration page 2) | 0 immediate, 1 pickup |
+| 96, 97 | Expression pedal A, pedal B controller number (configuration page 2) | 0 to 127 |
 
 - A set takes effect at once but is not saved; command 2 saves everything, as leaving configuration mode does, and command 3 reloads what is saved. Unknown parameters, read-only ones, out-of-range values and values equal to the current one are ignored.
 - A footswitch whose mode or message changes goes to its resting state on the next 2ms tick (as on a save in configuration mode). If it was ON when its message changed, the old message's OFF is sent first (not for a program change).

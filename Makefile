@@ -1,10 +1,10 @@
 # Build the FCB1010 replacement firmware with SDCC (MCS-51) and run host tests.
-#   make           build ROM images in build/, and update the emulator page to match
+#   make           build ROM images in build/, and update the editor page to match
 #                  (skipped with a note if clang is not installed)
 #   make test      compile and run the logic tests on this computer
-#   make emulator  compile ctl.c and keys.c to WebAssembly, embed it in emulator/index.html and
-#                  run the emulator smoke test
-#   make check     every test suite (host, emulator, simulator) without bumping the build
+#   make editor  compile ctl.c and keys.c to WebAssembly, embed it in editor/index.html and
+#                  run the editor smoke test
+#   make check     every test suite (host, editor, simulator) without bumping the build
 #   make BUILD_BUMP=0  build without bumping the build number (for test runs)
 #   make probe     the SRAM probe test images (build/probe_27c*.bin, see probe/sram_probe.c)
 #   make clean
@@ -25,7 +25,7 @@ SDCCFLAGS := -mmcs51 --model-small --std-sdcc99 --iram-size 256 --code-size $(RO
 
 OBJS := $(OUT)/main.rel $(OUT)/hw.rel $(OUT)/ctl.rel
 
-.PHONY: all test emulator check clean FORCE
+.PHONY: all test editor emulator check clean FORCE
 
 # BUILD_BUMP=0 (test runs) links without bumping the build number and leaves a flag, so
 # the next normal make relinks and bumps even if nothing else changed: an image built
@@ -36,11 +36,11 @@ ifeq ($(BUILD_BUMP),1)
 RELINK := $(if $(wildcard $(UNBUMPED)),FORCE)
 endif
 
-# The emulator page embeds its own compiled copy of ctl.c and config.h, so a plain make
+# The editor page embeds its own compiled copy of ctl.c and config.h, so a plain make
 # updates it too (after the firmware, so it shows the same build number). Without clang
 # it is skipped with a note.
 ifneq ($(shell command -v $(WASMCC) 2>/dev/null),)
-EMU_PAGE := $(OUT)/emulator.stamp
+EMU_PAGE := $(OUT)/editor.stamp
 else
 EMU_PAGE := emu-skipped
 endif
@@ -53,7 +53,7 @@ all: $(ROMS) $(EMU_PAGE)
 
 .PHONY: emu-skipped
 emu-skipped:
-	@echo "note: $(WASMCC) not found, emulator/index.html not updated (see make emulator)"
+	@echo "note: $(WASMCC) not found, editor/index.html not updated (see make editor)"
 
 $(OUT):
 	mkdir -p $(OUT)
@@ -145,28 +145,31 @@ $(OUT)/test_ctl: test/test_ctl.c src/ctl.c src/version.c src/version_build.inc s
 $(OUT)/test_keys: test/test_keys.c src/keys.c src/*.h | $(OUT)
 	$(HOSTCC) -std=c99 -Wall -Wextra -Isrc test/test_keys.c -o $@
 
-# The browser emulator runs the firmware's own ctl.c and keys.c, compiled to WebAssembly with
-# emulator/emu.c standing in for hw.c and main.c. Needs clang with the wasm32 target and lld.
+# The browser editor runs the firmware's own ctl.c and keys.c, compiled to WebAssembly with
+# editor/emu.c standing in for hw.c and main.c. Needs clang with the wasm32 target and lld.
 WASMFLAGS := --target=wasm32 -O2 -std=c99 -Wall -Wextra -ffreestanding -nostdlib -DCTL_INSPECT -Isrc \
              -Wl,--no-entry -Wl,--strip-all
 
-$(OUT)/fcb1010_emu.wasm: emulator/emu.c src/ctl.c src/keys.c src/version.c src/version_build.inc src/*.h | $(OUT)
-	$(WASMCC) $(WASMFLAGS) emulator/emu.c src/ctl.c src/keys.c src/version.c -o $@
+$(OUT)/fcb1010_emu.wasm: editor/emu.c src/ctl.c src/keys.c src/version.c src/version_build.inc src/*.h | $(OUT)
+	$(WASMCC) $(WASMFLAGS) editor/emu.c src/ctl.c src/keys.c src/version.c -o $@
 
 # Embed the WebAssembly in the page whenever it was rebuilt (the stamp records when).
-$(OUT)/emulator.stamp: $(OUT)/fcb1010_emu.wasm
-	python3 -I emulator/embed_wasm.py $< emulator/index.html
+$(OUT)/editor.stamp: $(OUT)/fcb1010_emu.wasm
+	python3 -I editor/embed_wasm.py $< editor/index.html
 	touch $@
 
-emulator: $(OUT)/emulator.stamp
-	node test/emu_smoke.mjs emulator/index.html
+# make emulator is the old name of make editor.
+emulator: editor
+
+editor: $(OUT)/editor.stamp
+	node test/emu_smoke.mjs editor/index.html
 
 # All test suites, building without bumping the build number. The simulator scenarios
 # need s51 (sdcc-ucsim) on PATH; without it they are skipped with a note.
 check:
 	$(MAKE) BUILD_BUMP=0 all
 	$(MAKE) test
-	$(MAKE) BUILD_BUMP=0 emulator
+	$(MAKE) BUILD_BUMP=0 editor
 	@if command -v s51 >/dev/null 2>&1; then test/sim_smoke.sh; \
 	 else echo "note: s51 not found, simulator scenarios skipped (install sdcc-ucsim)"; fi
 

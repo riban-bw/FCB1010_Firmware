@@ -41,7 +41,7 @@ void    ctl_pedal_sample(uint8_t channel, uint8_t raw);
 uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 
 #ifdef CTL_INSPECT
-// Emulator-only state readout (see the end of ctl.c). Mode: 0 run, 1 config. Page: 0 pedal modes,
+// Editor-only state readout (see the end of ctl.c). Mode: 0 run, 1 config. Page: 0 pedal modes,
 // 1 channel, 2 heel calibration, 3 toe calibration, 4 / 5 SWITCH 1 / 2, 6 bank program
 // change, 7 pedal pickup, 8 version (lamp test). Calibration step: 0 reading
 // taken, 1 heel ("Lo"), 2 toe ("Hi"), 3 error ("Er"). A sent value of 255
@@ -69,10 +69,10 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 // The bank's program change: 0 none, else the program + 1 (after the ten pedal modes).
 #define CTL_INSPECT_BANK_PC        30
 // Bit 0: program mode (DIRECT SELECT lit); bit 1: a program number being typed (run mode)
-// or page 7's "--" after footswitch 10 (config mode).
+// or page 5's "--" after footswitch 10 (config mode).
 #define CTL_INSPECT_PC_MODE        31
 // Relay trigger values at 32 + relay * 2 + pedal; follow masks at 36 + relay * 2 (low
-// byte) and 37 + relay * 2 (high byte; bit 2 is bank mode). Pages 4 and 5 are SWITCH 1 / 2.
+// byte) and 37 + relay * 2 (high byte). Pages 3 and 4 are SWITCH 1 / 2.
 #define CTL_INSPECT_SW_THR         32
 #define CTL_INSPECT_SW_MASK        36
 // Footswitch messages: the 30 bytes of msg[], three per switch: number (bit 7 = type
@@ -80,9 +80,11 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 #define CTL_INSPECT_MSG            40
 // Pedal pickup: bits 0-1 pedals A / B in pickup mode, bits 2-3 waiting (not picked up).
 #define CTL_INSPECT_PICKUP         70
-// Pedal A's and B's CCs (71, 72), and page 5's CC editor: bit 0 open, bit 1 pedal B.
+// Pedal A's and B's CCs (71, 72); the pedal page: bit 0 its CC editor open, bit 1 pedal
+// B shown (73), and the footswitch last pressed there (74, 0-9).
 #define CTL_INSPECT_PEDAL_CC       71
 #define CTL_INSPECT_PCC            73
+#define CTL_INSPECT_PED_SEL        74
 
 uint8_t ctl_inspect(uint8_t what);
 #endif

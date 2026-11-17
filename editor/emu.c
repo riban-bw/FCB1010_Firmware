@@ -1,8 +1,8 @@
-// Browser emulator hardware layer, compiled to WebAssembly together with the firmware's own
+// Browser editor's hardware layer, compiled to WebAssembly together with the firmware's own
 // src/ctl.c (controller behaviour) and src/keys.c (debounce, hold and key events). This file
 // plays the part of hw.c and main.c: the HAL services go to JavaScript imports, and emu_tick
 // runs one 2ms scan tick the way the timer interrupt and main loop do on the pedal.
-// Build with: make emulator
+// Build with: make editor
 
 #include "platform.h"
 #include "config.h"

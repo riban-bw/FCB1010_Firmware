@@ -35,22 +35,20 @@
 #if NOTE_BANK_1 > BANK_COUNT || NOTE_BANK_2 > BANK_COUNT
 #error NOTE_BANK_1 and NOTE_BANK_2 must be 0 (none) or a bank up to BANK_COUNT
 #endif
-#if NOTE_BANK_1_FIRST + 9 > 127 || NOTE_BANK_2_FIRST + 9 > 127
-#error NOTE_BANK_1_FIRST and NOTE_BANK_2_FIRST must leave room for ten notes (up to 118)
+#if NOTE_BANK_1_FIRST > 127 || NOTE_BANK_2_FIRST > 127
+#error NOTE_BANK_1_FIRST and NOTE_BANK_2_FIRST must be notes (0 to 127)
 #endif
 
 // Configuration pages
 #define PAGE_MODES      0
-#define PAGE_CHANNEL    1
-#define PAGE_HEEL       2
-#define PAGE_TOE        3
-#define PAGE_PICKUP     4
-#define PAGE_SW1        5
-#define PAGE_SW2        6
-#define PAGE_BANK_PC    7
-#define PAGE_VERSION    8
-#define PAGE_COUNT      9
-// Pages 5 and 6 (one compare: the subtraction wraps for the pages below).
+#define PAGE_PEDALS     1
+#define PAGE_SW1        2
+#define PAGE_SW2        3
+#define PAGE_BANK_PC    4
+#define PAGE_CHANNEL    5
+#define PAGE_VERSION    6
+#define PAGE_COUNT      7
+// Pages 3 and 4 (one compare: the subtraction wraps for the pages below).
 #define IS_SW_PAGE(p)   ((uint8_t)((p) - PAGE_SW1) < 2)
 
 // A relay's follow mask: bits 0-9 are footswitches 1-10, this bit is bank mode (the UP +
@@ -67,8 +65,8 @@
 #define CHORD_ACTIVE    1
 #define CHORD_DONE      2
 
-// What a calibration page shows: 0 = reading taken, 1 = waiting for the heel
-// reading ("Lo"), 2 = waiting for the toe reading ("Hi"), 3 = range too small ("Er").
+// What the pedal page shows for a calibration footswitch: 1 heel taken ("Lo"), 2 toe
+// taken ("Hi"), 3 range too small ("Er"); 0 none yet.
 #define CAL_DONE        0
 #define CAL_HEEL        1
 #define CAL_TOE         2
@@ -103,6 +101,8 @@
 #define EDIT_TYPE_PROG_FROM  86
 
 static const CODE uint8_t stomp_cc[STOMP_COUNT] = { STOMP_CC_LIST };
+// The note banks' notes above their first, footswitch 1 to 10 (NOTE_BANK_SCALE).
+static const CODE uint8_t note_scale[STOMP_COUNT] = { NOTE_BANK_SCALE };
 // Each bank's pedal settings until it is saved: no program change, then pedal A's and
 // B's CC from PEDAL_CC_LIST with its pickup default in bit 7 (the packed form below).
 #define PCC_A_(a, b)    (a)
@@ -152,6 +152,13 @@ static const CODE uint8_t scroll_dots[HAL_TEXT_SCROLL_FRAMES] = { 0x04, 0x00, 0x
 #error MIDI_RX_FLASH_MS is out of range
 #endif
 
+// Scan ticks the MIDI FUNCTION LED stays lit after a message is sent.
+#define TX_FLASH_TICKS       (MIDI_TX_FLASH_MS / TICK_MS)
+
+#if TX_FLASH_TICKS < 1 || TX_FLASH_TICKS > 255
+#error MIDI_TX_FLASH_MS is out of range
+#endif
+
 // Pedal pickup: the EXP LED's flash half-period at the pickup point, and how long the
 // distance stays on the display after the last move.
 #define PICKUP_FLASH_TICKS   (PEDAL_PICKUP_FLASH_MS / TICK_MS)
@@ -171,7 +178,7 @@ static const CODE uint8_t scroll_dots[HAL_TEXT_SCROLL_FRAMES] = { 0x04, 0x00, 0x
 #error CONFIG_CHANGED_FLASH_MS is out of range
 #endif
 
-// Page 8 runs in 50ms steps, in ten segments, one per footswitch (user's design), each
+// Page 7 runs in 50ms steps, in ten segments, one per footswitch (user's design), each
 // shown from its start by a footswitch press:
 //   0-4  the scroll frames " r", "ri", "ib", "ba", "an" (VER_SCROLL_STEPS each)
 //   5    "n ", then the trailing dot running off (VER_TAIL_FRAMES more frames)
@@ -180,6 +187,13 @@ static const CODE uint8_t scroll_dots[HAL_TEXT_SCROLL_FRAMES] = { 0x04, 0x00, 0x
 // then the scroll again. Every LED is lit throughout.
 #define VER_STEP_MS          50
 #define VER_STEP_TICKS       (VER_STEP_MS / TICK_MS)
+// The bank program page shows "Pr" and the program in turn, each for this many steps.
+#define BANK_LABEL_STEPS     (BANK_PC_LABEL_MS / VER_STEP_MS)
+#define BANK_LABEL_ON        0x80
+
+#if BANK_PC_LABEL_MS % VER_STEP_MS != 0 || BANK_LABEL_STEPS < 1 || BANK_LABEL_STEPS > 127
+#error BANK_PC_LABEL_MS must be a multiple of 50, from 50 to 6350
+#endif
 #define VER_ITEM_STEPS       (VERSION_SHOW_MS / VER_STEP_MS)
 #define VER_SCROLL_STEPS     (SCROLL_FRAME_MS / VER_STEP_MS)
 #define VER_TAIL_FRAMES      2
@@ -189,7 +203,7 @@ static const CODE uint8_t scroll_dots[HAL_TEXT_SCROLL_FRAMES] = { 0x04, 0x00, 0x
 #define VER_SCROLL_END       (VER_LAST_TEXT + (1 + VER_TAIL_FRAMES) * VER_SCROLL_STEPS)
 #define VER_BLANK_START      (VER_SCROLL_END + 3 * VER_ITEM_STEPS)
 #define VER_END_STEP         (VER_BLANK_START + VER_ITEM_STEPS + VER_LEAD_FRAMES * VER_SCROLL_STEPS)
-// Power-on and page 8 start at the lead-in.
+// Power-on and page 7 start at the lead-in.
 #define VER_START_STEP       (VER_END_STEP - VER_LEAD_FRAMES * VER_SCROLL_STEPS)
 // At power-on only the lead-in and the scroll run, once, then run mode.
 #define VER_BOOT_END_STEP    VER_SCROLL_END
@@ -201,7 +215,7 @@ static const CODE uint8_t scroll_dots[HAL_TEXT_SCROLL_FRAMES] = { 0x04, 0x00, 0x
 #define VER_FLASH_STEPS      ((VER_SCROLL_STEPS + 1) / 2)
 
 #if VER_SEGMENTS != STOMP_COUNT
-#error page 8 needs one segment per footswitch
+#error page 7 needs one segment per footswitch
 #endif
 
 #if VER_STEP_TICKS < 1 || VER_STEP_TICKS > 255 || VER_SCROLL_STEPS < 2 || \
@@ -273,9 +287,9 @@ static BIT_T          cfg_check_due;
 // was a press of the selected switch, which changes its mode on release.
 static BIT_T          mode_press_live;
 static BIT_T          mode_cycle_pending;
-// Page 5: the pedal whose footswitch (1 A, 2 B) was pressed (a tap toggles its pickup
-// mode, a hold opens its CC editor), and that editor open. The CC when it opened is kept
-// in edit_bak[0]; edit_typing is shared with the footswitch editor.
+// Page 2: the pedal of the footswitch last pressed (0 A, 1 B), and its CC editor open
+// (footswitch 6 / 7). The CC when it opened is kept in edit_bak[0]; edit_typing is shared
+// with the footswitch editor.
 static BIT_T          pcc_b;
 static BIT_T          pcc_open;
 
@@ -368,7 +382,7 @@ static IDATA uint8_t  pc_entry;
 // The right-hand dot flashes while a number is being typed (user's request); this is
 // whether it is shown. Its timer is chan_flash_ticks, idle in run mode once power-on ends.
 static BIT_T          pc_dot;
-// Page 7: footswitch 10 pressed with no number being typed; its release starts "--".
+// Page 5: footswitch 10 pressed with no number being typed; its release starts "--".
 static BIT_T          bank_none_ready;
 #define PC_ENTRY_NONE 0xFF
 #define PC_SHOWN_MAX  (127 + DISPLAY_PROGRAM_OFFSET)
@@ -397,13 +411,16 @@ static IDATA uint8_t  chan_flash_ticks;
 // The flash count lives in cal_step: one is only used on the channel page and the
 // other only on the calibration pages, so they share a byte.
 #define chan_flash_count cal_step
-// Page 8 reuses both: ticks into the current step, and the step number.
+// Page 7 reuses both: ticks into the current step, and the step number.
 #define ver_ticks chan_flash_ticks
 #define ver_step  cal_step
 // The footswitch editor's parameter: only open on page 1, where neither is used.
 #define edit_param chan_flash_ticks
-// A heel reading was taken on page 3 (in ref_raw) and waits for a toe reading.
-static BIT_T          cal_heel_taken;
+// Page 2: the footswitch last pressed, whose setting the display shows.
+#define ped_sel chan_flash_ticks
+// Page 5 shows "Pr" and the program in turn: steps into the current one (cal_step bits
+// 0-6, with ticks in chan_flash_ticks), and BANK_LABEL_ON while "Pr" shows.
+#define bank_label cal_step
 
 // Calibrated pedal end points, indexed by pedal channel.
 static IDATA uint8_t  heel[2];
@@ -414,9 +431,9 @@ static IDATA uint8_t  last_raw[2];
 static IDATA uint8_t  sent[2];
 static IDATA uint8_t  ref_raw[2];
 // ref_raw is the run-mode pedal reference (set again from the first reading after
-// configuration mode) and the calibration heel reading kept from page 3 for page 4.
+// configuration mode).
 
-// The expression pedals' CCs (pedal A, B), set per bank (page 5, NRPN 96 / 97).
+// The expression pedals' CCs (pedal A, B), set per bank (page 2, NRPN 96 / 97).
 static IDATA uint8_t  pedal_cc[2];
 
 // Expression pedal pickup (user's request). pk_mask: bit 0 pedal A, bit 1 pedal B in
@@ -452,13 +469,15 @@ static IDATA uint8_t  sw_thr[4];
 static IDATA uint8_t  relay_out;
 // Scan ticks left of the MIDI CHAN flash for received MIDI (run mode only).
 static IDATA uint8_t  rx_flash;
+// Scan ticks left of the MIDI FUNCTION flash for sent MIDI (run mode only).
+static IDATA uint8_t  tx_flash;
 // Config mode: a setting has been changed since entry (the CONFIG LED flashes), and
 // the LED is in its dark half. The flash timer reuses rx_flash, which is run mode only.
 static BIT_T          cfg_changed;
 static BIT_T          cfg_led_dark;
 // The power-on lamp test and version are running (run mode; uses ver_step / ver_ticks).
 static BIT_T          boot_anim;
-// Page 8 is held on one segment while its footswitch is down.
+// Page 7 is held on one segment while its footswitch is down.
 static BIT_T          ver_paused;
 #define cfg_flash_ticks rx_flash
 
@@ -596,19 +615,19 @@ static void rec_read(void)
             hal_rec[0] = (uint8_t)(MT_CC | (DEFAULT_PEDAL_MODE << 2));
             hal_rec[1] = stomp_cc[rec_n];
             hal_rec[2] = 127;
-            // The note banks: momentary notes, one note higher per switch.
+            // The note banks: momentary notes, NOTE_BANK_SCALE above the first.
 #if NOTE_BANK_1 > 0
             if (hal_bank == NOTE_BANK_1 - 1)
             {
                 hal_rec[0] = (uint8_t)(MT_NOTE | (PM_MOMENTARY << 2));
-                hal_rec[1] = (uint8_t)(NOTE_BANK_1_FIRST + rec_n);
+                hal_rec[1] = (uint8_t)((NOTE_BANK_1_FIRST + note_scale[rec_n]) & 0x7F);
             }
 #endif
 #if NOTE_BANK_2 > 0
             if (hal_bank == NOTE_BANK_2 - 1)
             {
                 hal_rec[0] = (uint8_t)(MT_NOTE | (PM_MOMENTARY << 2));
-                hal_rec[1] = (uint8_t)(NOTE_BANK_2_FIRST + rec_n);
+                hal_rec[1] = (uint8_t)((NOTE_BANK_2_FIRST + note_scale[rec_n]) & 0x7F);
             }
 #endif
             q = bank_def[rec_n >> 2];
@@ -781,6 +800,7 @@ static void config_changed(void)
 
 static void send_cc(uint8_t cc, uint8_t value)
 {
+    tx_flash = TX_FLASH_TICKS;
     hal_midi_tx((uint8_t)(0xB0 | (midi_channel - 1)));
     hal_midi_tx((uint8_t)(cc & 0x7F));
     hal_midi_tx((uint8_t)(value & 0x7F));
@@ -788,6 +808,7 @@ static void send_cc(uint8_t cc, uint8_t value)
 
 static void send_program(uint8_t value)
 {
+    tx_flash = TX_FLASH_TICKS;
     hal_midi_tx((uint8_t)(0xC0 | (midi_channel - 1)));
     hal_midi_tx((uint8_t)(value & 0x7F));
 }
@@ -905,6 +926,7 @@ static void send_switch(uint8_t index, uint8_t on)
         return;
     }
 
+    tx_flash = TX_FLASH_TICKS;
     hal_midi_tx((uint8_t)(((msg_type(index) == MT_NOTE) ? (on ? 0x90 : 0x80) : 0xB0) | (midi_channel - 1)));
     hal_midi_tx(msg_field(index, 0));
     hal_midi_tx(msg_field(index, (uint8_t)(on ? 1 : 2)));
@@ -1154,30 +1176,13 @@ static void show_leds(void)
     show_stomp_leds();
 }
 
-// Calibration page on the display: "Lo" heel, "Hi" toe, 0 taken, "Er" error.
-static void show_cal_step(void)
-{
-    if (cal_step == CAL_HEEL)
-    {
-        hal_display_text(HAL_TEXT_LO);
-    }
-    else if (cal_step == CAL_TOE)
-    {
-        hal_display_text(HAL_TEXT_HI);
-    }
-    else if (cal_step == CAL_ERROR)
-    {
-        hal_display_text(HAL_TEXT_ER);
-    }
-    else
-    {
-        hal_display(0);
-    }
-}
-
-// Page 7: the bank's program change, or "--" for none.
+// Page 5: the bank's program change, or "--" for none, for BANK_LABEL_STEPS before "Pr"
+// shows again (user's request).
 static void show_bank_pc(void)
 {
+    chan_flash_ticks = 0;
+    bank_label       = 0;
+
     if (bank_pc != 0)
     {
         hal_display(BANK_PC_PROGRAM);
@@ -1188,7 +1193,45 @@ static void show_bank_pc(void)
     }
 }
 
-// A footswitch on page 7 types a digit of the program (switches 1-9 type 1-9, switch 10
+// Page 5, each tick while no "--" entry is open: "Pr" and the program in turn.
+static void bank_label_tick(void)
+{
+    if (++chan_flash_ticks < VER_STEP_TICKS)
+    {
+        return;
+    }
+
+    chan_flash_ticks = 0;
+
+    if ((uint8_t)(++bank_label & ~BANK_LABEL_ON) < BANK_LABEL_STEPS)
+    {
+        return;
+    }
+
+    if (bank_label & BANK_LABEL_ON)
+    {
+        show_bank_pc();
+    }
+    else
+    {
+        bank_label = BANK_LABEL_ON;
+        hal_display_text(HAL_TEXT_PROG);
+    }
+}
+
+// Page 2: the pedal of footswitch i (user's layout: 1 and 2 pickup, 4 and 5 heel, 6 and 7
+// CC, 9 and 10 toe, pedal A on the left of each pair). A leaf.
+static uint8_t ped_of(uint8_t i)
+{
+    if (i >= 5)
+    {
+        i -= 5;
+    }
+
+    return (uint8_t)((i == 1 || i == 4) ? 1 : 0);
+}
+
+// A footswitch on page 5 types a digit of the program (switches 1-9 type 1-9, switch 10
 // types 0), as in the footswitch editor: added to the number being typed while that
 // stays within 127, otherwise starting a new one. A leaf, so its locals cost no fixed RAM.
 static void bank_pc_digit(uint8_t index)
@@ -1220,14 +1263,14 @@ static uint8_t bcd_of(uint8_t v)
     return (uint8_t)(t | v);
 }
 
-// Page 8 (and power-on), the current step: every LED lit, and the "riban" frame or
+// Page 7 (and power-on), the current step: every LED lit, and the "riban" frame or
 // version part that starts at this step (other steps leave the display as it is).
 static void version_show(void)
 {
     uint8_t s = ver_step;
     uint8_t g;
 
-    // Page 8: every LED stays lit throughout, the footswitch LEDs marking the segments.
+    // Page 7: every LED stays lit throughout, the footswitch LEDs marking the segments.
     // Power-on: every LED lit for VER_BOOT_LAMP_STEPS from the lead-in (it starts at
     // VER_START_STEP and wraps to 0), then the normal LEDs (run mode's).
     if (!boot_anim)
@@ -1267,7 +1310,7 @@ static void version_show(void)
         s = (uint8_t)(s - VER_BLANK_START);
     }
 
-    // Page 8 (not power-on): segment g's footswitch LED goes dark at its start (the one
+    // Page 7 (not power-on): segment g's footswitch LED goes dark at its start (the one
     // before lights again), then lights after VER_FLASH_STEPS.
     if (!boot_anim)
     {
@@ -1353,7 +1396,7 @@ static void boot_end(void)
     show_program();
 }
 
-// Page 8: footswitch index (0-9) jumps to its segment, held there until released.
+// Page 7: footswitch index (0-9) jumps to its segment, held there until released.
 // Every footswitch LED lights; version_show then darkens this one.
 static void version_jump(uint8_t index)
 {
@@ -1368,7 +1411,7 @@ static void version_jump(uint8_t index)
     version_show();
 }
 
-// Every scan tick on page 8: move to the next step, looping over the version parts
+// Every scan tick on page 7: move to the next step, looping over the version parts
 static void version_tick(void)
 {
     // Held by a footswitch: no steps until it is released.
@@ -1439,7 +1482,7 @@ static void config_show(void)
     led_aux   = 0;
     led_stomp = 0;
 
-    // Page 9: no page LED; footswitch LEDs lit (the first segment's, switch 1, then goes
+    // Page 7: no page LED; footswitch LEDs lit (the first segment's, switch 1, then goes
     // dark), display blank under the version, with every LED lit.
     if (cfg_page == PAGE_VERSION)
     {
@@ -1451,33 +1494,54 @@ static void config_show(void)
         return;
     }
 
-    // Page 5, the pedals: "PU", and EXP 1 / EXP 2 and footswitch 1 / 2 lit for the pedals
-    // in pickup mode. With a pedal's CC editor open: that pedal's EXP LED, its footswitch
-    // LED and NUMBER lit, and the CC on the display.
-    if (cfg_page == PAGE_PICKUP)
+    // Page 2, the pedals: the footswitch last pressed and its pedal's EXP LED lit (NUMBER
+    // too in the CC editor), and its setting: "Pu" pickup or "Ab" immediate (footswitches
+    // 1 / 2), the CC (6 / 7), or the calibration result (4, 5, 9, 10).
+    if (cfg_page == PAGE_PEDALS)
     {
+        led_aux = bit16((uint8_t)(HAL_LED_EXP_1 + pcc_b));
+
         if (pcc_open)
         {
-            led_aux   = (uint16_t)(LED_BIT(HAL_LED_NUMBER) | bit16((uint8_t)(HAL_LED_EXP_1 + pcc_b)));
-            led_stomp = (uint16_t)(pcc_b ? 2 : 1);
-            show_leds();
-            hal_display(pedal_cc[pcc_b]);
-            return;
+            led_aux |= LED_BIT(HAL_LED_NUMBER);
         }
 
-        led_aux   = (uint16_t)((uint16_t)pk_mask << HAL_LED_EXP_1);
-        led_stomp = pk_mask;
+        led_stomp = bit16(ped_sel);
         show_leds();
-        hal_display_text(HAL_TEXT_PICKUP);
+
+        if (ped_sel < 2)
+        {
+            hal_display_text((uint8_t)(((pk_mask >> pcc_b) & 1) ? HAL_TEXT_MODE + PM_MOMENTARY : HAL_TEXT_ABS));
+        }
+        else if (ped_sel == 5 || ped_sel == 6)
+        {
+            hal_display(pedal_cc[pcc_b]);
+        }
+        else
+        {
+            hal_display_text((uint8_t)((cal_step == CAL_HEEL) ? HAL_TEXT_LO :
+                                       (cal_step == CAL_TOE) ? HAL_TEXT_HI : HAL_TEXT_ER));
+        }
+
         return;
     }
 
-    // Page 8, the bank's program change: DIRECT SELECT lit, the program or "--" (none).
+    // Page 5, the bank's program change: DIRECT SELECT lit, "Pr" and the program or "--"
+    // (none) in turn.
     if (cfg_page == PAGE_BANK_PC)
     {
         led_aux = LED_BIT(HAL_LED_DIRECT_SELECT);
         show_leds();
-        show_bank_pc();
+
+        if (bank_label & BANK_LABEL_ON)
+        {
+            hal_display_text(HAL_TEXT_PROG);
+        }
+        else
+        {
+            show_bank_pc();
+        }
+
         return;
     }
 
@@ -1506,8 +1570,7 @@ static void config_show(void)
         return;
     }
 
-    // Pages 1-4: MIDI FUNCTION (the selected footswitch's LED lit too), MIDI CHANNEL, then
-    // both EXP pedal LEDs on the two calibration pages.
+    // Page 1: MIDI FUNCTION (the selected footswitch's LED lit too); page 6: MIDI CHANNEL.
     if (cfg_page == PAGE_MODES)
     {
         led_aux   = LED_BIT(HAL_LED_MIDI_FUNC);
@@ -1517,17 +1580,11 @@ static void config_show(void)
         // momentary (push), "-Pu" inverted momentary (user's request).
         hal_display_text((uint8_t)(HAL_TEXT_MODE + pedal_mode_get(cfg_sel)));
     }
-    else if (cfg_page == PAGE_CHANNEL)
+    else
     {
         led_aux = LED_BIT(HAL_LED_MIDI_CHAN);
         show_leds();
         hal_display(midi_channel);
-    }
-    else
-    {
-        led_aux = (uint16_t)(LED_BIT(HAL_LED_EXP_1) | LED_BIT(HAL_LED_EXP_2));
-        show_leds();
-        show_cal_step();
     }
 }
 
@@ -1538,27 +1595,29 @@ static void config_goto_page(uint8_t page)
     ver_paused = 0;
     mode_press_live = 0;
     mode_cycle_pending = 0;
-    // Leaving page 8 (or restarting it): normal LEDs again and no dots.
+    // Leaving page 7 (or restarting it): normal LEDs again and no dots.
     hal_lamp_test(HAL_LAMP_NORMAL);
     hal_display_dots(0);
 
-    if (page == PAGE_HEEL)
+    // The pedal page starts on footswitch 1, pedal A's response (user's request).
+    if (page == PAGE_PEDALS)
     {
-        cal_step = CAL_HEEL;
+        ped_sel  = 0;
+        pcc_b    = 0;
+        cal_step = CAL_DONE;
     }
-    else if (page == PAGE_TOE)
-    {
-        cal_step = CAL_TOE;
-    }
-    // A SWITCH page (and page 7) takes the next pedal readings as the reference, so only
-    // a pedal that is then moved sets a value; page 7's first digit starts a new number.
+    // A SWITCH page (and page 5) takes the next pedal readings as the reference, so only
+    // a pedal that is then moved sets a value; page 5's first digit starts a new number,
+    // and "Pr" shows first.
     else if (IS_SW_PAGE(page) || page == PAGE_BANK_PC)
     {
         resync_pedals();
         edit_typing = 0;
         pc_typing   = 0;
+        bank_label  = BANK_LABEL_ON;
+        chan_flash_ticks = 0;
     }
-    // Page 8 starts with the "riban" scroll's lead-in.
+    // Page 7 starts with the "riban" scroll's lead-in.
     else if (page == PAGE_VERSION)
     {
         ver_step  = VER_START_STEP;
@@ -1571,47 +1630,6 @@ static void config_goto_page(uint8_t page)
 static uint8_t span_of(uint8_t a, uint8_t b)
 {
     return (uint8_t)((a > b) ? a - b : b - a);
-}
-
-// Footswitch on a calibration page. Page 3 stores the heel reading. Page 4 takes the
-// toe reading and checks it against that heel (or the current heel if page 3 was not
-// used): both pedals must move CAL_MIN_SPAN, or "Er" shows and nothing changes. A
-// heel reading with no toe reading is discarded.
-static void calibration_take(void)
-{
-    if (cfg_page == PAGE_HEEL)
-    {
-        ref_raw[0] = last_raw[0];
-        ref_raw[1] = last_raw[1];
-        cal_heel_taken = 1;
-        cal_step = CAL_DONE;
-    }
-    else
-    {
-        if (!cal_heel_taken)
-        {
-            ref_raw[0] = heel[0];
-            ref_raw[1] = heel[1];
-        }
-
-        if (span_of(last_raw[0], ref_raw[0]) < CAL_MIN_SPAN ||
-            span_of(last_raw[1], ref_raw[1]) < CAL_MIN_SPAN)
-        {
-            cal_step = CAL_ERROR;
-        }
-        else
-        {
-            heel[0] = ref_raw[0];
-            heel[1] = ref_raw[1];
-            toe[0]  = last_raw[0];
-            toe[1]  = last_raw[1];
-            cal_heel_taken = 0;
-            cal_step = CAL_DONE;
-            config_changed();
-        }
-    }
-
-    show_cal_step();
 }
 
 // Short UP or DOWN in configuration mode: The next or previous page, not wrapping.
@@ -1747,7 +1765,6 @@ static uint8_t edit_bytes(uint8_t how)
 // Open the editor for footswitch cfg_sel (a long press on the modes page), on its type.
 static void edit_begin(void)
 {
-    cal_heel_taken = 0;
     edit_open   = 1;
     edit_param  = EP_TYPE;
     edit_typing = 0;
@@ -1756,12 +1773,15 @@ static void edit_begin(void)
     edit_show();
 }
 
-// Close the editor: accept = 1 (a long UP [ENTER], or leaving configuration mode with a
-// save) keeps the new message, 0 (a long DOWN [ESCAPE]) puts the old one back. Like a mode
-// change, a changed message puts the switch in its mode's resting state when configuration
-// mode is saved (cfg_dirty). If the switch is on, the old message's "off" (its CC off
-// value or note off) is sent now, while the old message is still known, and the switch is
-// off (a program change sends nothing).
+// Short UP [ENTER] or DOWN [ESCAPE] in the editor (user's request: short presses, not
+// long). DOWN puts the shown parameter back as it was when it was shown and closes the
+// editor. UP keeps it and goes on to the next parameter (a program change has no number:
+// its programs are the on and off values); after the off value it closes the editor.
+// Leaving configuration mode with a save keeps everything (edit_param set to EP_OFF
+// first). Like a mode change, a changed message puts the switch in its mode's resting
+// state when configuration mode is saved (cfg_dirty). If the switch is on, the old
+// message's "off" (its CC off value or note off) is sent now, while the old message is
+// still known, and the switch is off (a program change sends nothing).
 static void edit_end(uint8_t accept)
 {
     if (!accept)
@@ -1789,43 +1809,25 @@ static void edit_end(uint8_t accept)
         }
     }
 
-    edit_open   = 0;
     edit_typing = 0;
     resync_pedals();
-    config_show();
-}
 
-// Short UP / DOWN in the editor: the next / previous parameter, not wrapping. A program
-// change has no number (its programs are the on and off values), so it is skipped.
-static void edit_step(uint8_t code)
-{
-    if (code == CTL_KEY_UP)
+    if (accept && edit_param != EP_OFF)
     {
-        if (edit_param == EP_OFF)
-        {
-            return;
-        }
-
+        edit_copy();
         edit_param++;
-    }
-    else
-    {
-        if (edit_param == EP_TYPE)
+
+        if (edit_param == EP_NUM && msg_type(cfg_sel) == MT_PROG)
         {
-            return;
+            edit_param = EP_ON;
         }
 
-        edit_param--;
+        edit_show();
+        return;
     }
 
-    if (edit_param == EP_NUM && msg_type(cfg_sel) == MT_PROG)
-    {
-        edit_param = (code == CTL_KEY_UP) ? EP_ON : EP_TYPE;
-    }
-
-    edit_typing = 0;
-    resync_pedals();
-    edit_show();
+    edit_open = 0;
+    config_show();
 }
 
 static void edit_set_type(uint8_t t)
@@ -1900,9 +1902,9 @@ static void edit_pedal(uint8_t ch)
     edit_set_value(sent[ch]);
 }
 
-// Page 5's pedal CC editor (a long press of footswitch 1 / 2): footswitches type the
-// CC as the footswitch editor types a value, a pedal once moved sets it to its CC value,
-// a long UP [ENTER] accepts and a long DOWN [ESCAPE] puts the old CC back.
+// Page 2's pedal CC editor (footswitch 6 / 7): footswitches type the CC as the footswitch
+// editor types a value, a pedal once moved sets it to its CC value, a short UP [ENTER]
+// accepts and a short DOWN [ESCAPE] puts the old CC back, both back to the pedal page.
 static void pcc_begin(void)
 {
     pcc_open    = 1;
@@ -1930,6 +1932,53 @@ static void pcc_set(uint8_t v)
 {
     pedal_cc[pcc_b] = v;
     cfg_check_due   = 1;
+    config_show();
+}
+
+// A footswitch let go on the pedal page (the CC editor closed): footswitch 1 / 2 toggles pedal
+// A / B's pickup mode, 6 / 7 opens its CC editor, 4 / 5 takes its heel reading and 9 / 10
+// its toe reading (user's layout). A reading must be CAL_MIN_SPAN from the other end, or
+// "Er" shows and nothing changes. Footswitches 3 and 8 do nothing.
+static void ped_press(uint8_t index)
+{
+    if (index == 2 || index == 7)
+    {
+        return;
+    }
+
+    ped_sel = index;
+    pcc_b   = ped_of(index);
+
+    if (index < 2)
+    {
+        pk_mask ^= (uint8_t)(pcc_b ? 2 : 1);
+        config_changed();
+    }
+    else if (index == 5 || index == 6)
+    {
+        pcc_begin();
+        return;
+    }
+    else if (span_of(last_raw[pcc_b], (index < 5) ? toe[pcc_b] : heel[pcc_b]) < CAL_MIN_SPAN)
+    {
+        cal_step = CAL_ERROR;
+    }
+    else
+    {
+        if (index < 5)
+        {
+            heel[pcc_b] = last_raw[pcc_b];
+            cal_step    = CAL_HEEL;
+        }
+        else
+        {
+            toe[pcc_b] = last_raw[pcc_b];
+            cal_step   = CAL_TOE;
+        }
+
+        config_changed();
+    }
+
     config_show();
 }
 
@@ -2030,9 +2079,9 @@ static void enter_config(void)
     // selected NRPN parameter (nrpn_lsb is cfg_sel).
     cfg_sel   = 0;
     nrpn_msb_ok = 0;
-    cal_heel_taken = 0;
     edit_open = 0;
     pcc_open  = 0;
+    tx_flash  = 0;
     cfg_check_due = 0;
     rx_flash  = 0;
     cfg_changed  = 0;
@@ -2091,16 +2140,17 @@ static void exit_config(uint8_t save)
     // does the pedal CC editor.
     if (edit_open)
     {
+        edit_param = EP_OFF;
         edit_end(1);
     }
 
     pcc_open = 0;
 
-    // Stop a two-digit channel entry that could still take a second digit, and page 7's
+    // Stop a two-digit channel entry that could still take a second digit, and page 5's
     // "--" entry (its dot goes out on the next tick).
     chan_digit_pending = 0;
     pc_typing          = 0;
-    // Leaving from page 8 ends the lamp test and its dots.
+    // Leaving from page 7 ends the lamp test and its dots.
     hal_lamp_test(HAL_LAMP_NORMAL);
     hal_display_dots(0);
 
@@ -2151,12 +2201,16 @@ static void nav_step(uint8_t code)
     {
         program_step(code);
     }
+    // The editors: UP [ENTER] accepts, DOWN [ESCAPE] undoes.
     else if (edit_open)
     {
-        edit_step(code);
+        edit_end((uint8_t)(code == CTL_KEY_UP));
     }
-    // The pedal CC editor has one value: UP / DOWN do nothing.
-    else if (!pcc_open)
+    else if (pcc_open)
+    {
+        pcc_end((uint8_t)(code == CTL_KEY_UP));
+    }
+    else
     {
         config_step(code);
     }
@@ -2287,7 +2341,7 @@ static void nav_key_release(uint8_t code)
         return;
     }
 
-    // Page 7 after footswitch 10 ("--"): UP (ENTER) turns the bank's program change off,
+    // Page 5 after footswitch 10 ("--"): UP (ENTER) turns the bank's program change off,
     // DOWN (ESCAPE) goes back to showing it; neither changes page. Not after a hold.
     if (pc_typing && mode == MODE_CONFIG)
     {
@@ -2413,9 +2467,9 @@ void ctl_init(void)
     cfg_dirty     = 0;
     chan_digit_pending = 0;
     chan_flash_ticks = 0;
-    cal_heel_taken = 0;
     relay_out     = 0;
     rx_flash      = 0;
+    tx_flash      = 0;
     cfg_changed   = 0;
     cfg_led_dark  = 0;
     edit_open     = 0;
@@ -2444,7 +2498,7 @@ void ctl_init(void)
     hal_relays(0);
     show_program();
 
-    // Power-on: every LED lit while "riban" scrolls once (as page 8 starts), then run
+    // Power-on: every LED lit while "riban" scrolls once (as page 7 starts), then run
     // mode. A key press ends it early and then acts as usual.
     boot_anim = 1;
     ver_step  = VER_START_STEP;
@@ -2527,24 +2581,13 @@ void ctl_key_hold(uint8_t code)
     // UP + DOWN chord). Its release then does nothing.
     if (code == CTL_KEY_UP || code == CTL_KEY_DOWN)
     {
-        if (mode == MODE_CONFIG && chord_state == CHORD_NONE && nav_code == code)
+        // In the footswitch and pedal CC editors a long press is a short one: it acts
+        // on release.
+        if (mode == MODE_CONFIG && chord_state == CHORD_NONE && nav_code == code && !edit_open && !pcc_open)
         {
             nav_code      = NAV_NONE;
             nav_repeating = 0;
-
-            // In the footswitch or pedal CC editor they accept or undo its changes instead.
-            if (edit_open)
-            {
-                edit_end((code == CTL_KEY_UP) ? 1 : 0);
-            }
-            else if (pcc_open)
-            {
-                pcc_end((code == CTL_KEY_UP) ? 1 : 0);
-            }
-            else
-            {
-                exit_config((code == CTL_KEY_UP) ? 1 : 0);
-            }
+            exit_config((code == CTL_KEY_UP) ? 1 : 0);
         }
 
         return;
@@ -2559,13 +2602,6 @@ void ctl_key_hold(uint8_t code)
             mode_press_live    = 0;
             mode_cycle_pending = 0;
             edit_begin();
-        }
-        // Page 5: a long press of footswitch 1 / 2 opens that pedal's CC editor.
-        else if (cfg_page == PAGE_PICKUP && !pcc_open && mode_press_live && index == pcc_b && keys_down == 0)
-        {
-            mode_press_live    = 0;
-            mode_cycle_pending = 0;
-            pcc_begin();
         }
 
         return;
@@ -2602,7 +2638,7 @@ void ctl_key_release(uint8_t code)
         return;
     }
 
-    // Page 8: a footswitch release carries on from the segment it held.
+    // Page 7: a footswitch release carries on from the segment it held.
     if (ver_paused && mode == MODE_CONFIG)
     {
         ver_paused = 0;
@@ -2611,7 +2647,7 @@ void ctl_key_release(uint8_t code)
 
     if (mode == MODE_CONFIG)
     {
-        // Page 7: footswitch 10 let go with UP and DOWN up (so "10, then UP", not the two
+        // Page 5: footswitch 10 let go with UP and DOWN up (so "10, then UP", not the two
         // together, which only changes page) shows "--", the right-hand dot flashing: UP
         // then turns the bank's program change off.
         if (bank_none_ready && index == STOMP_COUNT - 1)
@@ -2630,18 +2666,17 @@ void ctl_key_release(uint8_t code)
             return;
         }
 
-        // Page 5: releasing footswitch 1 / 2 after a tap toggles its pedal's pickup mode.
-        if (cfg_page == PAGE_PICKUP)
+        // Page 2: a footswitch pressed and let go with UP and DOWN up (so not the
+        // simulator's UP with switches 6-10, which only changes page).
+        if (cfg_page == PAGE_PEDALS)
         {
-            if (mode_press_live && index == pcc_b)
+            if (mode_press_live && keys_down == 0)
             {
-                mode_press_live    = 0;
-                mode_cycle_pending = 0;
-                pk_mask ^= (uint8_t)(pcc_b ? 2 : 1);
-                config_changed();
-                config_show();
+                mode_press_live = 0;
+                ped_press(index);
             }
 
+            mode_press_live = 0;
             return;
         }
 
@@ -2719,7 +2754,7 @@ void ctl_key_press(uint8_t code)
     if (mode != MODE_RUN)
     {
         // Channel page: types a digit. Modes page: selects a switch, or changes the
-        // selected one's mode. Calibration pages: takes the reading.
+        // selected one's mode.
         if (cfg_page == PAGE_CHANNEL)
         {
             channel_digit(stomp_index(code));
@@ -2744,10 +2779,9 @@ void ctl_key_press(uint8_t code)
             config_changed();
             hal_stomp_led(index, (sw_mask[cfg_page - PAGE_SW1] & bit) ? 1 : 0);
         }
-        // Page 5: footswitch 1 / 2 turns pickup mode on or off for pedal A / B when it is
-        // released after a tap; held, it opens that pedal's CC editor, in which the
-        // footswitches type the CC.
-        else if (cfg_page == PAGE_PICKUP)
+        // Page 2: a digit in the CC editor; otherwise the footswitch acts on its release
+        // (ped_press), if UP and DOWN are up at both ends.
+        else if (cfg_page == PAGE_PEDALS)
         {
             index = stomp_index(code);
 
@@ -2755,22 +2789,20 @@ void ctl_key_press(uint8_t code)
             {
                 pcc_digit(index);
             }
-            else if (index < 2)
+            else
             {
-                pcc_b              = index;
-                mode_press_live    = 1;
-                mode_cycle_pending = 1;
+                mode_press_live = (keys_down == 0) ? 1 : 0;
             }
         }
-        // Page 9: a footswitch shows its segment and holds it until released.
+        // Page 7: a footswitch shows its segment and holds it until released.
         else if (cfg_page == PAGE_VERSION)
         {
             version_jump(stomp_index(code));
         }
-        // Page 7: types a digit of the bank's program change. Footswitch 10 with no number
+        // Page 5: types a digit of the bank's program change. Footswitch 10 with no number
         // being typed shows "--" on its release (below); a digit then starts a number (10
         // again is 0).
-        else if (cfg_page == PAGE_BANK_PC)
+        else
         {
             index = stomp_index(code);
             bank_none_ready = 0;
@@ -2786,10 +2818,6 @@ void ctl_key_press(uint8_t code)
                 config_changed();
                 show_bank_pc();
             }
-        }
-        else
-        {
-            calibration_take();
         }
 
         return;
@@ -3083,6 +3111,7 @@ static uint8_t nrpn_get(uint8_t p)
 // the last. Reads midi_job instead of taking a parameter: no fixed RAM.
 static void nrpn_send(void)
 {
+    tx_flash = TX_FLASH_TICKS;
     hal_midi_tx((uint8_t)(0xB0 | (midi_channel - 1)));
     hal_midi_tx(99);
     hal_midi_tx(NRPN_MSB);
@@ -3494,7 +3523,7 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
         {
             edit_pedal(channel);
         }
-        // Page 5's CC editor: once moved, its CC value is the CC.
+        // Page 2's CC editor: once moved, its CC value is the CC.
         else if (pcc_open)
         {
             if (pedal_moved(channel))
@@ -3507,7 +3536,7 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
         {
             sw_pedal(channel);
         }
-        // Page 7: once moved, its CC value is the bank's program change.
+        // Page 5: once moved, its CC value is the bank's program change.
         else if (cfg_page == PAGE_BANK_PC && pedal_moved(channel))
         {
             edit_typing = 0;
@@ -3681,6 +3710,13 @@ void ctl_tick(void)
             hal_aux_led(HAL_LED_MIDI_CHAN, 0);
         }
 
+        // MIDI OUT: MIDI FUNCTION lit for TX_FLASH_TICKS after each message (user's
+        // request).
+        if (tx_flash)
+        {
+            hal_aux_led(HAL_LED_MIDI_FUNC, --tx_flash != 0);
+        }
+
         pickup_tick();
     }
     // Config mode: an editor change is compared with the EEPROM, then with changes the
@@ -3718,6 +3754,10 @@ void ctl_tick(void)
     if (chan_digit_pending)
     {
         channel_digit_tick();
+    }
+    else if (mode == MODE_CONFIG && cfg_page == PAGE_BANK_PC && !pc_typing)
+    {
+        bank_label_tick();
     }
 
     if (boot_anim || (mode == MODE_CONFIG && cfg_page == PAGE_VERSION))
@@ -3785,8 +3825,8 @@ void ctl_tick(void)
 }
 
 #ifdef CTL_INSPECT
-// Read-only view of the controller state for the browser emulator's labels and hints.
-// Only compiled when CTL_INSPECT is defined (the emulator build), never into the firmware.
+// Read-only view of the controller state for the browser editor's labels and hints.
+// Only compiled when CTL_INSPECT is defined (the editor build), never into the firmware.
 uint8_t ctl_inspect(uint8_t what)
 {
     if (what >= CTL_INSPECT_PEDAL_MODE && what < CTL_INSPECT_PEDAL_MODE + STOMP_COUNT)
@@ -3834,6 +3874,7 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_PEDAL_CC:      return pedal_cc[0];
     case CTL_INSPECT_PEDAL_CC + 1:  return pedal_cc[1];
     case CTL_INSPECT_PCC:           return (uint8_t)(pcc_open | (pcc_b << 1));
+    case CTL_INSPECT_PED_SEL:       return ped_sel;
     default:                        return 0;
     }
 }

@@ -36,10 +36,17 @@
 // Real-time bytes (clock, active sensing...) do not light it.
 #define MIDI_RX_FLASH_MS          60
 
-// Power-on and configuration page 9: every LED lights (once, and stays lit) while
+// Run mode: the MIDI FUNCTION LED lights for this long after each message sent.
+#define MIDI_TX_FLASH_MS          60
+
+// Configuration page 5 (the bank's program change) shows "Pr" and the program in turn,
+// each for this long. A multiple of 50, up to 6350.
+#define BANK_PC_LABEL_MS          1000
+
+// Power-on and configuration page 7: every LED lights (once, and stays lit) while
 // ". riban ." scrolls across the display, one frame per SCROLL_FRAME_MS (ten frames, so
 // power-on takes 10 x SCROLL_FRAME_MS, the start-up settling included). Power-on then
-// goes to run mode. Page 8 then shows the firmware version, each part (major, minor,
+// goes to run mode. Page 7 then shows the firmware version, each part (major, minor,
 // build) for VERSION_SHOW_MS, then a blank display for the same time, and repeats.
 // Both are multiples of 50, SCROLL_FRAME_MS at least 100, and 10 x SCROLL_FRAME_MS +
 // 4 x VERSION_SHOW_MS at most 12750. Smaller SCROLL_FRAME_MS scrolls faster (200:
@@ -49,7 +56,7 @@
 #endif
 #define VERSION_SHOW_MS           1000
 // At power-on every LED lights for BOOT_LAMP_MS (from power-on, a multiple of 50), then
-// shows its normal state while the scroll finishes. Page 8 keeps them lit throughout.
+// shows its normal state while the scroll finishes. Page 7 keeps them lit throughout.
 #ifndef BOOT_LAMP_MS
 #define BOOT_LAMP_MS              1000
 #endif
@@ -61,12 +68,16 @@
 #define STOMP_CC_LIST 21, 22, 23, 24, 25, 26, 27, 28, 29, 30
 
 // Banks whose footswitches default to notes (until the bank is saved): momentary, on
-// velocity 127, off velocity 0, footswitch 1 playing the first note and each next switch
-// one note higher. Bank numbers count from 1; 0 turns the option off.
+// velocity 127, off velocity 0, footswitch 1 playing the first note and the others the
+// notes NOTE_BANK_SCALE above it (footswitch 1 to 10, in semitones; the first plus each
+// must be at most 127). The default is a minor pentatonic scale (user's request): from
+// A1 (note 33), A1 C2 D2 E2 G2 on footswitches 1-5 and an octave higher, A2 C3 D3 E3 G3,
+// on 6-10; from A3 (57), A3 to G5. Bank numbers count from 1; 0 turns the option off.
 #define NOTE_BANK_1         3
-#define NOTE_BANK_1_FIRST   48
+#define NOTE_BANK_1_FIRST   33
 #define NOTE_BANK_2         4
-#define NOTE_BANK_2_FIRST   60
+#define NOTE_BANK_2_FIRST   57
+#define NOTE_BANK_SCALE     0, 3, 5, 7, 10, 12, 15, 17, 19, 22
 
 // Footswitch banks: in bank mode (the default, DIRECT SELECT dark; a tap of UP + DOWN
 // switches to program mode and back), UP / DOWN choose one of this many banks, each with
@@ -78,10 +89,10 @@
 #endif
 
 // Controller numbers sent by expression pedal A and pedal B until changed on
-// configuration page 5 (each bank has its own). 7 = channel volume, 11 = expression.
+// configuration page 2 (each bank has its own). 7 = channel volume, 11 = expression.
 #define PEDAL_CC_LIST 7, 11
 
-// Expression pedal response until changed on configuration page 5 (each bank has its
+// Expression pedal response until changed on configuration page 2 (each bank has its
 // own): 0 = immediate (every move is sent), 1 = pickup: after its CC's value has changed
 // elsewhere (a footswitch or MIDI IN; at power-on it counts as 0), the pedal sends
 // nothing until it reaches that value (within PEDAL_PICKUP_WINDOW CC steps) or passes
@@ -176,7 +187,7 @@
 #define STARTUP_TICKS 100
 
 // Queue sizes in bytes (each a power of two, at most 256; one slot is always left empty).
-// They live in the board's external SRAM, and the emulator uses the same sizes. MIDI OUT
+// They live in the board's external SRAM, and the editor uses the same sizes. MIDI OUT
 // 128 holds about 40ms of messages at 31250 baud, MIDI IN 128 about 40ms of input (enough
 // to ride over an EEPROM save, which blocks the main loop for tens of ms).
 #ifndef MIDI_TX_QUEUE

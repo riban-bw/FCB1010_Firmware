@@ -2,7 +2,7 @@
 #include "config.h"
 #include "keys.h"
 
-// Portable key scanner for the host tests and the browser emulator. It runs the same
+// Portable key scanner for the host tests and the browser editor. It runs the same
 // KEY_SCAN macro as the firmware's scan interrupt (hw.c), in the same
 // order: one column per tick, keys k and k + 6 together. Not part of the 8051 build.
 
