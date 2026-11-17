@@ -328,7 +328,8 @@ LED_MAP=$((16#$(awk '/_led_map:/ {print $1}' build/hw.rst | head -1)))
 VER_EXPECT=$(python3 -I -c '
 import re
 t = open("src/version.h").read()
-v = int(re.search(r"#define FW_VERSION_MAJOR (0x[0-9A-Fa-f]+)", t).group(1), 16)
+v = int(re.search(r"#define FW_VERSION_MAJOR (0x[0-9A-Fa-f]+|[0-9]+)", t).group(1), 0)
+v = (v // 10) * 16 + v % 10   # shown in decimal
 seg = [0xFC, 0x60, 0xDA, 0xF2, 0x66, 0xB6, 0xBE, 0xE0, 0xFE, 0xF6, 0xEE, 0x3E, 0x9C, 0x7A, 0x9E, 0x8E]
 units = (~seg[v & 15]) & 0xFE
 tens = ((~seg[v >> 4]) & 0xFE) | 1

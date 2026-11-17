@@ -2,8 +2,8 @@
 # "N. Lamp test and version" table row (any page number). Usage:
 #   readme_version.py <version.h> <version_build.inc> <docs/configuration.md>
 # In that row it rewrites the three display examples: major with a trailing dot (`MM.`),
-# minor with dots both sides (`.mm.`) and build with a leading dot (`.bb`), in hex as
-# the display shows them. The file is only written when something changes; if the row or
+# minor with dots both sides (`.mm.`) and build with a leading dot (`.bb`), as the display
+# shows them: major and minor in decimal, the build in hex. The file is only written when something changes; if the row or
 # one of the examples is missing it prints a note and changes nothing.
 import re
 import sys
@@ -34,8 +34,8 @@ if not row:
 line = row.group(0)
 # Each example in backticks: `MM.` (no dot before), `.mm.`, `.bb` (no dot after).
 examples = [
-    (r"`[0-9A-Fa-f]{2}\.`", "`%02X.`" % major),
-    (r"`\.[0-9A-Fa-f]{2}\.`", "`.%02X.`" % minor),
+    (r"`[0-9A-Fa-f]{2}\.`", "`%02d.`" % major),
+    (r"`\.[0-9A-Fa-f]{2}\.`", "`.%02d.`" % minor),
     (r"`\.[0-9A-Fa-f]{2}`", "`.%02X`" % build),
 ]
 
@@ -48,4 +48,4 @@ for pattern, value in examples:
 
 if line != row.group(0):
     open(readme, "w").write(text[:row.start()] + line + text[row.end():])
-    print("updated the version in %s to %02X.%02X.%02X" % (readme, major, minor, build))
+    print("updated the version in %s to %02d.%02d.%02X" % (readme, major, minor, build))

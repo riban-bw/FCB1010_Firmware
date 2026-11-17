@@ -6,7 +6,7 @@
 |---|---|
 | Footswitches 1 to 10 | Turn an effect on or off. The LED shows whether it is on. Each switch can instead act while held (see Footswitch modes). In program mode they choose a program instead (see [Changing program](#changing-program)) |
 | UP / DOWN | Next / previous footswitch bank. The display shows the bank number, and the new bank takes over when you let go. Hold to scroll. While DIRECT SELECT is lit (program mode), next / previous program instead (see [Changing program](#changing-program)) |
-| Expression pedal A | Volume (CC 7), 0 to 127. Each pedal sends every move, or waits to pick up the current value (see [Expression pedals](#expression-pedals)) |
+| Expression pedal A | Volume (CC 7), 0 to 127. Each pedal's controller can be changed for each bank, and each sends every move or waits to pick up the current value (see [Expression pedals](#expression-pedals)) |
 | Expression pedal B | Expression (CC 11), 0 to 127 |
 | UP + DOWN tapped together | Turns program mode on or off (DIRECT SELECT lit). In program mode UP and DOWN change program, and the footswitches choose a program by number instead of switching effects (see [Changing program](#changing-program)). Nothing is sent |
 | UP + DOWN held 1s | Opens configuration mode (see [Configuration](configuration.md)) |
@@ -17,13 +17,13 @@ Everything uses one MIDI channel, channel 1 unless you change it in configuratio
 
 | LED | While playing | In configuration mode |
 |---|---|---|
-| Footswitches 1 to 10 | Lit while that footswitch is ON | Depends on the page: the selected footswitch (page 1), the footswitch being edited (editor), the footswitches a relay follows (pages 5 and 6), footswitches 1 and 2 for the pedals in pickup mode (page 8) |
-| SWITCH 1, SWITCH 2 | Lit while that relay is closed | Marks page 5 (SWITCH 1) or page 6 (SWITCH 2) |
-| DIRECT SELECT | Lit in program mode: UP, DOWN and the footswitches change program. Dark while UP and DOWN choose footswitch banks | Page 7: lit (it marks the page). Dark on the other pages |
+| Footswitches 1 to 10 | Lit while that footswitch is ON | Depends on the page: the selected footswitch (page 1), the footswitch being edited (editor), the footswitches a relay follows (pages 6 and 7), footswitches 1 and 2 for the pedals in pickup mode (page 5), the pedal whose CC is being set (page 5's CC editor) |
+| SWITCH 1, SWITCH 2 | Lit while that relay is closed | Marks page 6 (SWITCH 1) or page 7 (SWITCH 2) |
+| DIRECT SELECT | Lit in program mode: UP, DOWN and the footswitches change program. Dark while UP and DOWN choose footswitch banks | Page 8: lit (it marks the page). Dark on the other pages |
 | MIDI FUNCTION | Dark | Marks page 1 (pedal modes) |
 | MIDI CHAN | Flickers when MIDI arrives | Marks page 2 (MIDI channel) |
-| EXP 1, EXP 2 | Flashing while that pedal waits to pick up (faster the closer it is), otherwise dark | Both mark pages 3 and 4 (calibration). Pages 5 and 6: lit while the relay follows that pedal. Page 8: lit for a pedal in pickup mode |
-| SELECT, NUMBER, VALUE 1, VALUE 2 | Dark | Footswitch editor: the setting being edited (type, number, ON value, OFF value) |
+| EXP 1, EXP 2 | Flashing while that pedal waits to pick up (faster the closer it is), otherwise dark | Both mark pages 3 and 4 (calibration). Page 5: lit for a pedal in pickup mode, or for the pedal whose CC is being set. Pages 6 and 7: lit while the relay follows that pedal |
+| SELECT, NUMBER, VALUE 1, VALUE 2 | Dark | Footswitch editor: the setting being edited (type, number, ON value, OFF value). NUMBER also lights in page 5's pedal CC editor |
 | CONFIG | Dark | Lit; flashes while a change is not saved |
 
 For a second at power-on, and throughout configuration page 9, every LED is lit (on page 9 the CONFIG LED still flashes for an unsaved change, and the footswitch LEDs show the steps).
@@ -32,12 +32,12 @@ For a second at power-on, and throughout configuration page 9, every LED is lit 
 
 Each footswitch has one of four modes, chosen in configuration mode (default: stomp).
 
-| Mode | Display digit | Behaviour |
+| Mode | Display | Behaviour |
 |---|---|---|
-| Stomp | 1 | Press to turn ON, press again to turn OFF |
-| Stomp with momentary | 2 | As stomp, but a hold of more than 0.6s undoes it on release (see below) |
-| Momentary | 3 | ON while pressed, OFF when released |
-| Inverted momentary | 4 | OFF while pressed, ON when released. Its LED is lit while it rests, from power-on onwards |
+| Stomp | `St` | Press to turn ON, press again to turn OFF |
+| Stomp with momentary | `+St` | As stomp, but a hold of more than 0.6s undoes it on release (see below) |
+| Momentary | `Pu` (push) | ON while pressed, OFF when released |
+| Inverted momentary | `-Pu` | OFF while pressed, ON when released. Its LED is lit while it rests, from power-on onwards |
 
 In stomp with momentary mode a press always acts immediately: it toggles the effect. What happens when you let go depends on how long you held it:
 
@@ -54,7 +54,7 @@ Each footswitch sends one of three kinds of message, set in the footswitch edito
 |---|---|---|---|
 | CC | `CC` | The controller number with the ON value | The controller number with the OFF value |
 | Note | `nt` | Note on: the note number, with the ON value as velocity | Note off: the note number, with the OFF value as velocity |
-| Prog | `Pr` | Program change: the ON value | Program change: the OFF value |
+| Prog | `Pr` (a small r) | Program change: the ON value | Program change: the OFF value |
 
 Every type works in any of the footswitch modes. A program change switch has two programs and toggles between them: for example, in stomp mode one press sends program 5 and turns it ON (its LED lights), and the next sends program 6 and turns it OFF. If you give it the same program twice, it sends that program on every press and nothing when you let go, whatever its mode, and its LED lights only while you hold it. Whenever a footswitch sends a program, it becomes the current program: the display shows it in program mode, and UP and DOWN step on from it there.
 
@@ -62,26 +62,26 @@ Footswitches that send the same controller (CC) or the same note share one state
 
 ## Footswitch banks
 
-The pedal holds 40 banks, each with its own message and mode for every footswitch, so you can keep a set of footswitches for each song or rig and switch between them. The relays, the MIDI channel and the pedal calibration are shared by every bank.
+The pedal holds 36 banks, each with its own message and mode for every footswitch, its own expression pedal controllers and responses, and its own relay settings, so you can keep a set of footswitches for each song or rig and switch between them. The MIDI channel and the pedal calibration are shared by every bank.
 
 While DIRECT SELECT is dark, the display shows the bank number, and UP and DOWN step through the banks. The new bank takes over when you let go. Hold UP or DOWN to scroll through the banks. In program mode (DIRECT SELECT lit, see [Changing program](#changing-program)) the bank you chose stays in use.
 
 Changing bank can send a program change if configured to do so (see [Configuration](configuration.md)). Each controller and note keeps its state, however many banks you pass through. A footswitch of the new bank takes the state its CC or note last had, from a footswitch in any bank or from incoming MIDI: for example, if footswitch 1 is CC 26 and is ON in bank 1, any footswitch with CC 26 in any other bank shows ON, and footswitch 1 is still ON when you come back to bank 1, even through banks that do not use CC 26. The pedal forgets these states when it is switched off. A CC is read by the value last sent, the same way as incoming MIDI, so the switches do not need the same ON and OFF values. A footswitch whose CC or note has not been used since power-on starts in its resting state, without sending anything: ON for inverted momentary and OFF for the other modes. A program change switch always starts OFF. A footswitch you are holding during the change does nothing when you let go (its CC or note keeps the state it had).
 
-Configuration mode edits the bank in use, and saving stores that bank (with the shared settings). A bank you have never saved has the default footswitch messages and modes: CC 21 to 30 in most banks, but in bank 3 the footswitches play notes 48 to 57 (C3 to A3, footswitch 1 the lowest) and in bank 4 notes 60 to 69 (C4 to A4), each sounding while held (momentary, velocity 127). The pedal always starts in bank 1. A program a footswitch sends is remembered too, and UP and DOWN step on from it in program mode.
+Configuration mode edits the bank in use, and saving stores that bank (with the shared settings). A bank you have never saved has the default footswitch messages and modes, the default pedal controllers and responses, and relays that follow nothing: CC 21 to 30 in most banks, but in bank 3 the footswitches play notes 48 to 57 (C3 to A3, footswitch 1 the lowest) and in bank 4 notes 60 to 69 (C4 to A4), each sounding while held (momentary, velocity 127). The pedal always starts in bank 1. A program a footswitch sends is remembered too, and UP and DOWN step on from it in program mode.
 
 ## Expression pedals
 
-Each expression pedal works in one of two ways, chosen on configuration page 8 (see [Configuration](configuration.md)):
+Each bank sets the controller (CC) number each expression pedal sends, and how it responds; both are set on configuration page 5 (see [Configuration](configuration.md)). Each pedal works in one of two ways:
 
 - **Immediate** (the default): every move is sent at once.
-- **Pickup**: when its controller's value has changed somewhere else, the pedal sends nothing until it reaches that value. This avoids a jump in, say, volume when your DAW or a footswitch has moved it. The value changes elsewhere when a footswitch sends that controller or your DAW sends it to MIDI IN; at power-on it counts as 0. The pedal picks up when it comes within 2 steps of that value, or passes it, and then sends as usual.
+- **Pickup**: when its controller's value has changed somewhere else, the pedal sends nothing until it reaches that value. This avoids a jump in, say, volume when your DAW or a footswitch has moved it, or when you change to a bank where the pedal sends another controller. The value changes elsewhere when a footswitch sends that controller or your DAW sends it to MIDI IN; at power-on it counts as 0. The pedal picks up when it comes within 2 steps of that value, or passes it, and then sends as usual.
 
 While a pickup pedal waits, its EXP LED flashes: slowly when it is far from the value, faster as it gets closer, and it goes dark once the pedal has picked up. When you move it, the display shows how far it is from the value: `+20` means the pedal is 20 steps above the value (towards the toe), `-20` 20 steps below it (towards the heel). The display goes back to normal 2 seconds after the pedal stops moving.
 
 ## The relay outputs (SWITCH 1 and SWITCH 2)
 
-Each of the two relay jacks can follow any mix of footswitches and the expression pedals. The relay closes when any of the things it follows is ON, and opens when they are all OFF. For a pedal, ON means pushed past a threshold you set. The SWITCH 1 and SWITCH 2 LEDs show the relay states. Nothing is set up until you choose, so out of the box the relays stay open.
+Each of the two relay jacks can follow any mix of footswitches and the expression pedals, set for each bank. The relay closes when any of the things it follows is ON, and opens when they are all OFF. For a pedal, ON means pushed past a threshold you set. The SWITCH 1 and SWITCH 2 LEDs show the relay states. Nothing is set up until you choose, so out of the box the relays stay open.
 
 ## Changing program
 

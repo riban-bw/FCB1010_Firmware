@@ -44,21 +44,19 @@ void    hal_aux_led(uint8_t which, uint8_t on);
 // hal_rec_load(rec) returns 1 and fills hal_rec if a valid record was found (otherwise
 // hal_rec is undefined); hal_rec_save(rec) stores hal_rec and returns 1 if it read back.
 //   HAL_REC_MSG0 + n  footswitch n (0-9) of bank hal_bank: type (bits 0-1: 0 CC, 1 note,
-//                     2 program change) with the pedal mode in bits 2-3, number, on
-//                     value, off value
-//   HAL_REC_SW1/SW2   relay SWITCH 1 / 2: follow mask low byte, high byte, pedal A
-//                     trigger, pedal B trigger
+//                     2 program change) with the pedal mode in bits 2-3 and bank
+//                     settings in bits 4-7, then number, on value, off value (7 bits)
+//   HAL_REC_BANK      bank hal_bank's relay triggers (relay * 2 + pedal, 7 bits) with
+//                     more bank settings in their bit 7
 //   HAL_REC_CAL       calibration: heel A, toe A, heel B, toe B (raw ADC readings)
-//   HAL_REC_CFG       MIDI channel, the expression pedals in pickup mode (bit 0 A,
-//                     bit 1 B), then two unused bytes (saved as 0)
+//   HAL_REC_CFG       MIDI channel, then three unused bytes (saved as 0)
 // hal_bank (0 to BANK_COUNT - 1, set by ctl.c) picks which bank's records the footswitch
-// record numbers refer to; the other records are shared by every bank.
+// and bank record numbers refer to; the other records are shared by every bank.
 #define HAL_REC_MSG0    0
-#define HAL_REC_SW1     10
-#define HAL_REC_SW2     11
-#define HAL_REC_CAL     12
-#define HAL_REC_CFG     13
-#define HAL_RECORDS     14
+#define HAL_REC_BANK    10
+#define HAL_REC_CAL     11
+#define HAL_REC_CFG     12
+#define HAL_RECORDS     13
 extern IDATA uint8_t hal_rec[4];
 extern IDATA uint8_t hal_bank;
 uint8_t hal_rec_load(uint8_t rec);
@@ -67,7 +65,8 @@ uint8_t hal_rec_save(uint8_t rec);
 // Show 0..255 on the three-digit 7-segment display.
 void    hal_display(uint8_t value);
 
-// Show a two-letter word on the two right digits, the leftmost position blank.
+// Show a two-letter word on the two right digits, the leftmost position blank (or, for
+// the pedal modes, a sign).
 #define HAL_TEXT_ER  0
 #define HAL_TEXT_LO  1
 #define HAL_TEXT_HI  2
@@ -83,7 +82,11 @@ void    hal_display(uint8_t value);
 #define HAL_TEXT_DASHES         (HAL_TEXT_CC + 3)
 // "PU": the pedal pickup page.
 #define HAL_TEXT_PICKUP         (HAL_TEXT_CC + 4)
-#define HAL_TEXT_COUNT          (HAL_TEXT_CC + 5)
+// The footswitch pedal modes (page 1), mode 0-3: "St" (stomp), "+St" (stomp with
+// momentary), "Pu" (momentary, push), "-Pu" (inverted momentary), the sign on the
+// leftmost position.
+#define HAL_TEXT_MODE           (HAL_TEXT_CC + 5)
+#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 4)
 
 void    hal_display_text(uint8_t text);
 

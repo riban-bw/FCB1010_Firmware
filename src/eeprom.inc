@@ -86,34 +86,44 @@ static uint8_t i2c_read(uint8_t send_nak)
 
 #define EEPROM_DEVICE  0xA0
 
-// Settings records in the 2KB 24C16. The four shared records are 6 bytes in 8-byte slots
-// at the top (relays 0x7E0 and 0x7E8, calibration 0x7F0, settings 0x7F8): magic, the four
-// bytes of hal_rec, checksum (the XOR of the first five bytes and the record's salt).
-// Footswitch records are 5 bytes, packed: the four bytes of hal_rec, then a checksum (their
-// XOR, the switch's salt and the bank number); bytes 1-3 hold 7-bit values, so a set top
-// bit (erased EEPROM reads 0xFF) also makes a record invalid. A bank is ten of them, 50
-// bytes: bank 1 at 0x7AE-0x7DF, each further bank 50 bytes lower (bank 40 at 0x010-0x041).
-// Behringer's SysEx documentation places the stock preset data from 0x000, so banks that
-// are saved can overwrite it: putting the original program chip back would then need the
-// presets restored. A bank that has never been saved holds no valid records and loads as
-// the defaults.
-#define EEPROM_SHARED  0x7E0
+// Settings records in the 2KB 24C16. The two shared records are 6 bytes in 8-byte slots
+// at the top (calibration 0x7F0, settings 0x7F8): magic, the four bytes of hal_rec,
+// checksum (the XOR of the first five bytes and the record's salt); 0x7E0-0x7EF held the
+// relay records, which are now per bank. The per-bank records are 5 bytes, packed: the
+// four bytes of hal_rec, then a checksum (their XOR, the record's salt and the bank
+// number). A bank's ten footswitch records are 50 bytes: bank 1 at 0x7AE-0x7DF, each
+// further bank 50 bytes lower (bank 36 at 0x0D8-0x109). In them bytes 1-3 hold 7-bit
+// values, so a set top bit (erased EEPROM reads 0xFF) also makes a record invalid. Each
+// bank's own record (HAL_REC_BANK) is below them, 5 bytes per bank: bank 1 at 0x0D3, each
+// further bank 5 lower (bank 36 at 0x024); all its bits are used, and its salt keeps an
+// erased record invalid (salt ^ bank never 0xFF). 0x000-0x023 is spare. Behringer's
+// SysEx documentation places the stock preset data from 0x000, so banks that are saved
+// can overwrite it: putting the original program chip back would then need the presets
+// restored. A bank that has never been saved holds no valid records and loads as the
+// defaults.
+#define EEPROM_SHARED  0x7F0
 #define FS_LENGTH      5
 #define BANK_BYTES     (STOMP_COUNT * FS_LENGTH)
+#define BANK_MAX       36
+#define FS_BOTTOM      (0x7E0 - BANK_MAX * BANK_BYTES)
+#define BANK_REC_TOP   (FS_BOTTOM - FS_LENGTH)
 
-#if EEPROM_SHARED + (HAL_RECORDS - HAL_REC_SW1) * 8 != 0x800 || HAL_REC_SW1 != STOMP_COUNT || STOMP_COUNT != 10
+#if EEPROM_SHARED + (HAL_RECORDS - HAL_REC_CAL) * 8 != 0x800 || HAL_REC_BANK != STOMP_COUNT || \
+    HAL_REC_CAL != HAL_REC_BANK + 1 || STOMP_COUNT != 10
 #error EEPROM record layout assumptions broken
 #endif
 
-#if BANK_COUNT < 1 || BANK_COUNT * BANK_BYTES > EEPROM_SHARED
-#error BANK_COUNT must be 1 to 40 (ten 5-byte records per bank below 0x7E0)
+#if BANK_COUNT < 1 || BANK_COUNT > BANK_MAX || BANK_REC_TOP - (BANK_MAX - 1) * FS_LENGTH < 0x020
+#error BANK_COUNT must be 1 to 36 (eleven 5-byte records per bank below 0x7E0)
 #endif
 
-// Magics of the shared records; salts of the ten footswitch records (every bank uses the
-// same ten, with the bank number added) and the shared ones.
-static const CODE uint8_t rec_magic[HAL_RECORDS - HAL_REC_SW1] = { 0xC3, 0xC4, 0xC1, 0xC2 };
+// Magics of the shared records; salts of the ten footswitch records and the bank record
+// (every bank uses the same, with the bank number added; the bank record's top two bits
+// are 01, so with a bank number below 64 its checksum of an erased record is never 0xFF)
+// and the shared ones.
+static const CODE uint8_t rec_magic[HAL_RECORDS - HAL_REC_CAL] = { 0xC1, 0xC2 };
 static const CODE uint8_t rec_salt[HAL_RECORDS] = {
-    0x96, 0x69, 0x55, 0xAA, 0x33, 0xCC, 0x0F, 0xF0, 0x5F, 0xF5, 0x3C, 0xC3, 0x5A, 0xA5
+    0x96, 0x69, 0x55, 0xAA, 0x33, 0xCC, 0x0F, 0xF0, 0x5F, 0xF5, 0x4B, 0x5A, 0xA5
 };
 
 // The one record buffer and the bank the footswitch records belong to, shared with ctl.c
@@ -131,25 +141,32 @@ static uint16_t rec_addr;
 static uint8_t  rec_first;
 static uint8_t  rec_control;
 
-// Find record rec. Footswitch records move down 50 bytes per bank (a loop, not SDCC's
-// multiply call). A leaf, so it costs no fixed RAM.
+// Find record rec. Footswitch records move down 50 bytes per bank, the bank record 5 (a
+// loop, not SDCC's multiply call). A leaf, so it costs no fixed RAM.
 static void rec_locate(uint8_t rec)
 {
     uint8_t b;
 
-    if (rec < HAL_REC_SW1)
+    if (rec < HAL_REC_CAL)
     {
-        rec_addr  = (uint16_t)(EEPROM_SHARED - BANK_BYTES - 1 + (uint8_t)((uint8_t)(rec << 2) + rec));
         rec_first = 1;
+        rec_addr  = (uint16_t)(BANK_REC_TOP - 1);
+        b         = FS_LENGTH;
 
-        for (b = hal_bank; b != 0; b--)
+        if (rec < HAL_REC_BANK)
         {
-            rec_addr -= BANK_BYTES;
+            rec_addr = (uint16_t)(0x7E0 - BANK_BYTES - 1 + (uint8_t)((uint8_t)(rec << 2) + rec));
+            b        = BANK_BYTES;
+        }
+
+        for (rec = hal_bank; rec != 0; rec--)
+        {
+            rec_addr -= b;
         }
     }
     else
     {
-        rec_addr  = (uint16_t)(EEPROM_SHARED + (uint8_t)((uint8_t)(rec - HAL_REC_SW1) << 3));
+        rec_addr  = (uint16_t)(EEPROM_SHARED + (uint8_t)((uint8_t)(rec - HAL_REC_CAL) << 3));
         rec_first = 0;
     }
 }
@@ -165,7 +182,7 @@ static uint8_t rec_byte(uint8_t rec, uint8_t i)
         return hal_rec[i - 1];
     }
 
-    x = (rec < HAL_REC_SW1) ? hal_bank : rec_magic[rec - HAL_REC_SW1];
+    x = (rec < HAL_REC_CAL) ? hal_bank : rec_magic[rec - HAL_REC_CAL];
 
     if (i == 0)
     {
@@ -244,7 +261,7 @@ uint8_t hal_rec_load(uint8_t rec)
             {
                 hal_rec[i - 1] = b;
 
-                if (rec_first && i != 1 && (b & 0x80))
+                if (rec < HAL_REC_BANK && i != 1 && (b & 0x80))
                 {
                     eeprom_ok = 0;
                 }
@@ -263,8 +280,8 @@ uint8_t hal_rec_load(uint8_t rec)
 }
 
 // Write hal_rec as record rec (adding the magic and checksum), then read it back. A write
-// stops at each 16-byte page boundary and goes on in a new write cycle (packed footswitch
-// records can cross one; the shared ones are 8-byte aligned and never do).
+// stops at each 16-byte page boundary and goes on in a new write cycle (packed records
+// can cross one; the shared ones are 8-byte aligned and never do).
 uint8_t hal_rec_save(uint8_t rec)
 {
     uint8_t i;

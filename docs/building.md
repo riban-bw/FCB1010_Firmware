@@ -20,13 +20,13 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 13.3KB (13632 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 14.2KB (14532 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
 
-Each build also updates the documentation: the code size above, the firmware version on configuration page 8 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
+Each build also updates the documentation: the code size above, the firmware version on configuration page 9 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
 ## Firmware version
 
-The version shows on configuration page 8 as major, minor and build. Major and minor are set by hand in `src/version.h`. The build number in `src/version_build.inc` goes up by one each time `make` rebuilds the firmware image; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone.
+The version shows on configuration page 9 as major, minor and build. Major and minor are set by hand in `src/version.h`, in decimal (0 to 99), and shown in decimal; the build number is shown in hex. The build number in `src/version_build.inc` goes up by one each time `make` rebuilds the firmware image; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone.
 
 ## Compile-time configuration
 
@@ -36,8 +36,8 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 |---|---|---|
 | `MIDI_CHANNEL` | 1 | MIDI channel (1 to 16) used until a channel is saved in configuration mode |
 | `STOMP_CC_LIST` | 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 | Controller number of each footswitch, 1 to 10 |
-| `PEDAL_CC_LIST` | 7, 11 | Controller numbers of expression pedals A and B |
-| `PEDAL_PICKUP_A` | 0 | Expression pedal A's response until changed on configuration page 8: 0 immediate, 1 pickup |
+| `PEDAL_CC_LIST` | 7, 11 | Controller numbers of expression pedals A and B until changed on configuration page 5 (each bank has its own) |
+| `PEDAL_PICKUP_A` | 0 | Expression pedal A's response until changed on configuration page 5 (each bank has its own): 0 immediate, 1 pickup |
 | `PEDAL_PICKUP_B` | 0 | The same for pedal B |
 | `PEDAL_PICKUP_WINDOW` | 2 | A pickup pedal picks up within this many CC steps of its controller's value (or on passing it) |
 | `PEDAL_PICKUP_FLASH_MS` | 40 | Half-period (ms) of a waiting pedal's EXP LED flash at the pickup point; each CC step away adds 3ms. 2 to 128 |
@@ -46,7 +46,7 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `MOMENTARY_HOLD_MS` | 600 | Long press time (ms): stomp with momentary reverts after it, and the configuration save / cancel hold |
 | `CONFIG_HOLD_MS` | 1000 | UP + DOWN hold (ms) that opens configuration mode |
 | `PROGRAM_WRAP` | 0 | 1: program change wraps between 127 and 0 (and the bank between the last and 1); 0: both stop at the ends |
-| `BANK_COUNT` | 40 | Number of footswitch banks, 1 to 40 (each takes 50 bytes of the EEPROM, ten 5-byte records; 40 is all that fit below the shared records) |
+| `BANK_COUNT` | 36 | Number of footswitch banks, 1 to 36 (each takes 55 bytes of the EEPROM, eleven 5-byte records; 36 is all that fit below the shared records) |
 | `NOTE_BANK_1` | 3 | A bank (1 to `BANK_COUNT`, 0 for none) whose footswitches default to momentary notes until it is saved, footswitch 1 playing the first note and each next one a note higher |
 | `NOTE_BANK_1_FIRST` | 48 | The first note of that bank (up to 118) |
 | `NOTE_BANK_2` | 4 | A second such bank |
@@ -65,7 +65,7 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `MIDI_RX_FLASH_MS` | 60 | How long (ms) the MIDI CHAN LED lights for each received byte |
 | `SCROLL_FRAME_MS` | 200 | Time (ms) each frame of the "riban" scroll shows; power-on is ten frames (3 seconds at 300); smaller scrolls faster. A multiple of 50, at least 100 |
 | `BOOT_LAMP_MS` | 1000 | Time (ms) from power-on that every LED is lit, before the normal LEDs show while the scroll finishes. A multiple of 50 |
-| `VERSION_SHOW_MS` | 1000 | Time (ms) each version part shows on page 8. A multiple of 50; 10 x `SCROLL_FRAME_MS` + 4 x `VERSION_SHOW_MS` must be at most 12750 |
+| `VERSION_SHOW_MS` | 1000 | Time (ms) each version part shows on page 9. A multiple of 50; 10 x `SCROLL_FRAME_MS` + 4 x `VERSION_SHOW_MS` must be at most 12750 |
 | `DEBOUNCE_SAMPLES` | 3 | Consecutive key scans (12ms apart) that must agree before a press or release counts |
 | `KEY_ACTIVE_LEVEL` | 1 | Input level of a pressed key. Change it if every key reads inverted |
 | `STARTUP_TICKS` | 100 | 2ms ticks to settle at power-on; key events in this time are discarded |

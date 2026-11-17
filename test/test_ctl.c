@@ -29,17 +29,18 @@ static uint8_t  leds[10];
 static uint8_t  aux[HAL_LED_COUNT];
 // Footswitch message records: saved by the firmware, and stored (what a load returns).
 static int      msg_saved;
-// Footswitch records (type with the pedal mode in bits 2-3, number, on value, off value),
-// one per switch and bank: bank b's switch n at b * 10 + n, so 0-9 are bank 1.
-#define MSG_RECS (BANK_COUNT * HAL_REC_SW1)
-#define MSG_REC(rec) (hal_bank * HAL_REC_SW1 + (rec))
+// The per-bank records, eleven per bank: footswitch n (type with the pedal mode in bits
+// 2-3, the relay follows in bits 4-5 and a piece of the pedal settings in bits 6-7,
+// number, on value, off value) at b * 11 + n, then the bank record (the four relay
+// triggers, more pedal settings in their bit 7) at b * 11 + 10. So 0-10 are bank 1.
+#define BANK_RECS HAL_REC_CAL
+#define MSG_RECS (BANK_COUNT * BANK_RECS)
+#define MSG_REC(rec) (hal_bank * BANK_RECS + (rec))
 static int      msg_stored_valid[MSG_RECS], msg_was_saved[MSG_RECS];
 static uint8_t  stored_msg[MSG_RECS][4], saved_msg[MSG_RECS][4];
-// Relay outputs and the saved / stored relay trigger records.
+// Relay outputs, and how many bank records were saved.
 static uint8_t  relays;
-static int      sw_saved;
-static int      sw_stored_valid[2];
-static uint8_t  stored_sw[2][4], saved_sw[2][4];
+static int      bank_saved;
 static uint8_t  status_led;
 static int      display;
 static uint8_t  blank;
@@ -48,6 +49,7 @@ static uint8_t  blank;
 #define SHOWN_HI (-3)
 // Any hal_display_text(t), e.g. the "riban" frames HAL_TEXT_SCROLL + n.
 #define SHOWN_TEXT(t) (-1 - (int)(t))
+#define SHOWN_MODE(m) SHOWN_TEXT(HAL_TEXT_MODE + (m))
 // hal_display_hex(v) is recorded as display = SHOWN_HEX(v); dots and the lamp test too.
 #define SHOWN_HEX(v) (0x1000 + (v))
 // hal_display_signed(v), with v as a signed value -127..127.
@@ -145,7 +147,7 @@ uint8_t hal_rec_load(uint8_t rec)
 {
     assert(hal_bank < BANK_COUNT);
 
-    if (rec < HAL_REC_SW1)
+    if (rec < HAL_REC_CAL)
     {
         if (!msg_stored_valid[MSG_REC(rec)])
         {
@@ -153,17 +155,6 @@ uint8_t hal_rec_load(uint8_t rec)
         }
 
         memcpy(hal_rec, stored_msg[MSG_REC(rec)], 4);
-        return 1;
-    }
-
-    if (rec <= HAL_REC_SW2)
-    {
-        if (!sw_stored_valid[rec - HAL_REC_SW1])
-        {
-            return 0;
-        }
-
-        memcpy(hal_rec, stored_sw[rec - HAL_REC_SW1], 4);
         return 1;
     }
 
@@ -192,16 +183,19 @@ uint8_t hal_rec_load(uint8_t rec)
 
 uint8_t hal_rec_save(uint8_t rec)
 {
-    if (rec < HAL_REC_SW1)
+    if (rec < HAL_REC_CAL)
     {
-        msg_saved++;
+        if (rec == HAL_REC_BANK)
+        {
+            bank_saved++;
+        }
+        else
+        {
+            msg_saved++;
+        }
+
         msg_was_saved[MSG_REC(rec)] = 1;
         memcpy(saved_msg[MSG_REC(rec)], hal_rec, 4);
-    }
-    else if (rec <= HAL_REC_SW2)
-    {
-        sw_saved++;
-        memcpy(saved_sw[rec - HAL_REC_SW1], hal_rec, 4);
     }
     else if (rec == HAL_REC_CAL)
     {
@@ -258,9 +252,7 @@ static void reset_world(void)
     cfg_saved = 0;
     cfg_stored_valid = 0;
     relays = 0xEE;
-    sw_saved = 0;
-    sw_stored_valid[0] = 0;
-    sw_stored_valid[1] = 0;
+    bank_saved = 0;
     msg_saved = 0;
     memset(msg_stored_valid, 0, sizeof(msg_stored_valid));
     memset(msg_was_saved, 0, sizeof(msg_was_saved));
@@ -286,20 +278,179 @@ static void clear_log(void)
 
 // Store pedal mode m for footswitch sw (0-9) of bank b (0-based) in the fake EEPROM, in
 // its record's type byte (bits 2-3), keeping a stored message or else the default one.
-static void store_bank_mode(int b, int sw, uint8_t m)
+// The packed pedal settings of a bank never saved: no program change, then pedal A's and
+// B's CCs with their pickup bits (see rec_pack).
+static uint8_t def_y(int j)
 {
-    int r = b * HAL_REC_SW1 + sw;
+    return bank_def[j];
+}
+
+// Footswitch record n's bits 6-7 for the packed pedal settings y[3].
+static uint8_t piece_of(const uint8_t *y, int n)
+{
+    return (uint8_t)(((y[n >> 2] >> ((n & 3) * 2)) & 3) << 6);
+}
+
+// Make bank b's stored records valid where they are not, as the defaults would load
+// (default messages and modes, no follows, the default pedal settings, no triggers).
+static void store_bank_defaults(int b)
+{
+    uint8_t y[3];
+    int n;
+    int r;
+
+    y[0] = def_y(0);
+    y[1] = def_y(1);
+    y[2] = def_y(2);
+
+    for (n = 0; n < STOMP_COUNT; n++)
+    {
+        r = b * BANK_RECS + n;
+
+        if (!msg_stored_valid[r])
+        {
+            msg_stored_valid[r] = 1;
+            stored_msg[r][0] = (uint8_t)(MT_CC | (DEFAULT_PEDAL_MODE << 2) | piece_of(y, n));
+            stored_msg[r][1] = stomp_cc[n];
+            stored_msg[r][2] = 127;
+            stored_msg[r][3] = 0;
+        }
+    }
+
+    r = b * BANK_RECS + HAL_REC_BANK;
 
     if (!msg_stored_valid[r])
     {
         msg_stored_valid[r] = 1;
-        stored_msg[r][0] = MT_CC;
+
+        for (n = 0; n < 4; n++)
+        {
+            stored_msg[r][n] = (uint8_t)(((y[2] >> (4 + n)) & 1) << 7);
+        }
+    }
+}
+
+static void store_bank_mode(int b, int sw, uint8_t m)
+{
+    int r = b * BANK_RECS + sw;
+
+    if (!msg_stored_valid[r])
+    {
+        uint8_t y[3] = { def_y(0), def_y(1), def_y(2) };
+
+        msg_stored_valid[r] = 1;
+        stored_msg[r][0] = (uint8_t)(MT_CC | piece_of(y, sw));
         stored_msg[r][1] = stomp_cc[sw];
         stored_msg[r][2] = 127;
         stored_msg[r][3] = 0;
     }
 
-    stored_msg[r][0] = (uint8_t)((stored_msg[r][0] & 3) | (m << 2));
+    stored_msg[r][0] = (uint8_t)((stored_msg[r][0] & 0xF3) | (m << 2));
+}
+
+// Relay r's saved settings for bank b, in the old shared record's form: follow mask low
+// byte, high byte, pedal A trigger, pedal B trigger (from the per-bank records).
+static uint8_t saved_sw_byte(int b, int r, int k)
+{
+    int n;
+    unsigned m = 0;
+
+    if (k >= 2)
+    {
+        return (uint8_t)(saved_msg[b * BANK_RECS + HAL_REC_BANK][r * 2 + k - 2] & 0x7F);
+    }
+
+    for (n = 0; n < STOMP_COUNT; n++)
+    {
+        if (saved_msg[b * BANK_RECS + n][0] & (0x10 << r))
+        {
+            m |= 1u << n;
+        }
+    }
+
+    return (uint8_t)(k ? m >> 8 : m & 0xFF);
+}
+
+#define saved_sw(r, k) saved_sw_byte(0, (r), (k))
+
+// Byte j of bank b's packed pedal settings (0 the program change, 1 / 2 pedal A / B's CC
+// with its pickup bit) from its saved or stored records.
+static uint8_t y_of(uint8_t recs[][4], int b, int j)
+{
+    int n;
+    uint8_t v = 0;
+
+    for (n = 0; n < STOMP_COUNT; n++)
+    {
+        if ((n >> 2) == j)
+        {
+            v |= (uint8_t)((recs[b * BANK_RECS + n][0] >> 6) << ((n & 3) * 2));
+        }
+    }
+
+    if (j == 2)
+    {
+        for (n = 0; n < 4; n++)
+        {
+            v |= (uint8_t)((recs[b * BANK_RECS + HAL_REC_BANK][n] >> 7) << (4 + n));
+        }
+    }
+
+    return v;
+}
+
+#define saved_y(b, j) y_of(saved_msg, (b), (j))
+
+// Store byte j of bank b's packed pedal settings (other settings left as stored, or the
+// defaults).
+static void store_y(int b, int j, uint8_t v)
+{
+    int n;
+    uint8_t y[3];
+
+    store_bank_defaults(b);
+    y[0] = y[1] = y[2] = 0;
+    y[j] = v;
+
+    for (n = 0; n < STOMP_COUNT; n++)
+    {
+        if ((n >> 2) == j)
+        {
+            uint8_t *m = stored_msg[b * BANK_RECS + n];
+
+            m[0] = (uint8_t)((m[0] & 0x3F) | piece_of(y, n));
+        }
+    }
+
+    if (j == 2)
+    {
+        for (n = 0; n < 4; n++)
+        {
+            uint8_t *t = stored_msg[b * BANK_RECS + HAL_REC_BANK];
+
+            t[n] = (uint8_t)((t[n] & 0x7F) | (((v >> (4 + n)) & 1) << 7));
+        }
+    }
+}
+
+// Store relay r's follow mask and triggers for bank b (other settings left as stored, or
+// the defaults).
+static void store_relay(int b, int r, unsigned mask, uint8_t thr_a, uint8_t thr_b)
+{
+    int n;
+    uint8_t *t = stored_msg[b * BANK_RECS + HAL_REC_BANK];
+
+    store_bank_defaults(b);
+
+    for (n = 0; n < STOMP_COUNT; n++)
+    {
+        uint8_t *m = stored_msg[b * BANK_RECS + n];
+
+        m[0] = (uint8_t)((m[0] & ~(0x10 << r)) | (((mask >> n) & 1) ? (0x10 << r) : 0));
+    }
+
+    t[r * 2]     = (uint8_t)((t[r * 2] & 0x80) | (thr_a & 0x7F));
+    t[r * 2 + 1] = (uint8_t)((t[r * 2 + 1] & 0x80) | (thr_b & 0x7F));
 }
 
 // Bank 1's ten modes, given packed two bits per switch (switch 1 lowest), four switches a
@@ -974,7 +1125,7 @@ static void test_chord_and_config_entry(void)
     ticks(1);
     CHECK(status_led == 1 && mode == MODE_CONFIG);
     // Config mode opens on page 1, pedal modes.
-    CHECK(cfg_page == PAGE_MODES && display == pedal_mode_get(0) + 1);
+    CHECK(cfg_page == PAGE_MODES && display == SHOWN_MODE(pedal_mode_get(0)));
     CHECK(aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_MIDI_CHAN] == 0);
     chord_up();
     CHECK(mode == MODE_CONFIG && status_led == 1);
@@ -1248,7 +1399,7 @@ static void test_config_modes(void)
     reset_world();
     chord_long();
     // Footswitch 1 starts selected: its mode digit (mode + 1) shows and its LED is lit.
-    CHECK(display == DEFAULT_PEDAL_MODE + 1 && aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_MIDI_CHAN] == 0);
+    CHECK(display == SHOWN_MODE(DEFAULT_PEDAL_MODE) && aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_MIDI_CHAN] == 0);
     CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0);
     CHECK(leds[0] == 1 && cfg_sel == 0);
     CHECK(pedal_mode_get(0) == DEFAULT_PEDAL_MODE);
@@ -1258,19 +1409,19 @@ static void test_config_modes(void)
     set_mode(2, PM_STOMP_MOM);
     tap(2);
     CHECK(cfg_sel == 2 && pedal_mode_get(2) == PM_STOMP_MOM);
-    CHECK(display == PM_STOMP_MOM + 1);
+    CHECK(display == SHOWN_MODE(PM_STOMP_MOM));
     CHECK(leds[2] == 1 && leds[0] == 0);
 
     // Pressing it again cycles stomp+momentary -> momentary -> inverted momentary ->
     // stomp -> stomp+momentary.
     tap(2);
-    CHECK(pedal_mode_get(2) == PM_MOMENTARY && display == PM_MOMENTARY + 1);
+    CHECK(pedal_mode_get(2) == PM_MOMENTARY && display == SHOWN_MODE(PM_MOMENTARY));
     tap(2);
-    CHECK(pedal_mode_get(2) == PM_MOM_INV && display == 4);
+    CHECK(pedal_mode_get(2) == PM_MOM_INV && display == SHOWN_MODE(PM_MOM_INV));
     tap(2);
-    CHECK(pedal_mode_get(2) == PM_STOMP && display == PM_STOMP + 1);
+    CHECK(pedal_mode_get(2) == PM_STOMP && display == SHOWN_MODE(PM_STOMP));
     tap(2);
-    CHECK(pedal_mode_get(2) == PM_STOMP_MOM && display == PM_STOMP_MOM + 1);
+    CHECK(pedal_mode_get(2) == PM_STOMP_MOM && display == SHOWN_MODE(PM_STOMP_MOM));
     tap(2);
     tap(2);
     tap(2);
@@ -1292,7 +1443,7 @@ static void test_config_modes(void)
     // Footswitch 10 (key code 10): Last switch, uses the third byte of settings.
     set_mode(9, PM_STOMP_MOM);
     tap(10);
-    CHECK(cfg_sel == 9 && display == PM_STOMP_MOM + 1 && leds[9] == 1);
+    CHECK(cfg_sel == 9 && display == SHOWN_MODE(PM_STOMP_MOM) && leds[9] == 1);
     tap(10);
     CHECK(pedal_mode_get(9) == PM_MOMENTARY);
     CHECK(pedal_mode_get(8) == DEFAULT_PEDAL_MODE && pedal_mode_get(7) == DEFAULT_PEDAL_MODE);
@@ -1307,9 +1458,9 @@ static void test_config_modes(void)
     save_exit();
     CHECK(mode == MODE_RUN && cfg_saved == 1);
     // The modes are saved in the footswitch records (type byte bits 2-3), not the
-    // settings record, which holds the channel and the pedal pickup bits, then two 0s.
-    CHECK(msg_was_saved[9] && (saved_msg[9][0] >> 2) == PM_MOMENTARY && (saved_msg[9][0] & 3) == MT_CC);
-    CHECK((saved_msg[2][0] >> 2) == PM_STOMP && saved_cfg[1] == (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1)) &&
+    // settings record, which holds the channel, then three 0s.
+    CHECK(msg_was_saved[9] && ((saved_msg[9][0] >> 2) & 3) == PM_MOMENTARY && (saved_msg[9][0] & 3) == MT_CC);
+    CHECK(((saved_msg[2][0] >> 2) & 3) == PM_STOMP && saved_cfg[1] == 0 &&
           saved_cfg[2] == 0 && saved_cfg[3] == 0);
     memcpy(stored_cfg, saved_cfg, 4);
     cfg_stored_valid = 1;
@@ -1585,7 +1736,7 @@ static void test_config_page_leds(void)
     // Page 1 pedal modes, page 2 MIDI channel.
     CHECK(cfg_page == PAGE_MODES && aux[HAL_LED_MIDI_CHAN] == 0 && aux[HAL_LED_MIDI_FUNC] == 1);
     CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0);
-    CHECK(display == pedal_mode_get(0) + 1 && leds[0] == 1);
+    CHECK(display == SHOWN_MODE(pedal_mode_get(0)) && leds[0] == 1);
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_CHANNEL && aux[HAL_LED_MIDI_CHAN] == 1 && aux[HAL_LED_MIDI_FUNC] == 0);
     CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0);
@@ -1597,8 +1748,11 @@ static void test_config_page_leds(void)
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_TOE && aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 1);
     CHECK(display == SHOWN_HI);
-    // Pages 5 and 6 light SWITCH 1 / SWITCH 2; page 8 is the last (no wrap).
+    // Page 5 the pedals ("PU"); pages 6 and 7 light SWITCH 1 / SWITCH 2; page 9 is the
+    // last (no wrap).
     CHECK(aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 0);
+    tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_PICKUP && display == SHOWN_TEXT(HAL_TEXT_PICKUP) && lamp == HAL_LAMP_NORMAL);
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_SW1 && aux[HAL_LED_SWITCH_1] == 1 && aux[HAL_LED_SWITCH_2] == 0);
     CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0 && aux[HAL_LED_MIDI_CHAN] == 0);
@@ -1608,19 +1762,17 @@ static void test_config_page_leds(void)
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_BANK_PC && aux[HAL_LED_SWITCH_2] == 0 && aux[HAL_LED_DIRECT_SELECT] == 1 && lamp == HAL_LAMP_NORMAL && dots == 0);
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_PICKUP && aux[HAL_LED_DIRECT_SELECT] == 0 && display == SHOWN_TEXT(HAL_TEXT_PICKUP) && lamp == HAL_LAMP_NORMAL);
-    tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_VERSION && aux[HAL_LED_DIRECT_SELECT] == 0 && lamp == HAL_LAMP_LEDS_STOMPS);
     // UP on page 9 stays on page 9 (no wrap).
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_VERSION);
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_PICKUP && lamp == HAL_LAMP_NORMAL && dots == 0);
-    tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_BANK_PC && aux[HAL_LED_DIRECT_SELECT] == 1 && lamp == HAL_LAMP_NORMAL && dots == 0);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_SW2 && aux[HAL_LED_SWITCH_2] == 1 && lamp == HAL_LAMP_NORMAL && dots == 0);
     tap(CTL_KEY_DOWN);
+    tap(CTL_KEY_DOWN);
+    CHECK(cfg_page == PAGE_PICKUP && aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_TOE && display == SHOWN_HI && aux[HAL_LED_SWITCH_1] == 0);
     CHECK(aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 1);
@@ -1632,7 +1784,7 @@ static void test_config_page_leds(void)
     tap(sw_code(10));
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_MODES && aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_MIDI_CHAN] == 0);
-    CHECK(chan_digit_pending == 0 && midi_channel == 10 && display == pedal_mode_get(0) + 1);
+    CHECK(chan_digit_pending == 0 && midi_channel == 10 && display == SHOWN_MODE(pedal_mode_get(0)));
     // DOWN on page 1 stays on page 1 (no wrap).
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_MODES && aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_EXP_1] == 0);
@@ -1788,9 +1940,9 @@ static void test_config_version(void)
 
     // DOWN during the lamp test: page 8, LEDs back to normal, and no more steps.
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_PICKUP && lamp == HAL_LAMP_NORMAL && dots == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
+    CHECK(cfg_page == PAGE_BANK_PC && lamp == HAL_LAMP_NORMAL && dots == 0 && aux[HAL_LED_DIRECT_SELECT] == 1);
     ticks(VER_STEP_TICKS * 20);
-    CHECK(lamp == HAL_LAMP_NORMAL && display == SHOWN_TEXT(HAL_TEXT_PICKUP));
+    CHECK(lamp == HAL_LAMP_NORMAL && display == SHOWN_TEXT(HAL_TEXT_DASHES));
 
     // Leaving from page 8 (long UP, or a long UP + DOWN) ends the lamp test and dots.
     tap(CTL_KEY_UP);
@@ -1911,9 +2063,9 @@ static void test_config_version_jump(void)
     // DOWN while a switch is held leaves page 8; the release then does nothing.
     ctl_key_press(sw_code(5));
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_PICKUP && ver_paused == 0 && lamp == HAL_LAMP_NORMAL);
+    CHECK(cfg_page == PAGE_BANK_PC && ver_paused == 0 && lamp == HAL_LAMP_NORMAL);
     ctl_key_release(sw_code(5));
-    CHECK(cfg_page == PAGE_PICKUP && bank_pc == 0 && pk_mask == (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1)) && midi_len == 0);
+    CHECK(cfg_page == PAGE_BANK_PC && bank_pc == 0 && !pc_typing && midi_len == 0);
 
     // Leaving config mode while a switch is held: run mode works as usual afterwards.
     tap(CTL_KEY_UP);
@@ -1993,14 +2145,14 @@ static void test_bank_mode_toggle(void)
     CHECK(aux[HAL_LED_DIRECT_SELECT] == 0 && pc_mode == 0);
 }
 
-// Open a SWITCH page: 1 (page 5) or 2 (page 6).
+// Open a SWITCH page: 1 (page 6) or 2 (page 7).
 static void goto_switch_page(int sw)
 {
     int i;
 
     chord_long();
 
-    for (i = 0; i < 3 + sw; i++)
+    for (i = 0; i < PAGE_SW1 - 1 + sw; i++)
     {
         tap(CTL_KEY_UP);
     }
@@ -2074,11 +2226,12 @@ static void test_relays(void)
     CHECK(leds[2] == 1 && leds[9] == 0 && aux[HAL_LED_DIRECT_SELECT] == 0 && aux[HAL_LED_EXP_1] == 1);
     CHECK(aux[HAL_LED_EXP_2] == 0);
 
-    // Saving stores both records: mask low, mask high, A, B.
+    // Saving stores them with the bank: the follows in the footswitch records, the
+    // triggers in the bank record (as mask low, mask high, A, B here).
     save_exit();
-    CHECK(sw_saved == 2);
-    CHECK(saved_sw[0][0] == 4 && saved_sw[0][1] == 0 && saved_sw[0][2] == v && saved_sw[0][3] == 0);
-    CHECK(saved_sw[1][0] == 0 && saved_sw[1][1] == 2 && saved_sw[1][2] == 0 && saved_sw[1][3] == ctl_scale(64, 0, 255));
+    CHECK(bank_saved == 1);
+    CHECK(saved_sw(0, 0) == 4 && saved_sw(0, 1) == 0 && saved_sw(0, 2) == v && saved_sw(0, 3) == 0);
+    CHECK(saved_sw(1, 0) == 0 && saved_sw(1, 1) == 2 && saved_sw(1, 2) == 0 && saved_sw(1, 3) == ctl_scale(64, 0, 255));
     CHECK(aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
 
     // Run mode, relay 1: footswitch 3 OR pedal A at v and up; program mode does not
@@ -2123,9 +2276,7 @@ static void test_relays(void)
     // Config mode leaves the relays alone; its pages own the SWITCH LEDs, and leaving
     // shows the relays again.
     // The fake EEPROM now holds what was saved, so cancelling reloads it.
-    memcpy(stored_sw, saved_sw, sizeof(stored_sw));
-    sw_stored_valid[0] = 1;
-    sw_stored_valid[1] = 1;
+    keep_saved_msgs();
     chord_long();
     ticks(5);
     CHECK(relays == 3 && aux[HAL_LED_SWITCH_1] == 0 && aux[HAL_LED_SWITCH_2] == 0);
@@ -2158,7 +2309,7 @@ static void test_relays(void)
     pedal(0, 0);
     pedal(0, 255);
     ticks(1);
-    CHECK(relays == 0 && saved_sw[0][2] == 0);
+    CHECK(relays == 0 && saved_sw(0, 2) == 0);
 
     // Cancel drops trigger changes.
     goto_switch_page(2);
@@ -2167,16 +2318,11 @@ static void test_relays(void)
     cancel_exit();
     CHECK(sw_mask[1] == 0x200 && sw_thr[3] == ctl_scale(64, 0, 255));
 
-    // Stored records load at start-up; a value over 127 is off, unused mask bits ignored
-    // (bit 10, once program mode, among them).
+    // Stored records load at start-up; a trigger's bit 7 belongs to the pedal settings.
     reset_world();
-    sw_stored_valid[1] = 1;
-    stored_sw[1][0] = 0x01;
-    stored_sw[1][1] = 0xFC;
-    stored_sw[1][2] = 200;
-    stored_sw[1][3] = 50;
+    store_relay(0, 1, 0x01, 200, 50);
     ctl_init();
-    CHECK(sw_mask[1] == 0x01 && sw_thr[2] == 0 && sw_thr[3] == 50);
+    CHECK(sw_mask[1] == 0x01 && sw_thr[2] == (200 & 0x7F) && sw_thr[3] == 50);
     CHECK(sw_mask[0] == 0 && sw_thr[0] == 0 && sw_thr[1] == 0);
     set_mode(0, PM_STOMP);
     tap(0);
@@ -2495,19 +2641,15 @@ static void test_config_led_eeprom(void)
     CHECK(midi_channel == 5 && status_led == 1 && status_toggles(CFG_FLASH_TICKS * 3) == 0);
     cancel_exit();
 
-    // Invalid records count as the defaults, as at start-up: a stored channel of 0xEE
-    // and stored trigger values over 127 match the default channel and no trigger.
+    // Invalid records count as the defaults, as at start-up: a stored channel of 0xEE and
+    // stray bytes after it match the default channel; stored default bank records match.
     reset_world();
     cfg_stored_valid = 1;
     stored_cfg[0] = 0xEE;
     stored_cfg[1] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
     stored_cfg[2] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x55);
     stored_cfg[3] = (uint8_t)(DEFAULT_PEDAL_MODE * 0x05 | 0xF0);
-    sw_stored_valid[1] = 1;
-    stored_sw[1][0] = 0;
-    stored_sw[1][1] = 0xF8;
-    stored_sw[1][2] = 200;
-    stored_sw[1][3] = 128;
+    store_bank_defaults(0);
     ctl_init();
     CHECK(midi_channel == MIDI_CHANNEL && sw_thr[2] == 0 && sw_thr[3] == 0 && sw_mask[1] == 0);
     chord_long();
@@ -2792,12 +2934,8 @@ static void test_boot_inverted(void)
     CHECK(midi_len == 6 && cc_value(1) == 127 && leds[1] == 1);
     // A relay following an inverted switch closes on the first tick.
     reset_world();
-    sw_stored_valid[0] = 1;
-    stored_sw[0][0] = 0x02;
-    stored_sw[0][1] = 0;
-    stored_sw[0][2] = 0;
-    stored_sw[0][3] = 0;
     store_modes((uint8_t)(PM_MOM_INV << 2), 0, 0);
+    store_relay(0, 0, 0x02, 0, 0);
     ctl_init();
     ticks(1);
     CHECK(relays == 1 && aux[HAL_LED_SWITCH_1] == 1 && midi_len == 0);
@@ -3074,7 +3212,7 @@ static void test_config_editor(void)
     ctl_key_press(sw_code(3));
     CHECK(pedal_mode_get(2) == PM_STOMP);
     ctl_key_release(sw_code(3));
-    CHECK(pedal_mode_get(2) == PM_STOMP_MOM && display == 2);
+    CHECK(pedal_mode_get(2) == PM_STOMP_MOM && display == SHOWN_MODE(PM_STOMP_MOM));
 
     // A long press opens the editor on the message type (SELECT lit) without changing the
     // mode.
@@ -3138,7 +3276,7 @@ static void test_config_editor(void)
     // A long UP [ENTER] accepts: back to the modes page with switch 3 selected.
     long_nav(CTL_KEY_UP);
     CHECK(!edit_open && mode == MODE_CONFIG && param_leds(-1));
-    CHECK(aux[HAL_LED_MIDI_FUNC] == 1 && display == 2 && leds[2] == 1);
+    CHECK(aux[HAL_LED_MIDI_FUNC] == 1 && display == SHOWN_MODE(PM_STOMP_MOM) && leds[2] == 1);
     CHECK(msg_type(2) == MT_NOTE && MSG_NUM(2) == 100 && MSG_ON(2) == 90 && MSG_OFF(2) == 35);
 
     // Open it again, change it, and a long DOWN [ESCAPE] puts the values back.
@@ -3429,7 +3567,7 @@ static void test_midi_config(void)
     clear_log();
     dump_run(1000);
     n = parse_dump(0);
-    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 4 + 2 + 2 && dump_end && midi_job == 0);
+    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 4 + 2 + 2 + 2 && dump_end && midi_job == 0);
     CHECK(dump_values[NP_BANK] == 1 && dump_values[NP_BANKS] == BANK_COUNT);
     CHECK(dump_values[NP_BANK_PC] == 127 && dump_values[NP_BANK_PC_ON] == 0);
     CHECK(dump_values[NP_CHANNEL] == MIDI_CHANNEL);
@@ -3610,8 +3748,8 @@ static void test_midi_config(void)
     nrpn(NP_COMMAND, NC_DUMP);
     CHECK(cfg_saved == 1 && midi_job == 1);
     dump_run(1000);
-    CHECK(cfg_saved == 1 && cal_saved == 1 && sw_saved == 2 && msg_saved == 10 && midi_job == 0);
-    CHECK(saved_sw[0][2] == 44 && saved_msg[9][1] == 3 && saved_cfg[0] == MIDI_CHANNEL);
+    CHECK(cfg_saved == 1 && cal_saved == 1 && bank_saved == 1 && msg_saved == 10 && midi_job == 0);
+    CHECK(saved_sw(0, 2) == 44 && saved_msg[9][1] == 3 && saved_cfg[0] == MIDI_CHANNEL);
 
     // Reload: back to what the EEPROM holds; switches to their resting states.
     reset_world();
@@ -3646,7 +3784,7 @@ static void test_midi_config(void)
 // Store footswitch sw's (0-9) message in bank b (0-based) of the fake EEPROM, with mode m.
 static void store_bank_msg(int b, int sw, uint8_t type, uint8_t num, uint8_t on, uint8_t off, uint8_t m)
 {
-    int r = b * HAL_REC_SW1 + sw;
+    int r = b * BANK_RECS + sw;
 
     msg_stored_valid[r] = 1;
     stored_msg[r][0] = (uint8_t)(type | (m << 2));
@@ -3833,9 +3971,9 @@ static void test_bank_pc(void)
     boot_end();
     CHECK(bank_pc == 0 && midi_len == 0);
 
-    // Page 7 (UP from page 6): DIRECT SELECT lit, "--", footswitch LEDs dark.
+    // Page 8 (UP from page 7): DIRECT SELECT lit, "--", footswitch LEDs dark.
     chord_long();
-    for (k = 0; k < 6; k++)
+    for (k = 0; k < PAGE_BANK_PC; k++)
     {
         tap(CTL_KEY_UP);
     }
@@ -3843,7 +3981,7 @@ static void test_bank_pc(void)
           aux[HAL_LED_MIDI_FUNC] == 0 && aux[HAL_LED_EXP_1] == 0 && lamp == HAL_LAMP_NORMAL &&
           display == SHOWN_TEXT(HAL_TEXT_DASHES) && stomp_state == 0);
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_PICKUP);
+    CHECK(cfg_page == PAGE_VERSION);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_BANK_PC && lamp == HAL_LAMP_NORMAL);
 
@@ -3905,15 +4043,15 @@ static void test_bank_pc(void)
     tap(sw_code(10));
     CHECK(!pc_typing && display == 99);
     ctl_key_release(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_PICKUP && bank_pc == 100);
+    CHECK(cfg_page == PAGE_VERSION && bank_pc == 100);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_BANK_PC);
     ctl_key_press(sw_code(10));
     CHECK(!pc_typing && display == 99);
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_PICKUP);
+    CHECK(cfg_page == PAGE_VERSION);
     ctl_key_release(sw_code(10));
-    CHECK(!pc_typing && cfg_page == PAGE_PICKUP);
+    CHECK(!pc_typing && cfg_page == PAGE_VERSION);
     tap(CTL_KEY_DOWN);
     tap(sw_code(10));
     tap(CTL_KEY_UP);
@@ -3946,13 +4084,12 @@ static void test_bank_pc(void)
     CHECK(cfg_page == PAGE_BANK_PC && display == 4 && lamp == HAL_LAMP_NORMAL && dots == 0);
     long_press(CTL_KEY_UP);
     CHECK(mode == MODE_RUN && midi_len == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
-    CHECK((saved_msg[0][0] >> 4) == 5 && (saved_msg[1][0] & 0xF0) == 0 && (saved_msg[2][0] & 0xF0) == 0);
-    CHECK((saved_msg[0][0] & 0x0F) == (uint8_t)(MT_CC | (PM_STOMP << 2)));
+    CHECK(saved_y(0, 0) == 5 && saved_y(0, 1) == bank_def[1] && saved_y(0, 2) == bank_def[2]);
+    CHECK((saved_msg[0][0] & 0x3F) == (uint8_t)(MT_CC | (PM_STOMP << 2)));
     keep_saved_msgs();
 
     // Bank 2: program 100 (101 = 0x65); bank 3: none. Power-on (bank 1) sends nothing.
-    stored_msg[HAL_REC_SW1][0]     |= 0x50;
-    stored_msg[HAL_REC_SW1 + 1][0] |= 0x60;
+    store_y(1, 0, 0x65);
     ctl_init();
     boot_end();
     CHECK(bank_pc == 5 && midi_len == 0 && program == 0);
@@ -4045,8 +4182,7 @@ static void test_bank_pc(void)
     clear_log();
     nrpn(NP_BANK_PC, 33);
     nrpn(NP_COMMAND, NC_SAVE);
-    CHECK(midi_len == 0 && hal_bank == 1 && (saved_msg[HAL_REC_SW1][0] >> 4) == (34 & 0x0F) &&
-          (saved_msg[HAL_REC_SW1 + 1][0] & 0xF0) == (34 & 0xF0));
+    CHECK(midi_len == 0 && hal_bank == 1 && saved_y(1, 0) == 34);
 }
 
 // Banks NOTE_BANK_1 and NOTE_BANK_2, never saved, default to momentary notes: switch 1
@@ -4289,11 +4425,11 @@ static void test_banks(void)
     CHECK(pedal_mode_get(3) == PM_MOM_INV && status_led == 0);
     save_exit();
     CHECK(mode == MODE_RUN && hal_bank == 1 && display == 2 && aux[HAL_LED_DIRECT_SELECT] == 0);
-    CHECK(msg_was_saved[HAL_REC_SW1 + 3] && saved_msg[HAL_REC_SW1 + 3][0] == (MT_CC | (PM_MOM_INV << 2)) &&
-          saved_msg[HAL_REC_SW1 + 3][1] == 44);
+    CHECK(msg_was_saved[BANK_RECS + 3] && saved_msg[BANK_RECS + 3][0] == (MT_CC | (PM_MOM_INV << 2)) &&
+          saved_msg[BANK_RECS + 3][1] == 44);
     for (i = 0; i < STOMP_COUNT; i++)
     {
-        CHECK(!msg_was_saved[i] && msg_was_saved[HAL_REC_SW1 + i]);
+        CHECK(!msg_was_saved[i] && msg_was_saved[BANK_RECS + i]);
     }
     // Saved, it comes back with the bank.
     keep_saved_msgs();
@@ -4332,7 +4468,7 @@ static void test_banks(void)
           dump_values[NP_NUM] == 61);
     // Saving over MIDI writes the current bank.
     nrpn(NP_COMMAND, NC_SAVE);
-    CHECK(msg_was_saved[2 * HAL_REC_SW1] && saved_msg[2 * HAL_REC_SW1][1] == 61 && !msg_was_saved[0]);
+    CHECK(msg_was_saved[2 * BANK_RECS] && saved_msg[2 * BANK_RECS][1] == 61 && !msg_was_saved[0]);
 }
 
 // A CC or note has one state wherever it is used: a switch that sends it sets every
@@ -4520,6 +4656,143 @@ static void midi_cc_in(uint8_t cc, uint8_t v)
     ctl_midi_in(v);
 }
 
+// Page 5's pedal CC editor, the CCs per bank, and over MIDI (NRPN 96 / 97).
+static void test_pedal_cc_config(void)
+{
+    int k;
+    uint8_t cc_a = bank_def[1] & 0x7F;
+    uint8_t cc_b = bank_def[2] & 0x7F;
+
+    uint8_t pk_def = (uint8_t)(PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1));
+
+    printf("pedal CC: page 5 editor, per bank, NRPN\n");
+    reset_world();
+    CHECK(pedal_cc[0] == cc_a && pedal_cc[1] == cc_b && cc_a != 44 && cc_b != 44);
+    chord_long();
+    for (k = 0; k < PAGE_PICKUP; k++)
+    {
+        tap(CTL_KEY_UP);
+    }
+    CHECK(cfg_page == PAGE_PICKUP && !pcc_open);
+
+    // Holding footswitch 1 opens pedal A's editor (no pickup toggle): EXP 1, NUMBER and
+    // footswitch 1 lit, the CC shown.
+    long_press(sw_code(1));
+    CHECK(pcc_open && !pcc_b && pk_mask == pk_def && display == cc_a);
+    CHECK(aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0 && aux[HAL_LED_NUMBER] == 1 && leds[0] == 1 && leds[1] == 0);
+    // Digits as in the footswitch editor: 4, 4 make 44; UP / DOWN taps do nothing.
+    tap(sw_code(4));
+    CHECK(pedal_cc[0] == 4 && display == 4);
+    ticks(1);
+    CHECK(cfg_changed == 1);
+    tap(sw_code(4));
+    CHECK(pedal_cc[0] == 44 && display == 44);
+    tap(CTL_KEY_UP);
+    tap(CTL_KEY_DOWN);
+    CHECK(cfg_page == PAGE_PICKUP && pcc_open && pedal_cc[0] == 44);
+    // A long DOWN [ESCAPE] puts the old CC back; still on page 5, "PU".
+    long_nav(CTL_KEY_DOWN);
+    CHECK(mode == MODE_CONFIG && !pcc_open && pedal_cc[0] == cc_a && display == SHOWN_TEXT(HAL_TEXT_PICKUP));
+    ticks(1);
+    CHECK(cfg_changed == 0);
+    // Pedal B's: a pedal, once moved, sets it to its CC value; a long UP [ENTER] keeps it.
+    long_press(sw_code(2));
+    CHECK(pcc_open && pcc_b && aux[HAL_LED_EXP_2] == 1 && leds[1] == 1 && display == cc_b);
+    pedal(0, 0);
+    pedal(0, raw_for(44));
+    CHECK(pedal_cc[1] == 44 && display == 44 && midi_len == 0);
+    long_nav(CTL_KEY_UP);
+    CHECK(mode == MODE_CONFIG && !pcc_open && pedal_cc[1] == 44);
+    // A tap still toggles pickup.
+    tap(sw_code(2));
+    CHECK(pk_mask == (pk_def ^ 2));
+    tap(sw_code(2));
+    CHECK(pk_mask == pk_def);
+    // Saving stores it with the bank; run mode sends pedal B on CC 44.
+    save_exit();
+    CHECK(mode == MODE_RUN && (saved_y(0, 2) & 0x7F) == 44 && (saved_y(0, 1) & 0x7F) == cc_a);
+    pk_mask = 0;
+    pedal(1, 0);
+    clear_log();
+    pedal(1, 255);
+    CHECK(midi_len == 3 && cc_number(0) == 44 && cc_value(0) == 127);
+
+    // Bank 2 (never saved): the default CCs; bank 1 again: 44.
+    keep_saved_msgs();
+    tap(CTL_KEY_UP);
+    ticks(1);
+    CHECK(hal_bank == 1 && pedal_cc[1] == cc_b && pk_mask == pk_def);
+    pk_mask = 0;
+    clear_log();
+    pedal(1, 0);
+    CHECK(midi_len == 3 && cc_number(0) == cc_b && cc_value(0) == 0);
+    tap(CTL_KEY_DOWN);
+    ticks(1);
+    CHECK(hal_bank == 0 && pedal_cc[1] == 44);
+
+    // A pickup pedal changing CC with the bank: its new CC's value (here unknown, so 0) is
+    // compared with where it is, so it waits until it gets there.
+    pk_mask = 2;
+    pedal(1, 255);
+    clear_log();
+    pedal(1, 254);
+    CHECK(!pk_waiting(1));
+    store_y(1, 2, (uint8_t)(cc_b | 0x80));
+    tap(CTL_KEY_UP);
+    ticks(1);
+    CHECK(hal_bank == 1 && pedal_cc[1] == cc_b && (pk_mask & 2) && pk_waiting(1));
+    clear_log();
+    pedal(1, raw_for(100));
+    CHECK(midi_len == 0);
+    // At 0 (its value) it is picked up without sending it, then sends as it moves.
+    pedal(1, 0);
+    CHECK(midi_len == 0 && !pk_waiting(1));
+    pedal(1, raw_for(30));
+    CHECK(midi_len == 3 && cc_number(0) == cc_b && cc_value(0) == 30);
+
+    // Over MIDI: NRPN 96 / 97, the bank in use; the pedal sends on it from then on.
+    reset_world();
+    pk_mask = 0;
+    CHECK(np_kind(NP_PEDAL_CC) == NK_SET && np_kind(NP_PEDAL_CC + 1) == NK_SET && np_kind(NP_PEDAL_CC + 2) == NK_NONE);
+    nrpn(NP_PEDAL_CC, 20);
+    CHECK(pedal_cc[0] == 20 && nrpn_get(NP_PEDAL_CC) == 20 && nrpn_get(NP_PEDAL_CC + 1) == cc_b);
+    pedal(0, 0);
+    clear_log();
+    pedal(0, 255);
+    CHECK(midi_len == 3 && cc_number(0) == 20);
+}
+
+// The relays' settings belong to the bank: bank 2's own follows and triggers.
+static void test_bank_relays(void)
+{
+    printf("relays: per bank\n");
+    reset_world();
+    pk_mask = 0;
+    set_mode(2, PM_STOMP);
+    store_relay(1, 0, 0x08, 0, 0);
+    store_relay(1, 1, 0, 0, 100);
+    tap(2);
+    ticks(1);
+    CHECK(relays == 0 && sw_mask[0] == 0);
+    tap(2);
+    tap(CTL_KEY_UP);
+    ticks(1);
+    CHECK(hal_bank == 1 && sw_mask[0] == 0x08 && sw_mask[1] == 0 && sw_thr[3] == 100 && sw_thr[0] == 0);
+    set_mode(3, PM_STOMP);
+    tap(3);
+    ticks(1);
+    CHECK(relays == 1);
+    pedal(1, 0);
+    pedal(1, 255);
+    ticks(1);
+    CHECK(relays == 3);
+    tap(CTL_KEY_DOWN);
+    ticks(1);
+    CHECK(hal_bank == 0 && sw_mask[0] == 0 && sw_thr[3] == 0);
+    ticks(1);
+    CHECK(relays == 0);
+}
+
 static void test_pedal_pickup(void)
 {
     const uint8_t pcc[2] = { PEDAL_CC_LIST };
@@ -4680,22 +4953,31 @@ static void test_pedal_pickup(void)
     tap(sw_code(1));
     CHECK(pk_mask == 2 && aux[HAL_LED_EXP_1] == 0 && leds[0] == 0);
     save_exit();
-    CHECK(mode == MODE_RUN && cfg_saved == 1 && saved_cfg[0] == MIDI_CHANNEL && saved_cfg[1] == 2);
+    CHECK(mode == MODE_RUN && cfg_saved == 1 && saved_cfg[0] == MIDI_CHANNEL && saved_cfg[1] == 0);
     CHECK(saved_cfg[2] == 0 && saved_cfg[3] == 0);
-    // Loaded at power-on; stray bits ignored; a record without it (0) is immediate.
+    // Saved with the bank: bit 7 of the pedals' packed bytes.
+    CHECK((saved_y(0, 1) >> 7) == 0 && (saved_y(0, 2) >> 7) == 1);
+    CHECK((saved_y(0, 1) & 0x7F) == pedal_cc[0] && (saved_y(0, 2) & 0x7F) == pedal_cc[1]);
+    // Loaded at power-on; the channel record's old pickup byte is ignored.
+    keep_saved_msgs();
     stored_cfg[0] = MIDI_CHANNEL;
-    stored_cfg[1] = 0xFE;
+    stored_cfg[1] = 0xFD;
     stored_cfg[2] = 0;
     stored_cfg[3] = 0;
     cfg_stored_valid = 1;
     ctl_init();
+    boot_end();
     CHECK(pk_mask == 2);
-    stored_cfg[1] = 0;
-    ctl_init();
-    CHECK(pk_mask == 0);
     cfg_stored_valid = 0;
+    // Each bank has its own: bank 2 (never saved) has the defaults, bank 1 its own again.
+    tap(CTL_KEY_UP);
+    ticks(1);
+    CHECK(hal_bank == 1 && pk_mask == (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1)));
+    tap(CTL_KEY_DOWN);
+    ticks(1);
+    CHECK(hal_bank == 0 && pk_mask == 2);
 
-    // Over MIDI: NRPN 94 / 95 (0 or 1), the bank-independent pedal setting.
+    // Over MIDI: NRPN 94 / 95 (0 or 1), the bank's pedal setting.
     reset_world();
     pk_mask = 0;
     nrpn(NP_PICKUP + 1, 1);
@@ -4745,6 +5027,8 @@ int main(void)
     test_pedal_cc();
     test_pedal_noise();
     test_pedal_pickup();
+    test_pedal_cc_config();
+    test_bank_relays();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

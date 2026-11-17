@@ -244,10 +244,12 @@ static void fill(uint8_t rec, uint8_t bank)
     hal_rec[2] = (uint8_t)((rec * 29 + bank * 5 + 1) & 0x7F);
     hal_rec[3] = (uint8_t)((rec * 31 + bank * 11 + 2) & 0x7F);
 
-    if (rec >= HAL_REC_SW1)
+    if (rec >= HAL_REC_BANK)
     {
-        // Shared records hold full bytes (calibration).
+        // The bank record and the shared ones hold full bytes (the bank record's bit 7s,
+        // the calibration).
         hal_rec[1] |= 0x80;
+        hal_rec[3] |= 0x80;
     }
 }
 
@@ -262,9 +264,15 @@ static int matches(uint8_t rec, uint8_t bank)
     return hal_rec_load(rec) && memcmp(hal_rec, want, 4) == 0;
 }
 
-// Address of a footswitch record as the layout describes it.
+// Address of a per-bank record as the layout describes it: footswitch sw at 0x7AE in bank
+// 1, 50 bytes lower per bank; the bank record (sw 10) at 0x0D3, 5 lower per bank.
 static unsigned fs_addr(int bank, int sw)
 {
+    if (sw == HAL_REC_BANK)
+    {
+        return (unsigned)(0x0D3 - 5 * bank);
+    }
+
     return (unsigned)(0x7E0 - 50 * (bank + 1) + 5 * sw);
 }
 
@@ -294,14 +302,14 @@ int main(void)
     // another; nothing below bank BANK_COUNT's records is written.
     for (b = 0; b < BANK_COUNT; b++)
     {
-        for (r = 0; r < HAL_REC_SW1; r++)
+        for (r = 0; r < HAL_REC_CAL; r++)
         {
             fill((uint8_t)r, (uint8_t)b);
             CHECK(hal_rec_save((uint8_t)r));
         }
     }
 
-    for (r = HAL_REC_SW1; r < HAL_RECORDS; r++)
+    for (r = HAL_REC_CAL; r < HAL_RECORDS; r++)
     {
         fill((uint8_t)r, 0);
         CHECK(hal_rec_save((uint8_t)r));
@@ -311,7 +319,7 @@ int main(void)
 
     for (b = 0; b < BANK_COUNT; b++)
     {
-        for (r = 0; r < HAL_REC_SW1; r++)
+        for (r = 0; r < HAL_REC_CAL; r++)
         {
             ok &= matches((uint8_t)r, (uint8_t)b);
         }
@@ -319,7 +327,7 @@ int main(void)
 
     CHECK(ok);
 
-    for (r = HAL_REC_SW1; r < HAL_RECORDS; r++)
+    for (r = HAL_REC_CAL; r < HAL_RECORDS; r++)
     {
         uint8_t want[4];
 
@@ -332,7 +340,7 @@ int main(void)
 
     below = 0;
 
-    for (i = 0; i < (int)fs_addr(BANK_COUNT - 1, 0); i++)
+    for (i = 0; i < (int)fs_addr(BANK_COUNT - 1, HAL_REC_BANK); i++)
     {
         below |= ee_touched[i];
     }
@@ -340,15 +348,31 @@ int main(void)
     CHECK(!below);
 
     // The layout: bank 1's switch 1 at 0x7AE, five bytes each, the last bank 50 bytes per
-    // bank lower; the shared records at 0x7E0 (magic 0xC3 first) to 0x7FF.
+    // bank lower; the bank records from 0x0D3 down; the shared records at 0x7F0 (magic
+    // 0xC1 first) to 0x7FF, with 0x7E0-0x7EF (the old relay records) and 0x000-0x023 unused.
     hal_bank = 0;
     fill(0, 0);
     CHECK(ee[0x7AE] == hal_rec[0] && ee[0x7AF] == hal_rec[1] && ee[0x7B2] == (hal_rec[0] ^ hal_rec[1] ^ hal_rec[2] ^ hal_rec[3] ^ 0x96));
     fill(9, (uint8_t)(BANK_COUNT - 1));
     CHECK(ee[fs_addr(BANK_COUNT - 1, 9)] == hal_rec[0] && ee[fs_addr(BANK_COUNT - 1, 9) + 3] == hal_rec[3]);
-    CHECK(ee[0x7E0] == 0xC3 && ee[0x7E8] == 0xC4 && ee[0x7F0] == 0xC1 && ee[0x7F8] == 0xC2);
-#if BANK_COUNT == 40
-    CHECK(fs_addr(39, 0) == 0x010);
+    CHECK(ee[0x7F0] == 0xC1 && ee[0x7F8] == 0xC2);
+    fill(HAL_REC_BANK, 0);
+    CHECK(ee[0x0D3] == hal_rec[0] && ee[0x0D7] == (hal_rec[0] ^ hal_rec[1] ^ hal_rec[2] ^ hal_rec[3] ^ 0x4B));
+    ok = 1;
+
+    for (i = 0x7E0; i < 0x7F0; i++)
+    {
+        ok &= !ee_touched[i];
+    }
+
+    for (i = 0; i < 0x024; i++)
+    {
+        ok &= !ee_touched[i];
+    }
+
+    CHECK(ok);
+#if BANK_COUNT == 36
+    CHECK(fs_addr(35, 0) == 0x0D8 && fs_addr(35, HAL_REC_BANK) == 0x024);
 #endif
 
     // A record crossing a page boundary takes two write cycles; one within a page takes one.
@@ -357,7 +381,7 @@ int main(void)
 
     for (b = 0; b < BANK_COUNT; b++)
     {
-        for (r = 0; r < HAL_REC_SW1; r++)
+        for (r = 0; r < HAL_REC_CAL; r++)
         {
             unsigned a = fs_addr(b, r);
             int before = ee_cycles;
@@ -393,6 +417,30 @@ int main(void)
     memcpy(&ee[fs_addr(CB, 5)], &ee[fs_addr(CB, 4)], 5);
     hal_bank = CB;
     CHECK(!hal_rec_load(5));
+    // The bank record takes bit 7 in every byte, but not a changed byte or another bank's.
+    CHECK(matches(HAL_REC_BANK, CB));
+    ee[fs_addr(CB, HAL_REC_BANK) + 2] ^= 0x01;
+    CHECK(!hal_rec_load(HAL_REC_BANK));
+    ee[fs_addr(CB, HAL_REC_BANK) + 2] ^= 0x01;
+#if BANK_COUNT > 1
+    memcpy(&ee[fs_addr(CB + 1, HAL_REC_BANK)], &ee[fs_addr(CB, HAL_REC_BANK)], 5);
+    hal_bank = CB + 1;
+    CHECK(!hal_rec_load(HAL_REC_BANK));
+#endif
+    // An erased or zeroed bank record is invalid in every bank.
+    ok = 1;
+
+    for (b = 0; b < BANK_COUNT; b++)
+    {
+        hal_bank = (uint8_t)b;
+        memset(&ee[fs_addr(b, HAL_REC_BANK)], 0xFF, 5);
+        ok &= !hal_rec_load(HAL_REC_BANK);
+        memset(&ee[fs_addr(b, HAL_REC_BANK)], 0x00, 5);
+        ok &= !hal_rec_load(HAL_REC_BANK);
+    }
+
+    CHECK(ok);
+    hal_bank = CB;
     ee[0x7F1] ^= 0x10;
     CHECK(!hal_rec_load(HAL_REC_CAL));
 

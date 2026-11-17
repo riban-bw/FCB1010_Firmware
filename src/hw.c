@@ -176,14 +176,17 @@ void hal_display(uint8_t value)
 // b = C D E F G). The scroll has its own r, SCROLL_R (user's design), and its a is
 // SCROLL_A, lowercase or uppercase.
 // Then the footswitch message types: "CC" = C (A D E F) twice; "nt" = n, t (D E F G);
-// "Pr" = P (A B E F G), r. Then "--" (G twice), then "PU" = P, U (B C D E F).
+// "Pr" = P (A B E F G), a small r (E G; user's request). Then "--" (G twice), then "PU"
+// = P, U (B C D E F). Then the pedal modes: "St" = S (A C D F G), t; "St" again (with
+// "+"); "Pu" = P, a small u (C D E); "Pu" again (with "-").
 // Bits: A 0x80, B 0x40, C 0x20, D 0x10, E 0x08, F 0x04, G 0x02 (0x01 is the dot).
 #define SCROLL_R 0xCC   // A B E F: the r with its top-right corner
 #define SCROLL_A 0xFA   // lowercase a, A B C D E G (uppercase A is 0xEE, A B C E F G)
 static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
     0x9E, 0x8C, 0x1C, 0xFC, 0x6E, 0x0C,
     0x00, SCROLL_R, SCROLL_R, 0x0C, 0x0C, 0x3E, 0x3E, SCROLL_A, SCROLL_A, 0xEC, 0xEC, 0x00,
-    0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x8C, 0x02, 0x02, 0xCE, 0x7C
+    0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x0A, 0x02, 0x02, 0xCE, 0x7C,
+    0xB6, 0x1E, 0xB6, 0x1E, 0xCE, 0x38, 0xCE, 0x38
 };
 
 // The leftmost position's sign, lit with its "1" (B C). Which bits drive the "-" bar and
@@ -254,7 +257,8 @@ void hal_display_dots(uint8_t mask)
     }
 }
 
-// The word on tens and units, the leftmost position blank. Decimal points are kept.
+// The word on tens and units, the leftmost position blank (but for the signs of two pedal
+// modes). Decimal points are kept.
 void hal_display_text(uint8_t text)
 {
     uint8_t i;
@@ -266,6 +270,16 @@ void hal_display_text(uint8_t text)
 
     i = (uint8_t)(text * 2);
     clear_digit(2);
+
+    if (text == HAL_TEXT_MODE + 1)
+    {
+        led_map[2] &= (uint8_t)~SIGN_PLUS;
+    }
+    else if (text == HAL_TEXT_MODE + 3)
+    {
+        led_map[2] &= (uint8_t)~SIGN_MINUS;
+    }
+
     led_map[1] = (uint8_t)((led_map[1] & 0x01) | ((uint8_t)~text_segments[i] & 0xFE));
     led_map[0] = (uint8_t)((led_map[0] & 0x01) | ((uint8_t)~text_segments[i + 1] & 0xFE));
 }

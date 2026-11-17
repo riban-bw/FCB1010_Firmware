@@ -144,11 +144,16 @@ void hal_lamp_test(uint8_t how)               { js_lamp_test(how); }
 
 void    hal_relays(uint8_t mask)          { js_relays(mask); }
 
-// Settings records go to the page's store by HAL_REC_* number (the page names them); a
-// footswitch record of bank b (hal_bank) above the first is number + 16 * b.
+// Settings records go to the page's store by number (the page names them): footswitch n
+// of bank b (hal_bank) is n + 16 * b, the bank record 14 + 16 * b, the calibration 12 and
+// the channel record 13 (the numbers they had before the relay records, 10 and 11, moved
+// into the banks, so a stored calibration and channel still load).
 uint8_t hal_rec[4];
 uint8_t hal_bank;
-static unsigned rec_id(uint8_t rec) { return (rec < HAL_REC_SW1) ? rec + 16u * hal_bank : rec; }
+static unsigned rec_id(uint8_t rec)
+{
+    return (rec < HAL_REC_BANK) ? rec + 16u * hal_bank : (rec == HAL_REC_BANK) ? 14u + 16u * hal_bank : rec + 1u;
+}
 uint8_t hal_rec_load(uint8_t rec) { return rec < HAL_RECORDS && hal_bank < BANK_COUNT && js_store_load(rec_id(rec), hal_rec); }
 uint8_t hal_rec_save(uint8_t rec) { return rec < HAL_RECORDS && hal_bank < BANK_COUNT && js_store_save(rec_id(rec), hal_rec); }
 
@@ -318,7 +323,7 @@ uint8_t emu_scale(uint8_t raw, uint8_t heel, uint8_t toe)
     return ctl_scale(raw, heel, toe);
 }
 
-// Firmware constants the page shows: 0 tick ms, 1..10 stomp CCs, 11..12 pedal CCs,
+// Firmware constants the page shows: 0 tick ms, 1..10 stomp CCs, 11..12 default pedal CCs,
 // 13 config hold ms, 14 momentary hold ms, 15 repeat delay ms, 16 repeat rate Hz.
 static const uint8_t stomp_cc[STOMP_COUNT] = { STOMP_CC_LIST };
 static const uint8_t pedal_cc[2]           = { PEDAL_CC_LIST };

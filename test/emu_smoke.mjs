@@ -22,7 +22,8 @@ function fakeElement() {
   return {
     classList: fakeClassList(), style: {}, dataset: {}, textContent: "", innerHTML: "", value: "0",
     attrs: {}, setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
-    addEventListener() {}, setPointerCapture() {}
+    // Listeners are kept, so a check can fire one (fire, below).
+    listeners: {}, addEventListener(t, f) { (this.listeners[t] ||= []).push(f); }, setPointerCapture() {}
   };
 }
 const elements = {};
@@ -80,6 +81,8 @@ const cc = (ch, sw, v) => "b" + ch + " " + hex(STOMP_CC[sw]) + " " + hex(v);
 function chordTap() { fcb.down(UP); fcb.down(DOWN); wait(100); fcb.up(UP); fcb.up(DOWN); wait(200); }
 // MIDI CHANNEL, MIDI FUNCTION, EXP 1, EXP 2.
 const el0 = (id) => sandbox.document.getElementById(id);
+// Run an element's listeners for event type t, as the browser would.
+const fire = (id, t) => (el0(id).listeners[t] || []).forEach((f) => f.call(el0(id), { target: el0(id) }));
 const pageLeds = () => [fcb.hw.aux[0], fcb.hw.aux[1], fcb.hw.aux[2], fcb.hw.aux[3]];
 const TEXT_ER = 1, TEXT_LO = 2, TEXT_HI = 3, TEXT_DASHES = 13;   // hw.text is HAL_TEXT_* + 1
 
@@ -217,6 +220,19 @@ check("and nothing is echoed", sent(), []);
 // CC 20 (once the UP + DOWN controller) is an ordinary CC: it leaves DIRECT SELECT alone.
 fcb.midiIn([0xb0, 20, 127]); wait(20);
 check("CC 20 = 127 does not light DIRECT SELECT", [fcb.hw.aux[4], sent()], [0, []]);
+// The MIDI IN card sends a CC, note on, note off or program change on the chosen channel.
+fcb.midiIn([0xb0, STOMP_CC[1], 0]); wait(20);
+el0("inType").value = "cc"; el0("inCc").value = String(STOMP_CC[1]); el0("inVal").value = "127"; el0("inCh").value = "1";
+fire("btnSendIn", "click"); wait(20);
+check("the card's CC lights switch 2", fcb.hw.leds[1], 1);
+fcb.midiIn([0xb0, STOMP_CC[1], 0]); wait(20);
+el0("inType").value = "pc"; fire("inType", "change"); el0("inCc").value = "5";
+fire("btnSendIn", "click"); wait(20);
+check("a program change from the card is ignored (labels Program, none)", [fcb.state().program, sent(), el0("inNumLabel").textContent, el0("inValLabel").textContent], [p, [], "Program", "(none)"]);
+el0("inType").value = "on"; fire("inType", "change");
+check("note on labels: Note, Velocity", [el0("inNumLabel").textContent, el0("inValLabel").textContent], ["Note", "Velocity"]);
+// Switch 2 on again, as the bank checks below expect.
+fcb.midiIn([0xb0, STOMP_CC[1], 127]); wait(20);
 
 console.log("emulator: footswitch banks (the default, DIRECT SELECT dark)");
 check("the display shows the footswitch bank (1)", [fcb.hw.aux[4], fcb.hw.display, fcb.state().bank], [0, 1, 0]);
@@ -243,9 +259,11 @@ check("the UP and DOWN switches are labelled UP [ENTER] and DOWN [ESCAPE]",
 check("UP + DOWN held 1s opens config mode on page 1", [fcb.state().mode, fcb.hw.status, fcb.state().cfgPage], [1, 1, 0]);
 check("page 1 lights MIDI FUNCTION only", pageLeds(), [0, 1, 0, 0]);
 check("DIRECT SELECT is dark while editing", fcb.hw.aux[4], 0);
-check("page 1 shows switch 1's mode digit", fcb.hw.display, fcb.state().pedalModes[0] + 1);
+// The modes as words (HAL_TEXT_MODE, the 15th text): "St", "+St", "Pu", "-Pu".
+const MODE_SHOWN = ["St", "+St", "Pu", "-Pu"];
+check("page 1 shows switch 1's mode as a word", [fcb.hw.text, el0("display").getAttribute("aria-label")], [15 + fcb.state().pedalModes[0], "Display " + MODE_SHOWN[fcb.state().pedalModes[0]]]);
 press(2, 100);
-check("a footswitch selects itself and shows its mode", [fcb.state().cfgSel, fcb.hw.display], [2, fcb.state().pedalModes[2] + 1]);
+check("a footswitch selects itself and shows its mode", [fcb.state().cfgSel, fcb.hw.text], [2, 15 + fcb.state().pedalModes[2]]);
 const CFG_FLASH_MS = Number(cfgText.match(/#define CONFIG_CHANGED_FLASH_MS\s+(\d+)/)[1]);
 const statusOver = (ms) => { const seen = new Set(); for (let t = 0; t < ms; t += 10) { wait(10); seen.add(fcb.hw.status); } return [...seen].sort(); };
 check("CONFIG LED steady before any change", statusOver(CFG_FLASH_MS * 3), [1]);
@@ -288,38 +306,48 @@ check("a toe reading with unmoved pedals shows Er", fcb.hw.text, TEXT_ER);
 fcb.setRaw(255, 255); wait(100);
 press(0, 100);
 check("toe at 255 (heel 0, the default range, so later checks hold): 0", [fcb.hw.text, fcb.hw.display], [0, 0]);
+// Page 5: the pedals, "PU"; footswitches 1 and 2 switch pedals A and B, lit for pickup.
 press(UP, 100);
-check("page 5 lights SWITCH 1, the display is blank", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.blank], [4, 1, 0, 7]);
+const pk0 = fcb.state().pickup & 3;
+check("UP goes to page 5, the pedals: \"PU\", DIRECT SELECT dark", [fcb.state().cfgPage, fcb.hw.text, fcb.hw.aux[4], fcb.hw.lamp, el0("display").getAttribute("aria-label")], [4, 14, 0, 0, "Display PU"]);
+check("EXP 1 / EXP 2 and footswitches 1 / 2 show which pedals are in pickup mode", [fcb.hw.aux[2], fcb.hw.aux[3], fcb.hw.leds[0], fcb.hw.leds[1]], [pk0 & 1, pk0 >> 1, pk0 & 1, pk0 >> 1]);
+press(0, 100);
+check("a tap of footswitch 1 switches pedal A", [fcb.state().pickup & 1, fcb.hw.aux[2], fcb.hw.leds[0]], [(pk0 & 1) ^ 1, (pk0 & 1) ^ 1, (pk0 & 1) ^ 1]);
+press(0, 100);
+check("and back", fcb.state().pickup & 3, pk0);
+// Holding footswitch 1 opens pedal A's CC editor: NUMBER lit, the CC shown and typed.
+const ccA0 = fcb.state().pedalCc[0];
+fcb.down(0); wait(OVER_MS); fcb.up(0); wait(40);
+check("holding footswitch 1 opens pedal A's CC editor, NUMBER and EXP 1 lit", [fcb.state().pcc, fcb.hw.display, fcb.hw.aux[8], fcb.hw.aux[2], fcb.state().pickup & 3], [1, ccA0, 1, 1, pk0]);
+press(2, 100); press(2, 100);
+check("footswitches 3, 3 type CC 33, and the panel's pedal label follows", [fcb.state().pedalCc[0], fcb.hw.display, String(el0("ccA").textContent)], [33, 33, "33"]);
+longKey(DOWN);
+check("a long DOWN [ESCAPE] puts the old CC back, still on page 5", [fcb.state().pcc, fcb.state().pedalCc[0], fcb.state().cfgPage, fcb.hw.text], [0, ccA0, 4, 14]);
+press(UP, 100);
+check("page 6 lights SWITCH 1, the display is blank", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.blank], [5, 1, 0, 7]);
 press(3, 100);
 check("switch 4 is a relay 1 trigger (its LED lit), DIRECT SELECT dark", [fcb.state().swMask[0], fcb.hw.leds[3], fcb.hw.aux[4]], [8, 1, 0]);
 fcb.setRaw(255, 255); wait(100); fcb.setRaw(128, 255); wait(100);
 check("moving pedal A sets relay 1's trigger value, shown, EXP 1 lit", [fcb.state().swThr[0] > 0, fcb.hw.display === fcb.state().swThr[0], fcb.hw.aux[2]], [true, true, 1]);
 press(UP, 100);
-check("page 6 lights SWITCH 2", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.leds[3]], [5, 0, 1, 0]);
+check("page 7 lights SWITCH 2", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.leds[3]], [6, 0, 1, 0]);
 press(UP, 100);
-// Page 7: the bank's program change, DIRECT SELECT lit, "--" (none) until set.
-check("UP goes to page 7: DIRECT SELECT lit, \"--\"", [fcb.state().cfgPage, fcb.hw.aux[4], fcb.hw.aux[6], fcb.hw.text, fcb.hw.lamp, fcb.state().bankPc], [6, 1, 0, 13, 0, 0]);
+// Page 8: the bank's program change, DIRECT SELECT lit, "--" (none) until set.
+check("UP goes to page 8: DIRECT SELECT lit, \"--\"", [fcb.state().cfgPage, fcb.hw.aux[4], fcb.hw.aux[6], fcb.hw.text, fcb.hw.lamp, fcb.state().bankPc], [7, 1, 0, 13, 0, 0]);
 press(1, 100); press(4, 100);
 check("footswitches 2 and 5 type program 25", [fcb.hw.display, fcb.state().bankPc, sent()], [25, 26, []]);
 press(10, 100);
 check("after a complete number, footswitch 10 shows \"--\", changing nothing yet", [fcb.hw.text, fcb.state().bankPc, fcb.state().pcMode & 2], [13, 26, 2]);
 press(UP, 100);
-check("then UP [ENTER]: none (\"--\"), still on page 7", [fcb.hw.text, fcb.state().bankPc, fcb.state().cfgPage], [13, 0, 6]);
-// Page 8: pedal pickup, "PU"; footswitches 1 and 2 switch pedals A and B, lit for pickup.
-press(UP, 100);
-const pk0 = fcb.state().pickup & 3;
-check("UP goes to page 8, pedal pickup: \"PU\", DIRECT SELECT dark", [fcb.state().cfgPage, fcb.hw.text, fcb.hw.aux[4], fcb.hw.lamp, el0("display").getAttribute("aria-label")], [7, 14, 0, 0, "Display PU"]);
-check("EXP 1 / EXP 2 and footswitches 1 / 2 show which pedals are in pickup mode", [fcb.hw.aux[2], fcb.hw.aux[3], fcb.hw.leds[0], fcb.hw.leds[1]], [pk0 & 1, pk0 >> 1, pk0 & 1, pk0 >> 1]);
-press(0, 100);
-check("footswitch 1 switches pedal A", [fcb.state().pickup & 1, fcb.hw.aux[2], fcb.hw.leds[0]], [(pk0 & 1) ^ 1, (pk0 & 1) ^ 1, (pk0 & 1) ^ 1]);
-press(0, 100);
-check("and back", fcb.state().pickup & 3, pk0);
+check("then UP [ENTER]: none (\"--\"), still on page 8", [fcb.hw.text, fcb.state().bankPc, fcb.state().cfgPage], [13, 0, 7]);
 // Page 8: every LED lit at once while "riban" scrolls, then the version from version.h,
 // repeating.
 const verText = readFileSync(new URL("../src/version.h", import.meta.url), "utf8");
 // Major and minor from version.h, the build number from version_build.inc.
 const verText2 = verText + readFileSync(new URL("../src/version_build.inc", import.meta.url), "utf8");
-const VER = ["MAJOR", "MINOR", "BUILD"].map((k) => Number(verText2.match(new RegExp("#define FW_VERSION_" + k + " (0x[0-9A-Fa-f]+)"))[1]));
+// As hal_display_hex is given them: major and minor in decimal (two BCD digits), the build in hex.
+const VER_N = ["MAJOR", "MINOR", "BUILD"].map((k) => Number(verText2.match(new RegExp("#define FW_VERSION_" + k + " (0x[0-9A-Fa-f]+|[0-9]+)"))[1]));
+const VER = VER_N.map((v, i) => i < 2 ? Math.floor(v / 10) * 16 + v % 10 : v);
 fcb.down(UP); wait(60); fcb.up(UP); wait(40);
 check("UP goes to page 9: every LED lit at once, the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [8, 4, 0, 7, 1]);
 // Page 8 opened at most 40 ms ago; the lead-in and the text are eight frames.
@@ -385,12 +413,14 @@ check("and nothing is sent", sent(), []);
 press(UP, 100);
 check("UP on page 9 stays on page 9 (no wrap)", fcb.state().cfgPage, 8);
 press(DOWN, 100);
-check("DOWN leaves page 9 for page 8: lamp test off, dots off", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.dots, fcb.hw.text], [7, 0, 0, 14]);
+check("DOWN leaves page 9 for page 8: lamp test off, dots off, DIRECT SELECT lit", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.dots, fcb.hw.text, fcb.hw.aux[4]], [7, 0, 0, 13, 1]);
 press(DOWN, 100);
-check("then page 7, DIRECT SELECT lit", [fcb.state().cfgPage, fcb.hw.aux[4]], [6, 1]);
+check("then page 7", fcb.state().cfgPage, 6);
 press(DOWN, 100);
 check("then page 6", fcb.state().cfgPage, 5);
-press(DOWN, 100); press(DOWN, 100); press(DOWN, 100); press(DOWN, 100); press(DOWN, 100);
+press(DOWN, 100);
+check("then page 5, \"PU\"", [fcb.state().cfgPage, fcb.hw.text], [4, 14]);
+press(DOWN, 100); press(DOWN, 100); press(DOWN, 100); press(DOWN, 100);
 check("DOWN back to page 1", fcb.state().cfgPage, 0);
 press(DOWN, 100);
 check("DOWN on page 1 stays on page 1 (no wrap)", fcb.state().cfgPage, 0);
@@ -408,7 +438,7 @@ check("and a cancel leaves with nothing changed", [fcb.state().mode, fcb.hw.stat
 // is sent. No program change either way.
 check("with nothing sent and no program change", [sent(), fcb.state().program], [[], p]);
 check("switch 3's LED after saving", fcb.hw.leds[2], DEF_MODE === 3 ? 1 : 0);
-check("the SWITCH 1 record was stored", JSON.parse(store["fcb1010-eeprom-v2"]).sw1.slice(0, 2), [8, 0]);
+check("SWITCH 1 following switch 4 was stored with bank 1 (its record's bit 4)", JSON.parse(store["fcb1010-eeprom-v2"]).fs3[0] & 0x10, 0x10);
 check("the settings record was stored", JSON.parse(store["fcb1010-eeprom-v2"]).cfg[0], 2);
 fcb.down(UP); fcb.down(DOWN); wait(1100); fcb.up(UP); fcb.up(DOWN); wait(200);
 press(UP, 100);
@@ -539,14 +569,16 @@ check("the dump has footswitch 3 (note 60, 100, 20) and 4 (programs 5 / 6)",
 check("and the channel, a mode and a stomp CC", [conf.v[NP.CHANNEL], conf.v[NP.MODE], conf.v[NP.NUM + 9]], [fcb.state().midiChannel, DEF_MODE, STOMP_CC[9]]);
 const dumpMsgs = sent();
 check("the dump went out as NRPN controllers on the pedal's channel, ending with the end marker",
-      [dumpMsgs.length > 0, dumpMsgs.every((m) => new RegExp("^b" + chHex + " (63 46|62 [0-5][0-9a-f]|06 [0-7][0-9a-f]|26 [0-7][0-9a-f])$").test(m)),
+      [dumpMsgs.length > 0, dumpMsgs.every((m) => new RegExp("^b" + chHex + " (63 46|62 [0-6][0-9a-f]|06 [0-7][0-9a-f]|26 [0-7][0-9a-f])$").test(m)),
        dumpMsgs.slice(-2)], [true, true, ["b" + chHex + " 62 05", "b" + chHex + " 06 00"]]);
 fcb.confChanged(NP.NUM + 9, 99);
 fcb.confChanged(NP.TRIGGER + 2, 70);
 wait(20);
 check("a set applies at once, unsaved", [fcb.state().msgs[9].num, fcb.state().swThr[2], rec().fs9 === undefined || rec().fs9[1] !== 99], [99, 70, true]);
 fcb.confCommand(NC.SAVE, "saved"); wait(600);
-check("Save stores it and the configurator reads it back", [rec().fs9, rec().sw2[2], conf.waiting, conf.v[NP.NUM + 9]], [[fcb.state().pedalModes[9] << 2, 99, 127, 0], 70, "", 99]);
+// The footswitch record's bits 6-7 hold part of the bank's pedal settings; the trigger is in the bank's record.
+check("Save stores it and the configurator reads it back",
+      [[rec().fs9[0] & 0x3F, ...rec().fs9.slice(1)], rec().bank[2] & 0x7F, conf.waiting, conf.v[NP.NUM + 9]], [[fcb.state().pedalModes[9] << 2, 99, 127, 0], 70, "", 99]);
 fcb.confChanged(NP.NUM + 9, 98); wait(20);
 fcb.confCommand(NC.RELOAD, "dropped"); wait(600);
 check("Discard goes back to the saved settings", [fcb.state().msgs[9].num, conf.v[NP.NUM + 9]], [99, 99]);
@@ -693,7 +725,7 @@ check("every setting was sent (no read, so nothing is assumed), and the pedal to
 check("the status says it cannot read back", /cannot read it back/.test(el("confStatus").textContent), true);
 fcb.confChanged(NP.OFF + 5, 2); waitMidi(50);
 fcb.confCommand(NC.SAVE, "Stored."); waitMidi(600);
-check("a change and Store work without an input", [rec().fs5, rec().sw2[2]], [[fcb.state().pedalModes[5] << 2, 33, 100, 2], 12]);
+check("a change and Store work without an input", [[rec().fs5[0] & 0x3F, ...rec().fs5.slice(1)], rec().bank[2] & 0x7F], [[fcb.state().pedalModes[5] << 2, 33, 100, 2], 12]);
 check("saving a file without a read leaves out the firmware version", [fcb.confToFile().firmware, fcb.confToFile().footswitches[5].off], [undefined, 2]);
 conf.out = null;
 check("with no output either, a load is refused", fcb.confLoad(oneWay), false);
@@ -733,12 +765,20 @@ fcb.setRaw(200, 128); wait(100);
 check("then every move is sent", since(m0).slice(-1), [ccA(fcb.state().sent[0])]);
 fcb.confChanged(NP.PICKUP, 0); waitMidi(100);
 check("back to immediate", fcb.state().pickup & 1, 0);
-check("the settings file keeps the pedals' response", fcb.confToFile().pedals, [{ response: "immediate" }, { response: "immediate" }]);
+check("the settings file keeps the pedals' response and CC", fcb.confToFile().pedals, [{ response: "immediate", cc: PCC[0] }, { response: "immediate", cc: PCC[1] }]);
 const pkFile = fcb.confToFile(); pkFile.pedals[1] = { response: "pickup" };
 fcb.confLoad(pkFile); waitMidi(600);
 check("and loading it sets it", fcb.state().pickup & 2, 2);
 pkFile.pedals[1] = { response: "slow" };
 check("a bad response is refused", [fcb.confLoad(pkFile), /response must be/.test(el("confStatus").textContent)], [false, true]);
+// The pedal's CC over MIDI (NRPN 96 / 97) and from a file; each bank has its own.
+pkFile.pedals[1] = { response: "pickup", cc: 4 };
+fcb.confLoad(pkFile); waitMidi(600);
+check("a file's pedal CC sets the bank's CC, and the panel label shows it", [fcb.state().pedalCc[1], String(el0("ccB").textContent)], [4, "4"]);
+pkFile.pedals[0] = { response: "immediate", cc: 200 };
+check("a CC over 127 is refused", [fcb.confLoad(pkFile), /cc must be 0 to 127/.test(el("confStatus").textContent)], [false, true]);
+fcb.confChanged(NP.PEDAL_CC + 1, PCC[1]); waitMidi(100);
+check("a set over NRPN 97 puts it back", fcb.state().pedalCc[1], PCC[1]);
 
 console.log(fail ? "emulator smoke test FAILED" : "emulator smoke test passed");
 process.exit(fail);

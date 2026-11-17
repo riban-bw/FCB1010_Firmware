@@ -80,6 +80,9 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 #define CTL_INSPECT_MSG            40
 // Pedal pickup: bits 0-1 pedals A / B in pickup mode, bits 2-3 waiting (not picked up).
 #define CTL_INSPECT_PICKUP         70
+// Pedal A's and B's CCs (71, 72), and page 5's CC editor: bit 0 open, bit 1 pedal B.
+#define CTL_INSPECT_PEDAL_CC       71
+#define CTL_INSPECT_PCC            73
 
 uint8_t ctl_inspect(uint8_t what);
 #endif

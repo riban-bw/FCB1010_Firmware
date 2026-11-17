@@ -36,7 +36,7 @@
 // Real-time bytes (clock, active sensing...) do not light it.
 #define MIDI_RX_FLASH_MS          60
 
-// Power-on and configuration page 8: every LED lights (once, and stays lit) while
+// Power-on and configuration page 9: every LED lights (once, and stays lit) while
 // ". riban ." scrolls across the display, one frame per SCROLL_FRAME_MS (ten frames, so
 // power-on takes 10 x SCROLL_FRAME_MS, the start-up settling included). Power-on then
 // goes to run mode. Page 8 then shows the firmware version, each part (major, minor,
@@ -70,21 +70,22 @@
 
 // Footswitch banks: in bank mode (the default, DIRECT SELECT dark; a tap of UP + DOWN
 // switches to program mode and back), UP / DOWN choose one of this many banks, each with
-// its own message and pedal mode for every footswitch. Each bank takes 50 bytes (ten
-// 5-byte records) of the 2KB settings EEPROM, so 1 to 40 fit.
+// its own message and pedal mode for every footswitch, its own expression pedal CCs and
+// responses, and its own relay settings. Each bank takes 55 bytes (eleven 5-byte
+// records) of the 2KB settings EEPROM, so 1 to 36 fit.
 #ifndef BANK_COUNT
-#define BANK_COUNT 40
+#define BANK_COUNT 36
 #endif
 
-// Controller numbers sent by expression pedal A and pedal B.
-// 7 = channel volume, 11 = expression.
+// Controller numbers sent by expression pedal A and pedal B until changed on
+// configuration page 5 (each bank has its own). 7 = channel volume, 11 = expression.
 #define PEDAL_CC_LIST 7, 11
 
-// Expression pedal response until changed on configuration page 8: 0 = immediate (every
-// move is sent), 1 = pickup: after its CC's value has changed elsewhere (a footswitch or
-// MIDI IN; at power-on it counts as 0), the pedal sends nothing until it reaches that
-// value (within PEDAL_PICKUP_WINDOW CC steps) or passes it. While it waits its EXP LED
-// flashes, every PEDAL_PICKUP_FLASH_MS at the pickup point and 3ms slower per CC step
+// Expression pedal response until changed on configuration page 5 (each bank has its
+// own): 0 = immediate (every move is sent), 1 = pickup: after its CC's value has changed
+// elsewhere (a footswitch or MIDI IN; at power-on it counts as 0), the pedal sends
+// nothing until it reaches that value (within PEDAL_PICKUP_WINDOW CC steps) or passes
+// it. While it waits its EXP LED flashes, every PEDAL_PICKUP_FLASH_MS at the pickup point and 3ms slower per CC step
 // away, and once moved the display shows how far it is from the pickup point (+ above,
 // - below) until PEDAL_PICKUP_SHOW_MS after the last move.
 #ifndef PEDAL_PICKUP_A
