@@ -42,7 +42,8 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 
 #ifdef CTL_INSPECT
 // Emulator-only state readout (see the end of ctl.c). Mode: 0 run, 1 config. Page: 0 pedal modes,
-// 1 channel, 2 heel calibration, 3 toe calibration, 4 / 5 SWITCH 1 / 2, 6 version (lamp test). Calibration step: 0 reading
+// 1 channel, 2 heel calibration, 3 toe calibration, 4 / 5 SWITCH 1 / 2, 6 bank program
+// change, 7 pedal pickup, 8 version (lamp test). Calibration step: 0 reading
 // taken, 1 heel ("Lo"), 2 toe ("Hi"), 3 error ("Er"). A sent value of 255
 // means nothing has been sent for that pedal yet. Pedal modes are read at 16 + switch index.
 #define CTL_INSPECT_MODE           0
@@ -77,6 +78,8 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 // Footswitch messages: the 30 bytes of msg[], three per switch: number (bit 7 = type
 // bit 0), on value (bit 7 = type bit 1), off value.
 #define CTL_INSPECT_MSG            40
+// Pedal pickup: bits 0-1 pedals A / B in pickup mode, bits 2-3 waiting (not picked up).
+#define CTL_INSPECT_PICKUP         70
 
 uint8_t ctl_inspect(uint8_t what);
 #endif

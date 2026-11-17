@@ -50,6 +50,8 @@ static uint8_t  blank;
 #define SHOWN_TEXT(t) (-1 - (int)(t))
 // hal_display_hex(v) is recorded as display = SHOWN_HEX(v); dots and the lamp test too.
 #define SHOWN_HEX(v) (0x1000 + (v))
+// hal_display_signed(v), with v as a signed value -127..127.
+#define SHOWN_SIGNED(v) (0x2000 + (v))
 #define BOOT_LED (DEFAULT_PEDAL_MODE == 3)
 static uint8_t  dots;
 static uint8_t  lamp;
@@ -109,6 +111,12 @@ void hal_display_blank(uint8_t mask)
 void hal_display_hex(uint8_t value)
 {
     display = SHOWN_HEX(value);
+    blank = 0;
+}
+
+void hal_display_signed(uint8_t value)
+{
+    display = SHOWN_SIGNED((int)(int8_t)value);
     blank = 0;
 }
 
@@ -1299,9 +1307,10 @@ static void test_config_modes(void)
     save_exit();
     CHECK(mode == MODE_RUN && cfg_saved == 1);
     // The modes are saved in the footswitch records (type byte bits 2-3), not the
-    // settings record, whose last three bytes are 0.
+    // settings record, which holds the channel and the pedal pickup bits, then two 0s.
     CHECK(msg_was_saved[9] && (saved_msg[9][0] >> 2) == PM_MOMENTARY && (saved_msg[9][0] & 3) == MT_CC);
-    CHECK((saved_msg[2][0] >> 2) == PM_STOMP && saved_cfg[1] == 0 && saved_cfg[2] == 0 && saved_cfg[3] == 0);
+    CHECK((saved_msg[2][0] >> 2) == PM_STOMP && saved_cfg[1] == (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1)) &&
+          saved_cfg[2] == 0 && saved_cfg[3] == 0);
     memcpy(stored_cfg, saved_cfg, 4);
     cfg_stored_valid = 1;
     keep_saved_msgs();
@@ -1599,10 +1608,14 @@ static void test_config_page_leds(void)
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_BANK_PC && aux[HAL_LED_SWITCH_2] == 0 && aux[HAL_LED_DIRECT_SELECT] == 1 && lamp == HAL_LAMP_NORMAL && dots == 0);
     tap(CTL_KEY_UP);
+    CHECK(cfg_page == PAGE_PICKUP && aux[HAL_LED_DIRECT_SELECT] == 0 && display == SHOWN_TEXT(HAL_TEXT_PICKUP) && lamp == HAL_LAMP_NORMAL);
+    tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_VERSION && aux[HAL_LED_DIRECT_SELECT] == 0 && lamp == HAL_LAMP_LEDS_STOMPS);
-    // UP on page 8 stays on page 8 (no wrap).
+    // UP on page 9 stays on page 9 (no wrap).
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_VERSION);
+    tap(CTL_KEY_DOWN);
+    CHECK(cfg_page == PAGE_PICKUP && lamp == HAL_LAMP_NORMAL && dots == 0);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_BANK_PC && aux[HAL_LED_DIRECT_SELECT] == 1 && lamp == HAL_LAMP_NORMAL && dots == 0);
     tap(CTL_KEY_DOWN);
@@ -1704,7 +1717,7 @@ static void test_config_version(void)
     chord_long();
     CHECK(lamp == HAL_LAMP_NORMAL && dots == 0);
 
-    for (k = 0; k < 7; k++)
+    for (k = 0; k < PAGE_VERSION; k++)
     {
         tap(CTL_KEY_UP);
     }
@@ -1773,11 +1786,11 @@ static void test_config_version(void)
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_VERSION && midi_len == 0);
     CHECK(sw_thr[0] == 0 && sw_thr[1] == 0 && sw_thr[2] == 0 && sw_thr[3] == 0 && sw_mask[1] == 0);
 
-    // DOWN during the lamp test: page 7, LEDs back to normal, and no more steps.
+    // DOWN during the lamp test: page 8, LEDs back to normal, and no more steps.
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_BANK_PC && lamp == HAL_LAMP_NORMAL && dots == 0 && aux[HAL_LED_DIRECT_SELECT] == 1);
+    CHECK(cfg_page == PAGE_PICKUP && lamp == HAL_LAMP_NORMAL && dots == 0 && aux[HAL_LED_DIRECT_SELECT] == 0);
     ticks(VER_STEP_TICKS * 20);
-    CHECK(lamp == HAL_LAMP_NORMAL && display == SHOWN_TEXT(HAL_TEXT_DASHES));
+    CHECK(lamp == HAL_LAMP_NORMAL && display == SHOWN_TEXT(HAL_TEXT_PICKUP));
 
     // Leaving from page 8 (long UP, or a long UP + DOWN) ends the lamp test and dots.
     tap(CTL_KEY_UP);
@@ -1787,7 +1800,7 @@ static void test_config_version(void)
     ticks(VER_STEP_TICKS * 2);
     CHECK(lamp == HAL_LAMP_NORMAL);
     chord_long();
-    for (k = 0; k < 7; k++)
+    for (k = 0; k < PAGE_VERSION; k++)
     {
         tap(CTL_KEY_UP);
     }
@@ -1809,7 +1822,7 @@ static void test_config_version_jump(void)
     reset_world();
     chord_long();
 
-    for (k = 0; k < 7; k++)
+    for (k = 0; k < PAGE_VERSION; k++)
     {
         tap(CTL_KEY_UP);
     }
@@ -1898,9 +1911,9 @@ static void test_config_version_jump(void)
     // DOWN while a switch is held leaves page 8; the release then does nothing.
     ctl_key_press(sw_code(5));
     tap(CTL_KEY_DOWN);
-    CHECK(cfg_page == PAGE_BANK_PC && ver_paused == 0 && lamp == HAL_LAMP_NORMAL);
+    CHECK(cfg_page == PAGE_PICKUP && ver_paused == 0 && lamp == HAL_LAMP_NORMAL);
     ctl_key_release(sw_code(5));
-    CHECK(cfg_page == PAGE_BANK_PC && bank_pc == 0 && midi_len == 0);
+    CHECK(cfg_page == PAGE_PICKUP && bank_pc == 0 && pk_mask == (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1)) && midi_len == 0);
 
     // Leaving config mode while a switch is held: run mode works as usual afterwards.
     tap(CTL_KEY_UP);
@@ -2122,6 +2135,8 @@ static void test_relays(void)
     // Only the mode changes here; the states stay as they are.
     pedal_mode_set(2, PM_STOMP);
     pedal_mode_set(9, PM_STOMP);
+    // The pedals send at once here, whatever PEDAL_PICKUP_A / _B say.
+    pk_mask = 0;
     // Right after leaving the pedals have no value yet; their triggers keep the relays.
     tap(2);
     ticks(1);
@@ -2247,7 +2262,9 @@ static void test_config_calibration(void)
     CHECK(cal_saved == 1);
     CHECK(saved_heel[0] == 20 && saved_heel[1] == 30 && saved_toe[0] == 220 && saved_toe[1] == 230);
 
-    // The new range is in use, and the first reading is adopted silently.
+    // The new range is in use, and the first reading is adopted silently (the pedals
+    // sending at once, whatever PEDAL_PICKUP_A / _B say).
+    pk_mask = 0;
     clear_log();
     pedal(0, 120);
     CHECK(midi_len == 0);
@@ -2720,21 +2737,21 @@ static void test_config_led_flash(void)
     chord_long();
     tap(1);
     tap(1);
-    for (k = 0; k < 7; k++)
+    for (k = 0; k < PAGE_VERSION; k++)
     {
         tap(CTL_KEY_UP);
     }
     CHECK(cfg_page == PAGE_VERSION && cfg_changed == 1);
     CHECK(lamp == HAL_LAMP_LEDS_STOMPS && status_toggles(CFG_FLASH_TICKS * 4) == 4);
     // Putting the change back elsewhere and returning: steady.
-    for (k = 0; k < 7; k++)
+    for (k = 0; k < PAGE_VERSION; k++)
     {
         tap(CTL_KEY_DOWN);
     }
     tap(1);
     tap(1);
     tap(1);
-    for (k = 0; k < 7; k++)
+    for (k = 0; k < PAGE_VERSION; k++)
     {
         tap(CTL_KEY_UP);
     }
@@ -3412,7 +3429,7 @@ static void test_midi_config(void)
     clear_log();
     dump_run(1000);
     n = parse_dump(0);
-    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 4 + 2 && dump_end && midi_job == 0);
+    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 4 + 2 + 2 && dump_end && midi_job == 0);
     CHECK(dump_values[NP_BANK] == 1 && dump_values[NP_BANKS] == BANK_COUNT);
     CHECK(dump_values[NP_BANK_PC] == 127 && dump_values[NP_BANK_PC_ON] == 0);
     CHECK(dump_values[NP_CHANNEL] == MIDI_CHANNEL);
@@ -3826,7 +3843,7 @@ static void test_bank_pc(void)
           aux[HAL_LED_MIDI_FUNC] == 0 && aux[HAL_LED_EXP_1] == 0 && lamp == HAL_LAMP_NORMAL &&
           display == SHOWN_TEXT(HAL_TEXT_DASHES) && stomp_state == 0);
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_VERSION);
+    CHECK(cfg_page == PAGE_PICKUP);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_BANK_PC && lamp == HAL_LAMP_NORMAL);
 
@@ -3888,15 +3905,15 @@ static void test_bank_pc(void)
     tap(sw_code(10));
     CHECK(!pc_typing && display == 99);
     ctl_key_release(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_VERSION && bank_pc == 100);
+    CHECK(cfg_page == PAGE_PICKUP && bank_pc == 100);
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_BANK_PC);
     ctl_key_press(sw_code(10));
     CHECK(!pc_typing && display == 99);
     tap(CTL_KEY_UP);
-    CHECK(cfg_page == PAGE_VERSION);
+    CHECK(cfg_page == PAGE_PICKUP);
     ctl_key_release(sw_code(10));
-    CHECK(!pc_typing && cfg_page == PAGE_VERSION);
+    CHECK(!pc_typing && cfg_page == PAGE_PICKUP);
     tap(CTL_KEY_DOWN);
     tap(sw_code(10));
     tap(CTL_KEY_UP);
@@ -4460,6 +4477,239 @@ static void test_cc_memory(void)
     }
 }
 
+// A raw reading that scales to CC value v with the default calibration.
+static uint8_t raw_for(uint8_t v)
+{
+    int r;
+
+    for (r = 0; r < 256; r++)
+    {
+        if (ctl_scale((uint8_t)r, heel[0], toe[0]) == v)
+        {
+            return (uint8_t)r;
+        }
+    }
+
+    return 0;
+}
+
+// EXP LED toggles of pedal ch over n ticks.
+static int exp_toggles(uint8_t ch, int n)
+{
+    int t = 0;
+    uint8_t was = aux[HAL_LED_EXP_1 + ch];
+
+    while (n-- > 0)
+    {
+        ctl_tick();
+
+        if (aux[HAL_LED_EXP_1 + ch] != was)
+        {
+            was = aux[HAL_LED_EXP_1 + ch];
+            t++;
+        }
+    }
+
+    return t;
+}
+
+static void midi_cc_in(uint8_t cc, uint8_t v)
+{
+    ctl_midi_in((uint8_t)(0xB0 | (midi_channel - 1)));
+    ctl_midi_in(cc);
+    ctl_midi_in(v);
+}
+
+static void test_pedal_pickup(void)
+{
+    const uint8_t pcc[2] = { PEDAL_CC_LIST };
+    int k;
+
+    printf("expression pedal pickup\n");
+
+    // The default from config.h, and immediate pedals as before: the first reading is
+    // only recorded, then every move is sent, with no flash and no distance shown.
+    reset_world();
+    CHECK(pk_mask == (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1)));
+    pk_mask = 0;
+    pedal(0, raw_for(60));
+    CHECK(midi_len == 0);
+    pedal(0, raw_for(70));
+    CHECK(cc_count() == 1 && cc_number(0) == pcc[0] && cc_value(0) == 70 && display == 1);
+    CHECK(exp_toggles(0, 2000) == 0 && aux[HAL_LED_EXP_1] == 0);
+    // Its sends are the CC's known value, so pickup mode turned on now is already picked up.
+    pk_mask = 1;
+    CHECK(!pk_waiting(0));
+    clear_log();
+    pedal(0, raw_for(75));
+    CHECK(cc_count() == 1 && cc_value(0) == 75 && display == 1);
+
+    // Pedal A in pickup mode at power-on: its CC counts as 0, so a pedal at 60 waits. The
+    // first reading sends nothing and leaves the display alone; the EXP 1 LED flashes at
+    // the half-period for 60 steps away.
+    reset_world();
+    pk_mask = 1;
+    pedal(0, raw_for(60));
+    CHECK(midi_len == 0 && display == 1 && pk_waiting(0) && !pk_waiting(1));
+    CHECK(pk_period(0) == PICKUP_FLASH_TICKS + 60 + 30);
+    k = PICKUP_FLASH_TICKS + 60 + 30;
+    CHECK(exp_toggles(0, k * 6) == 6 && aux[HAL_LED_EXP_2] == 0);
+    // Moved: nothing sent, the distance on the display (position minus the pickup value).
+    pedal(0, raw_for(40));
+    CHECK(midi_len == 0 && display == SHOWN_SIGNED(40));
+    // Closer flashes faster.
+    CHECK(pk_period(0) == PICKUP_FLASH_TICKS + 40 + 20);
+    CHECK(exp_toggles(0, (PICKUP_FLASH_TICKS + 60) * 4) >= 4);
+    // Wobble does not count as a move.
+    pedal(0, (uint8_t)(raw_for(40) + 1));
+    CHECK(midi_len == 0 && pk_pos[0] == 40);
+    // Within PEDAL_PICKUP_WINDOW of the value: picked up, sent, the LED goes dark.
+    pedal(0, raw_for(PEDAL_PICKUP_WINDOW));
+    CHECK(cc_count() == (PEDAL_PICKUP_WINDOW ? 1 : 0) && !pk_waiting(0));
+    CHECK(PEDAL_PICKUP_WINDOW == 0 || (cc_number(0) == pcc[0] && cc_value(0) == PEDAL_PICKUP_WINDOW));
+    CHECK(display == SHOWN_SIGNED(PEDAL_PICKUP_WINDOW));
+    ticks(1);
+    CHECK(aux[HAL_LED_EXP_1] == 0 && exp_toggles(0, 1000) == 0);
+    // Then it sends at once; the display goes back to the bank PEDAL_PICKUP_SHOW_MS after
+    // the last distance shown.
+    clear_log();
+    pedal(0, raw_for(20));
+    CHECK(cc_count() == 1 && cc_value(0) == 20);
+    reset_world();
+    pk_mask = 1;
+    pedal(0, raw_for(60));
+    pedal(0, raw_for(50));
+    CHECK(display == SHOWN_SIGNED(50));
+    ticks(PICKUP_SHOW_TICKS - 1);
+    CHECK(display == SHOWN_SIGNED(50));
+    ticks(1);
+    CHECK(display == 1);
+    ticks(PICKUP_SHOW_TICKS);
+    CHECK(display == 1);
+
+    // Passing the value without stopping near it picks up too: MIDI IN sets CC A to 100;
+    // the pedal at 50 shows -50, at 90 -10, then a jump to 110 crosses 100 and is sent.
+    midi_cc_in(pcc[0], 100);
+    clear_log();
+    pedal(0, raw_for(52));
+    CHECK(midi_len == 0 && display == SHOWN_SIGNED(-48));
+    pedal(0, raw_for(90));
+    CHECK(midi_len == 0 && display == SHOWN_SIGNED(-10));
+    pedal(0, raw_for(110));
+    CHECK(cc_count() == 1 && cc_value(0) == 110 && !pk_waiting(0) && display == SHOWN_SIGNED(10));
+    // A received value equal to the pedal's keeps it picked up; another one waits again.
+    midi_cc_in(pcc[0], 110);
+    CHECK(!pk_waiting(0));
+    midi_cc_in(pcc[0], 30);
+    CHECK(pk_waiting(0));
+    // Reaching the value exactly sends nothing (the receiver has it already).
+    clear_log();
+    pedal(0, raw_for(30));
+    CHECK(midi_len == 0 && !pk_waiting(0) && display == SHOWN_SIGNED(0));
+    pedal(0, raw_for(35));
+    CHECK(cc_count() == 1 && cc_value(0) == 35);
+
+    // A footswitch sending the pedal's CC sets its value too.
+    set_mode(0, PM_STOMP);
+    msg[0] = pcc[0];
+    msg[1] = 64;
+    msg[2] = 0;
+    clear_log();
+    tap(sw_code(1));
+    CHECK(cc_count() == 1 && cc_number(0) == pcc[0] && cc_value(0) == 64 && pk_waiting(0));
+
+    // MIDI OUT full at the pickup: not picked up, retried at the next reading.
+    reset_world();
+    pk_mask = 1;
+    pedal(0, raw_for(10));
+    midi_space = 2;
+    pedal(0, raw_for(1));
+    CHECK(midi_len == 0 && pk_waiting(0) && pk_pos[0] == 10);
+    midi_space = 15;
+    pedal(0, raw_for(1));
+    CHECK(cc_count() == (PEDAL_PICKUP_WINDOW ? 1 : 0) && !pk_waiting(0));
+
+    // Typing a program number: the display keeps the number, the LED still flashes.
+    reset_world();
+    pk_mask = 2;
+    program_mode();
+    tap(sw_code(10));
+    CHECK(pc_typing && display == SHOWN_TEXT(HAL_TEXT_DASHES));
+    pedal(1, raw_for(80));
+    pedal(1, raw_for(70));
+    CHECK(midi_len == 0 && display == SHOWN_TEXT(HAL_TEXT_DASHES) && pk_waiting(1));
+    CHECK(exp_toggles(1, 1000) > 0 && aux[HAL_LED_EXP_1] == 0);
+
+    // Configuration mode: the LED shows the page's state instead; after it the pedal is
+    // read afresh, and picked up again at once if it has not moved from its value.
+    reset_world();
+    pk_mask = 1;
+    pedal(0, raw_for(1));
+    CHECK(!pk_waiting(0) && cc_count() == (PEDAL_PICKUP_WINDOW ? 1 : 0));
+    chord_long();
+    pedal(0, raw_for(1));
+    cancel_exit();
+    CHECK(mode == MODE_RUN);
+    pk_mask = 1;
+    clear_log();
+    pedal(0, raw_for(1));
+    CHECK(midi_len == 0 && !pk_waiting(0));
+
+    // Page 8: "PU"; footswitches 1 and 2 turn pickup on and off for pedals A and B, their
+    // LEDs and EXP 1 / EXP 2 lit for pickup; saved in the channel record's byte 1.
+    reset_world();
+    pk_mask = 0;
+    chord_long();
+    for (k = 0; k < PAGE_PICKUP; k++)
+    {
+        tap(CTL_KEY_UP);
+    }
+    CHECK(cfg_page == PAGE_PICKUP && display == SHOWN_TEXT(HAL_TEXT_PICKUP));
+    CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0 && leds[0] == 0 && leds[1] == 0);
+    tap(sw_code(2));
+    ticks(1);
+    CHECK(pk_mask == 2 && aux[HAL_LED_EXP_2] == 1 && aux[HAL_LED_EXP_1] == 0 && leds[1] == 1 && leds[0] == 0);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_PICKUP) && cfg_changed == (pk_mask != (PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1))));
+    tap(sw_code(1));
+    CHECK(pk_mask == 3 && aux[HAL_LED_EXP_1] == 1 && leds[0] == 1);
+    // Other footswitches and the pedals do nothing here.
+    tap(sw_code(3));
+    pedal(0, 200);
+    pedal(0, 10);
+    CHECK(pk_mask == 3 && midi_len == 0 && leds[2] == 0);
+    tap(sw_code(1));
+    CHECK(pk_mask == 2 && aux[HAL_LED_EXP_1] == 0 && leds[0] == 0);
+    save_exit();
+    CHECK(mode == MODE_RUN && cfg_saved == 1 && saved_cfg[0] == MIDI_CHANNEL && saved_cfg[1] == 2);
+    CHECK(saved_cfg[2] == 0 && saved_cfg[3] == 0);
+    // Loaded at power-on; stray bits ignored; a record without it (0) is immediate.
+    stored_cfg[0] = MIDI_CHANNEL;
+    stored_cfg[1] = 0xFE;
+    stored_cfg[2] = 0;
+    stored_cfg[3] = 0;
+    cfg_stored_valid = 1;
+    ctl_init();
+    CHECK(pk_mask == 2);
+    stored_cfg[1] = 0;
+    ctl_init();
+    CHECK(pk_mask == 0);
+    cfg_stored_valid = 0;
+
+    // Over MIDI: NRPN 94 / 95 (0 or 1), the bank-independent pedal setting.
+    reset_world();
+    pk_mask = 0;
+    nrpn(NP_PICKUP + 1, 1);
+    CHECK(pk_mask == 2 && nrpn_get(NP_PICKUP) == 0 && nrpn_get(NP_PICKUP + 1) == 1);
+    nrpn(NP_PICKUP, 2);
+    CHECK(pk_mask == 2);
+    nrpn(NP_PICKUP, 1);
+    nrpn(NP_PICKUP, 1);
+    CHECK(pk_mask == 3);
+    nrpn(NP_PICKUP + 1, 0);
+    CHECK(pk_mask == 1 && midi_len == 0);
+    reset_world();
+}
+
 int main(void)
 {
     test_stomp_modes();
@@ -4494,6 +4744,7 @@ int main(void)
     test_scaling();
     test_pedal_cc();
     test_pedal_noise();
+    test_pedal_pickup();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

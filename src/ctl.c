@@ -47,8 +47,9 @@
 #define PAGE_SW1        4
 #define PAGE_SW2        5
 #define PAGE_BANK_PC    6
-#define PAGE_VERSION    7
-#define PAGE_COUNT      8
+#define PAGE_PICKUP     7
+#define PAGE_VERSION    8
+#define PAGE_COUNT      9
 // Pages 5 and 6 (one compare: the subtraction wraps for the pages below).
 #define IS_SW_PAGE(p)   ((uint8_t)((p) - PAGE_SW1) < 2)
 
@@ -141,6 +142,18 @@ static const CODE uint8_t scroll_dots[HAL_TEXT_SCROLL_FRAMES] = { 0x04, 0x00, 0x
 
 #if RX_FLASH_TICKS < 1 || RX_FLASH_TICKS > 255
 #error MIDI_RX_FLASH_MS is out of range
+#endif
+
+// Pedal pickup: the EXP LED's flash half-period at the pickup point, and how long the
+// distance stays on the display after the last move.
+#define PICKUP_FLASH_TICKS   (PEDAL_PICKUP_FLASH_MS / TICK_MS)
+#define PICKUP_SHOW_TICKS    (PEDAL_PICKUP_SHOW_MS / TICK_MS)
+
+#if PICKUP_FLASH_TICKS < 1 || PICKUP_FLASH_TICKS > 64 || PICKUP_SHOW_TICKS < 1 || PICKUP_SHOW_TICKS > 65535
+#error PEDAL_PICKUP_FLASH_MS (2 to 128) or PEDAL_PICKUP_SHOW_MS is out of range
+#endif
+#if PEDAL_PICKUP_A > 1 || PEDAL_PICKUP_B > 1 || PEDAL_PICKUP_WINDOW > 127
+#error PEDAL_PICKUP_A / _B must be 0 or 1, PEDAL_PICKUP_WINDOW 0 to 127
 #endif
 
 // Scan ticks per CONFIG LED flash half-period once a setting has changed.
@@ -279,7 +292,8 @@ static BIT_T          mode_cycle_pending;
 #define NP_CAL          88      // heel A, toe A, heel B, toe B: raw readings 0-255 (read only)
 #define NP_BANK_PC      92      // the bank's program change 0-127; setting it turns it on
 #define NP_BANK_PC_ON   93      // 1 if the bank sends its program change, 0 none ("--")
-#define NP_COUNT        94
+#define NP_PICKUP       94      // + pedal 0-1: 1 pickup mode, 0 sends at once
+#define NP_COUNT        96
 
 // Commands (values of NP_COMMAND).
 #define NC_DUMP         1       // send every parameter, then NP_DUMP_END
@@ -390,6 +404,31 @@ static IDATA uint8_t  ref_raw[2];
 // ref_raw is the run-mode pedal reference (set again from the first reading after
 // configuration mode) and the calibration heel reading kept from page 3 for page 4.
 
+// Expression pedal pickup (user's request). pk_mask: bit 0 pedal A, bit 1 pedal B in
+// pickup mode (saved in the channel record's byte 1); the others send at once. A pickup
+// pedal is picked up while its CC's last known value (key_val: what it sent, a footswitch
+// sent or MIDI IN received; 0 if never seen) is what it last sent (sent[]), and waits
+// otherwise, sending nothing until it reaches that value (within PEDAL_PICKUP_WINDOW) or
+// passes it. pk_pos is its position at the last reading that counted as a move (every
+// pedal, so a pedal picked up and then overridden starts from where it was), pk_flash the
+// ticks left of the EXP LED's flash half-period, pk_led the LEDs lit (bit per pedal), and
+// pk_show the ticks left until the display goes back from the distance to the program.
+static IDATA uint8_t  pk_mask;
+static IDATA uint8_t  pk_pos[2];
+static IDATA uint8_t  pk_flash[2];
+static IDATA uint8_t  pk_led;
+static IDATA uint16_t pk_show;
+// ctl_pedal_sample's pickup target and previous position, and pickup_tick's loop count:
+// IDATA statics, so no fixed RAM (the directly addressed gap is full).
+static IDATA uint8_t  pk_t;
+static IDATA uint8_t  pk_p;
+static IDATA uint8_t  pk_act;
+static BIT_T          pk_wait;
+static IDATA uint8_t  pk_i;
+#define PK_MOVED        0
+#define PK_KNOWN        1
+#define PK_SEND         2
+
 // Relay (SWITCH 1 / 2) triggers, saved: follow masks (one bit per footswitch) and
 // pedal trigger values (index relay * 2 + pedal, 0 = off). relay_out is what the
 // relays are set to now (bit 0 = SWITCH 1).
@@ -488,7 +527,7 @@ static void rec_pack(void)
     else
     {
         hal_rec[0] = midi_channel;
-        hal_rec[1] = 0;
+        hal_rec[1] = pk_mask;
         hal_rec[2] = 0;
         hal_rec[3] = 0;
     }
@@ -532,6 +571,10 @@ static void rec_read(void)
             hal_rec[1] = 255;
             hal_rec[3] = 255;
         }
+        else if (rec_n == HAL_REC_CFG)
+        {
+            hal_rec[1] = (uint8_t)(PEDAL_PICKUP_A | (PEDAL_PICKUP_B << 1));
+        }
     }
 
     if (rec_n < STOMP_COUNT)
@@ -572,7 +615,8 @@ static void rec_read(void)
             hal_rec[0] = MIDI_CHANNEL;
         }
 
-        hal_rec[1] = 0;
+        // Byte 1: the pedals in pickup mode (0 in records saved before it existed).
+        hal_rec[1] &= 3;
         hal_rec[2] = 0;
         hal_rec[3] = 0;
     }
@@ -619,6 +663,7 @@ static void rec_unpack(void)
     else
     {
         midi_channel = hal_rec[0];
+        pk_mask      = hal_rec[1];
     }
 }
 
@@ -834,12 +879,80 @@ static void send_switch(uint8_t index, uint8_t on)
 }
 
 
+static uint8_t span_of(uint8_t a, uint8_t b);
+
 // Forget the last sent pedal positions so the next reading is adopted
 // silently instead of being sent as a controller change.
 static void resync_pedals(void)
 {
     sent[0] = NO_VALUE;
     sent[1] = NO_VALUE;
+    pk_pos[0] = NO_VALUE;
+    pk_pos[1] = NO_VALUE;
+}
+
+// The value pedal ch must reach to be picked up: its CC's last known value, 0 if it has
+// none yet. A leaf.
+static uint8_t pk_target(uint8_t ch)
+{
+    ch = key_val[pedal_cc[ch]];
+
+    return (uint8_t)((ch > 127) ? 0 : ch);
+}
+
+// 1 if pedal ch is in pickup mode and not picked up (see pk_mask). A leaf.
+static uint8_t pk_waiting(uint8_t ch)
+{
+    // ch + 1 is the pedal's pk_mask bit (1 A, 2 B), with no variable shift.
+    return (uint8_t)(((pk_mask & (uint8_t)(ch + 1)) &&
+                      (sent[ch] == NO_VALUE || key_val[pedal_cc[ch]] != sent[ch])) ? 1 : 0);
+}
+
+// The EXP LED's flash half-period, in ticks, for a waiting pedal ch: PICKUP_FLASH_TICKS
+// at the pickup point, 3ms more per CC step away from it (about 0.4s at the far end), and
+// the slowest before the first reading. A leaf.
+static uint8_t pk_period(uint8_t ch)
+{
+    uint8_t d = 127;
+
+    if (pk_pos[ch] != NO_VALUE)
+    {
+        d = span_of(pk_pos[ch], pk_target(ch));
+    }
+
+    return (uint8_t)(PICKUP_FLASH_TICKS + d + (d >> 1));
+}
+
+// Run mode, every tick: each waiting pickup pedal's EXP LED flashes, faster the closer
+// the pedal is to its pickup point; otherwise it is dark. Then, once the distance has been
+// shown for PEDAL_PICKUP_SHOW_MS with no move, the display shows the program (or bank)
+// again, unless a program number is being typed.
+static void pickup_tick(void)
+{
+    // pk_i + 1 is the pedal's pk_led bit.
+    for (pk_i = 0; pk_i < 2; pk_i++)
+    {
+        if (pk_waiting(pk_i))
+        {
+            if (pk_flash[pk_i] == 0 || --pk_flash[pk_i] == 0)
+            {
+                pk_led ^= (uint8_t)(pk_i + 1);
+                pk_flash[pk_i] = pk_period(pk_i);
+            }
+        }
+        else
+        {
+            pk_led &= (uint8_t)~(pk_i + 1);
+            pk_flash[pk_i] = 0;
+        }
+
+        hal_aux_led((uint8_t)(HAL_LED_EXP_1 + pk_i), (uint8_t)((pk_led & (uint8_t)(pk_i + 1)) ? 1 : 0));
+    }
+
+    if (pk_show && --pk_show == 0 && !pc_typing && !boot_anim)
+    {
+        show_program();
+    }
 }
 
 // ---------------------------------------------------------------
@@ -1272,6 +1385,17 @@ static void config_show(void)
         hal_display(0);
         hal_display_blank(7);
         version_show();
+        return;
+    }
+
+    // Page 8, pedal pickup: "PU", and EXP 1 / EXP 2 and footswitch 1 / 2 lit for the
+    // pedals in pickup mode.
+    if (cfg_page == PAGE_PICKUP)
+    {
+        led_aux   = (uint16_t)((uint16_t)pk_mask << HAL_LED_EXP_1);
+        led_stomp = pk_mask;
+        show_leds();
+        hal_display_text(HAL_TEXT_PICKUP);
         return;
     }
 
@@ -1791,6 +1915,7 @@ static void enter_config(void)
     rx_flash  = 0;
     cfg_changed  = 0;
     cfg_led_dark = 0;
+    pk_show   = 0;
 
     hal_status_led(1);
     config_goto_page(PAGE_MODES);
@@ -2174,6 +2299,10 @@ void ctl_init(void)
     mode_cycle_pending = 0;
     last_raw[0]   = 0;
     last_raw[1]   = 0;
+    pk_led        = 0;
+    pk_show       = 0;
+    pk_flash[0]   = 0;
+    pk_flash[1]   = 0;
     resync_pedals();
 
     for (i = 0; i < STOMP_COUNT; i++)
@@ -2462,7 +2591,19 @@ void ctl_key_press(uint8_t code)
             config_changed();
             hal_stomp_led(index, (sw_mask[cfg_page - PAGE_SW1] & bit) ? 1 : 0);
         }
-        // Page 8: a footswitch shows its segment and holds it until released.
+        // Page 8: footswitch 1 / 2 turns pickup mode on or off for pedal A / B.
+        else if (cfg_page == PAGE_PICKUP)
+        {
+            index = stomp_index(code);
+
+            if (index < 2)
+            {
+                pk_mask ^= (uint8_t)(1 << index);
+                config_changed();
+                config_show();
+            }
+        }
+        // Page 9: a footswitch shows its segment and holds it until released.
         else if (cfg_page == PAGE_VERSION)
         {
             version_jump(stomp_index(code));
@@ -2688,7 +2829,7 @@ static uint8_t np_kind(uint8_t p)
     if (p == NP_CHANNEL || p == NP_BANK || (p >= NP_MODE && p < NP_MODE + STOMP_COUNT) ||
         (p >= NP_TYPE && p < NP_OFF + STOMP_COUNT) || (p >= NP_FOLLOW1 && p < NP_FOLLOW1 + STOMP_COUNT) ||
         (p >= NP_FOLLOW2 && p < NP_FOLLOW2 + STOMP_COUNT) || (p >= NP_TRIGGER && p < NP_TRIGGER + 4) ||
-        p == NP_BANK_PC || p == NP_BANK_PC_ON)
+        p == NP_BANK_PC || p == NP_BANK_PC_ON || (p >= NP_PICKUP && p < NP_PICKUP + 2))
     {
         return NK_SET;
     }
@@ -2729,6 +2870,11 @@ static uint8_t nrpn_get(uint8_t p)
     if (p == NP_BANK_PC_ON)
     {
         return (uint8_t)(bank_pc != 0);
+    }
+
+    if (p >= NP_PICKUP)
+    {
+        return (uint8_t)((pk_mask >> (p - NP_PICKUP)) & 1);
     }
 
     if (p < NP_MODE)
@@ -2989,6 +3135,17 @@ static void nrpn_set(void)
         return;
     }
 
+    // Pickup mode on / off (the value differs, so a 0 or 1 flips it).
+    if (nrpn_lsb >= NP_PICKUP)
+    {
+        if (rx_data1 <= 1)
+        {
+            pk_mask ^= (uint8_t)(1 << (nrpn_lsb - NP_PICKUP));
+        }
+
+        return;
+    }
+
     // A bank change, as UP / DOWN make one in bank mode (bank_run). Unsaved changes to
     // the old bank's footswitches are dropped.
     if (nrpn_lsb == NP_BANK)
@@ -3183,33 +3340,68 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
 
     v = ctl_scale(raw, heel[channel], toe[channel]);
 
-    // The first reading after power-up only records the position.
-    if (sent[channel] == NO_VALUE)
-    {
-        sent[channel]    = v;
-        ref_raw[channel] = raw;
-        return;
-    }
+    // A pickup pedal not yet picked up (pk_wait) sends nothing until it reaches its CC's
+    // last known value or passes it; its moves are measured from pk_pos. Any other pedal's
+    // are measured from the value it last sent.
+    pk_wait = pk_waiting(channel);
+    pk_p    = pk_wait ? pk_pos[channel] : sent[channel];
 
-    if (v == sent[channel])
-    {
-        return;
-    }
-
-    // Ignore small wobble, but always let the pedal reach 0 and 127.
-    if (span_of(raw, ref_raw[channel]) < PEDAL_HYST && v != 0 && v != 127)
+    // Ignore small wobble, but always let the pedal reach 0 and 127. The first reading
+    // (after power-up or configuration mode) only records the position.
+    if (pk_p != NO_VALUE &&
+        (v == pk_p || (span_of(raw, ref_raw[channel]) < PEDAL_HYST && v != 0 && v != 127)))
     {
         return;
     }
 
-    // Not enough room now: leave state alone so it is retried next reading.
-    if (hal_midi_space() < 3)
+    // What this reading does: PK_MOVED only records the position, PK_KNOWN also makes it
+    // the pedal's value without sending it (the CC already has it), PK_SEND sends it.
+    pk_act = PK_SEND;
+
+    if (pk_wait)
     {
-        return;
+        pk_t   = pk_target(channel);
+        pk_act = PK_MOVED;
+
+        // Picked up: within PEDAL_PICKUP_WINDOW of the value, or past it since the last move.
+        if (span_of(v, pk_t) <= PEDAL_PICKUP_WINDOW ||
+            (pk_p != NO_VALUE && (pk_p < pk_t) != (v < pk_t)))
+        {
+            pk_act = (v == pk_t) ? PK_KNOWN : PK_SEND;
+        }
+
+        // Once moved, the display shows the distance (position minus the value).
+        if (pk_p != NO_VALUE && !pc_typing && !boot_anim)
+        {
+            hal_display_signed((uint8_t)(v - pk_t));
+            pk_show = PICKUP_SHOW_TICKS;
+        }
+    }
+    else if (pk_p == NO_VALUE)
+    {
+        sent[channel] = v;
+        pk_act = PK_MOVED;
     }
 
-    send_cc(pedal_cc[channel], v);
-    sent[channel]    = v;
+    if (pk_act == PK_SEND)
+    {
+        // Not enough room now: leave state alone so it is retried next reading.
+        if (hal_midi_space() < 3)
+        {
+            return;
+        }
+
+        send_cc(pedal_cc[channel], v);
+    }
+
+    // The CC's value is now known (a pickup pedal stays picked up while it is this).
+    if (pk_act != PK_MOVED)
+    {
+        sent[channel] = v;
+        key_val[pedal_cc[channel]] = v;
+    }
+
+    pk_pos[channel]  = v;
     ref_raw[channel] = raw;
 }
 
@@ -3307,6 +3499,8 @@ void ctl_tick(void)
         {
             hal_aux_led(HAL_LED_MIDI_CHAN, 0);
         }
+
+        pickup_tick();
     }
     // Config mode: an editor change is compared with the EEPROM, then with changes the
     // CONFIG LED flashes.
@@ -3455,6 +3649,7 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_BANK:          return hal_bank;
     case CTL_INSPECT_BANK_PC:       return bank_pc;
     case CTL_INSPECT_PC_MODE:       return (uint8_t)(pc_mode | (pc_typing << 1));
+    case CTL_INSPECT_PICKUP:        return (uint8_t)(pk_mask | (pk_waiting(0) << 2) | (pk_waiting(1) << 3));
     default:                        return 0;
     }
 }

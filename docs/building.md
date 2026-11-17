@@ -20,7 +20,7 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser emulator in `emulator/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 12.6KB (12857 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 13.3KB (13632 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
 
 Each build also updates the documentation: the code size above, the firmware version on configuration page 8 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
@@ -37,6 +37,11 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `MIDI_CHANNEL` | 1 | MIDI channel (1 to 16) used until a channel is saved in configuration mode |
 | `STOMP_CC_LIST` | 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 | Controller number of each footswitch, 1 to 10 |
 | `PEDAL_CC_LIST` | 7, 11 | Controller numbers of expression pedals A and B |
+| `PEDAL_PICKUP_A` | 0 | Expression pedal A's response until changed on configuration page 8: 0 immediate, 1 pickup |
+| `PEDAL_PICKUP_B` | 0 | The same for pedal B |
+| `PEDAL_PICKUP_WINDOW` | 2 | A pickup pedal picks up within this many CC steps of its controller's value (or on passing it) |
+| `PEDAL_PICKUP_FLASH_MS` | 40 | Half-period (ms) of a waiting pedal's EXP LED flash at the pickup point; each CC step away adds 3ms. 2 to 128 |
+| `PEDAL_PICKUP_SHOW_MS` | 2000 | Time (ms) the display shows a pickup pedal's distance after it stops moving |
 | `DEFAULT_PEDAL_MODE` | 0 | Mode of every footswitch until one is saved: 0 stomp, 1 stomp with momentary, 2 momentary, 3 inverted momentary |
 | `MOMENTARY_HOLD_MS` | 600 | Long press time (ms): stomp with momentary reverts after it, and the configuration save / cancel hold |
 | `CONFIG_HOLD_MS` | 1000 | UP + DOWN hold (ms) that opens configuration mode |

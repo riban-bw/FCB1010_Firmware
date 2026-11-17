@@ -21,7 +21,8 @@ function fakeClassList() {
 function fakeElement() {
   return {
     classList: fakeClassList(), style: {}, dataset: {}, textContent: "", innerHTML: "", value: "0",
-    setAttribute() {}, addEventListener() {}, setPointerCapture() {}
+    attrs: {}, setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+    addEventListener() {}, setPointerCapture() {}
   };
 }
 const elements = {};
@@ -78,6 +79,7 @@ const hex = (n) => n.toString(16).padStart(2, "0");
 const cc = (ch, sw, v) => "b" + ch + " " + hex(STOMP_CC[sw]) + " " + hex(v);
 function chordTap() { fcb.down(UP); fcb.down(DOWN); wait(100); fcb.up(UP); fcb.up(DOWN); wait(200); }
 // MIDI CHANNEL, MIDI FUNCTION, EXP 1, EXP 2.
+const el0 = (id) => sandbox.document.getElementById(id);
 const pageLeds = () => [fcb.hw.aux[0], fcb.hw.aux[1], fcb.hw.aux[2], fcb.hw.aux[3]];
 const TEXT_ER = 1, TEXT_LO = 2, TEXT_HI = 3, TEXT_DASHES = 13;   // hw.text is HAL_TEXT_* + 1
 
@@ -303,6 +305,15 @@ press(10, 100);
 check("after a complete number, footswitch 10 shows \"--\", changing nothing yet", [fcb.hw.text, fcb.state().bankPc, fcb.state().pcMode & 2], [13, 26, 2]);
 press(UP, 100);
 check("then UP [ENTER]: none (\"--\"), still on page 7", [fcb.hw.text, fcb.state().bankPc, fcb.state().cfgPage], [13, 0, 6]);
+// Page 8: pedal pickup, "PU"; footswitches 1 and 2 switch pedals A and B, lit for pickup.
+press(UP, 100);
+const pk0 = fcb.state().pickup & 3;
+check("UP goes to page 8, pedal pickup: \"PU\", DIRECT SELECT dark", [fcb.state().cfgPage, fcb.hw.text, fcb.hw.aux[4], fcb.hw.lamp, el0("display").getAttribute("aria-label")], [7, 14, 0, 0, "Display PU"]);
+check("EXP 1 / EXP 2 and footswitches 1 / 2 show which pedals are in pickup mode", [fcb.hw.aux[2], fcb.hw.aux[3], fcb.hw.leds[0], fcb.hw.leds[1]], [pk0 & 1, pk0 >> 1, pk0 & 1, pk0 >> 1]);
+press(0, 100);
+check("footswitch 1 switches pedal A", [fcb.state().pickup & 1, fcb.hw.aux[2], fcb.hw.leds[0]], [(pk0 & 1) ^ 1, (pk0 & 1) ^ 1, (pk0 & 1) ^ 1]);
+press(0, 100);
+check("and back", fcb.state().pickup & 3, pk0);
 // Page 8: every LED lit at once while "riban" scrolls, then the version from version.h,
 // repeating.
 const verText = readFileSync(new URL("../src/version.h", import.meta.url), "utf8");
@@ -310,7 +321,7 @@ const verText = readFileSync(new URL("../src/version.h", import.meta.url), "utf8
 const verText2 = verText + readFileSync(new URL("../src/version_build.inc", import.meta.url), "utf8");
 const VER = ["MAJOR", "MINOR", "BUILD"].map((k) => Number(verText2.match(new RegExp("#define FW_VERSION_" + k + " (0x[0-9A-Fa-f]+)"))[1]));
 fcb.down(UP); wait(60); fcb.up(UP); wait(40);
-check("UP goes to page 8: every LED lit at once, the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [7, 4, 0, 7, 1]);
+check("UP goes to page 9: every LED lit at once, the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [8, 4, 0, 7, 1]);
 // Page 8 opened at most 40 ms ago; the lead-in and the text are eight frames.
 const pageFrames = [];
 for (let t = 0; t < FRAME * 8 - 104; t += 8) { wait(8); if (fcb.hw.text && pageFrames[pageFrames.length - 1] !== fcb.hw.text) pageFrames.push(fcb.hw.text); }
@@ -372,9 +383,11 @@ fcb.up(0); wait(FRAME + 100);
 check("then \"ri\"", fcb.hw.text, SCROLL_TEXT[1]);
 check("and nothing is sent", sent(), []);
 press(UP, 100);
-check("UP on page 8 stays on page 8 (no wrap)", fcb.state().cfgPage, 7);
+check("UP on page 9 stays on page 9 (no wrap)", fcb.state().cfgPage, 8);
 press(DOWN, 100);
-check("DOWN leaves page 8 for page 7: lamp test off, dots off, DIRECT SELECT lit", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.dots, fcb.hw.aux[4]], [6, 0, 0, 1]);
+check("DOWN leaves page 9 for page 8: lamp test off, dots off", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.dots, fcb.hw.text], [7, 0, 0, 14]);
+press(DOWN, 100);
+check("then page 7, DIRECT SELECT lit", [fcb.state().cfgPage, fcb.hw.aux[4]], [6, 1]);
 press(DOWN, 100);
 check("then page 6", fcb.state().cfgPage, 5);
 press(DOWN, 100); press(DOWN, 100); press(DOWN, 100); press(DOWN, 100); press(DOWN, 100);
@@ -555,7 +568,7 @@ check("in config mode the pedal does not answer", [conf.waiting, fcb.state().mod
 press(DOWN, OVER_MS);
 
 console.log("emulator: settings files (save to file, load from file)");
-const el2 = (id) => sandbox.document.getElementById(id);
+const el2 = el0;
 wait(200);
 fcb.confRead(false); wait(400);
 const file = JSON.parse(JSON.stringify(fcb.confToFile()));
@@ -686,6 +699,46 @@ conf.out = null;
 check("with no output either, a load is refused", fcb.confLoad(oneWay), false);
 fcb.confTarget("emu");
 check("switching back to the emulator works", [conf.target, el("cfTarget").disabled], ["emu", undefined]);
+
+console.log("emulator: expression pedal pickup");
+// Pedal A to pickup over MIDI (NRPN 94), then a received CC A value it must reach. The
+// panel's log keeps 200 lines, so this reads what came after a mark.
+const PCC = cfgText.match(/#define PEDAL_CC_LIST\s+(\d+),\s*(\d+)/).slice(1).map(Number);
+const pkShow = cfgNum("PEDAL_PICKUP_SHOW_MS");
+const mark = () => fcb.hw.logLines[0];
+const since = (m) => { const out = []; for (const l of fcb.hw.logLines) { if (l === m) break; out.push(l.raw); } return out.reverse(); };
+const ccA = (v) => "b" + chHex + " " + hex(PCC[0]) + " " + hex(v);
+fcb.setRaw(128, 128); wait(200);
+fcb.confChanged(NP.PICKUP, 1); waitMidi(100);
+check("pedal A is in pickup mode, the configurator holds it", [fcb.state().pickup & 1, conf.v[NP.PICKUP]], [1, 1]);
+fcb.midiIn([0xb0 | (fcb.state().midiChannel - 1), PCC[0], 20]); wait(20);
+check("a received CC A of 20 leaves pedal A (at 64) waiting", fcb.state().pickup & 4, 4);
+const expSeen = (ms) => { const seen = new Set(); for (let t = 0; t < ms; t += 8) { wait(8); seen.add(fcb.hw.aux[2]); } return [...seen].sort(); };
+check("its EXP 1 LED flashes", expSeen(1500), [0, 1]);
+let m0 = mark();
+fcb.setRaw(140, 128); wait(100);
+check("moving it sends nothing and shows the distance with a + (above the value)", [since(m0), fcb.hw.sign, fcb.hw.display, el("display").getAttribute("aria-label")], [[], 1, 50, "Display +50"]);
+wait(pkShow + 100);
+check("the display goes back to the bank after " + pkShow + "ms", [fcb.hw.sign, fcb.hw.display], [0, fcb.state().bank + 1]);
+fcb.midiIn([0xb0 | (fcb.state().midiChannel - 1), PCC[0], 100]); wait(20);
+fcb.setRaw(120, 128); wait(100);
+check("with 100 received, at 60 it shows -40", [since(m0), fcb.hw.sign, fcb.hw.display], [[], -1, 40]);
+m0 = mark();
+fcb.setRaw(230, 128); wait(100);
+const pkSent = since(m0);
+check("passing 100 picks it up: the value is sent and the LED goes dark", [pkSent.length > 0, pkSent.every((x) => x.startsWith(ccA(0).slice(0, 5))), fcb.state().pickup & 4, expSeen(500)],
+      [true, true, 0, [0]]);
+m0 = mark();
+fcb.setRaw(200, 128); wait(100);
+check("then every move is sent", since(m0).slice(-1), [ccA(fcb.state().sent[0])]);
+fcb.confChanged(NP.PICKUP, 0); waitMidi(100);
+check("back to immediate", fcb.state().pickup & 1, 0);
+check("the settings file keeps the pedals' response", fcb.confToFile().pedals, [{ response: "immediate" }, { response: "immediate" }]);
+const pkFile = fcb.confToFile(); pkFile.pedals[1] = { response: "pickup" };
+fcb.confLoad(pkFile); waitMidi(600);
+check("and loading it sets it", fcb.state().pickup & 2, 2);
+pkFile.pedals[1] = { response: "slow" };
+check("a bad response is refused", [fcb.confLoad(pkFile), /response must be/.test(el("confStatus").textContent)], [false, true]);
 
 console.log(fail ? "emulator smoke test FAILED" : "emulator smoke test passed");
 process.exit(fail);

@@ -176,15 +176,39 @@ void hal_display(uint8_t value)
 // b = C D E F G). The scroll has its own r, SCROLL_R (user's design), and its a is
 // SCROLL_A, lowercase or uppercase.
 // Then the footswitch message types: "CC" = C (A D E F) twice; "nt" = n, t (D E F G);
-// "Pr" = P (A B E F G), r. Then "--" (G twice).
+// "Pr" = P (A B E F G), r. Then "--" (G twice), then "PU" = P, U (B C D E F).
 // Bits: A 0x80, B 0x40, C 0x20, D 0x10, E 0x08, F 0x04, G 0x02 (0x01 is the dot).
 #define SCROLL_R 0xCC   // A B E F: the r with its top-right corner
 #define SCROLL_A 0xFA   // lowercase a, A B C D E G (uppercase A is 0xEE, A B C E F G)
 static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
     0x9E, 0x8C, 0x1C, 0xFC, 0x6E, 0x0C,
     0x00, SCROLL_R, SCROLL_R, 0x0C, 0x0C, 0x3E, 0x3E, SCROLL_A, SCROLL_A, 0xEC, 0xEC, 0x00,
-    0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x8C, 0x02, 0x02
+    0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x8C, 0x02, 0x02, 0xCE, 0x7C
 };
+
+// The leftmost position's sign, lit with its "1" (B C). Which bits drive the "-" bar and
+// the "+" upright is a guess (unverified, not in jspyve's library): G for the bar, as on
+// the full digits, and F for the upright.
+#define SIGN_MINUS 0x02
+#define SIGN_PLUS  (0x02 | 0x04)
+
+void hal_display_signed(uint8_t value)
+{
+    uint8_t sign = SIGN_PLUS;
+
+    if (value & 0x80)
+    {
+        value = (uint8_t)-value;
+        sign  = SIGN_MINUS;
+    }
+
+    hal_display(value);
+
+    if (value)
+    {
+        led_map[2] &= (uint8_t)~sign;
+    }
+}
 
 // One bit per display position (units first); a set bit turns that position off.
 void hal_display_blank(uint8_t mask)

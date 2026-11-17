@@ -49,7 +49,8 @@ void    hal_aux_led(uint8_t which, uint8_t on);
 //   HAL_REC_SW1/SW2   relay SWITCH 1 / 2: follow mask low byte, high byte, pedal A
 //                     trigger, pedal B trigger
 //   HAL_REC_CAL       calibration: heel A, toe A, heel B, toe B (raw ADC readings)
-//   HAL_REC_CFG       MIDI channel, then three unused bytes (saved as 0)
+//   HAL_REC_CFG       MIDI channel, the expression pedals in pickup mode (bit 0 A,
+//                     bit 1 B), then two unused bytes (saved as 0)
 // hal_bank (0 to BANK_COUNT - 1, set by ctl.c) picks which bank's records the footswitch
 // record numbers refer to; the other records are shared by every bank.
 #define HAL_REC_MSG0    0
@@ -80,9 +81,15 @@ void    hal_display(uint8_t value);
 #define HAL_TEXT_PROG           (HAL_TEXT_CC + 2)
 // "--": no value (page 7, a bank with no program change).
 #define HAL_TEXT_DASHES         (HAL_TEXT_CC + 3)
-#define HAL_TEXT_COUNT          (HAL_TEXT_CC + 4)
+// "PU": the pedal pickup page.
+#define HAL_TEXT_PICKUP         (HAL_TEXT_CC + 4)
+#define HAL_TEXT_COUNT          (HAL_TEXT_CC + 5)
 
 void    hal_display_text(uint8_t text);
+
+// Show -127..127 (value as a signed byte): the number as hal_display shows it, with "+"
+// or "-" on the leftmost position (nothing for 0).
+void    hal_display_signed(uint8_t value);
 
 // Blank display positions until the next hal_display or hal_display_text: bit 0 is
 // the units digit, bit 1 the tens, bit 2 the leftmost position.

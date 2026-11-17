@@ -26,6 +26,7 @@ The settings out of the box (footswitches 3 to 9 left out here; a real file alwa
     { "follows": [], "pedalA": 0, "pedalB": 0 }
   ],
   "bankProgram": null,
+  "pedals": [ { "response": "immediate" }, { "response": "immediate" } ],
   "firmware": "00.02.01"
 }
 ```
@@ -40,6 +41,7 @@ The settings out of the box (footswitches 3 to 9 left out here; a real file alwa
 | `footswitches` | Exactly 10 entries, footswitch 1 first (see below) |
 | `relays` | Exactly 2 entries, SWITCH 1 then SWITCH 2 (see below) |
 | `bankProgram` | The program change (0 to 127) the bank sends when it is chosen with UP / DOWN (configuration page 7), or `null` for none. Optional: a file without it leaves the bank's setting as it is (files saved before it existed, or from firmware without it) |
+| `pedals` | Exactly 2 entries, expression pedal A then pedal B, each `{ "response": "immediate" }` or `{ "response": "pickup" }` (see [Expression pedals](using.md#expression-pedals)). Optional: a file without it leaves the pedals as they are; it is left out when the pedal did not report it (older firmware) |
 | `firmware` | The firmware version the settings were read from, as major.minor.build in hex (`"00.02.01"`). Only written when the settings came from a Read of the pedal; ignored when loading |
 
 Each footswitch:
@@ -65,6 +67,6 @@ Numbers must be whole numbers. Other fields are ignored.
 
 ## Loading
 
-The whole file is checked before anything is sent. A file with the wrong `format` or `version`, the wrong number of footswitches or relays, an unknown mode or type, or a value out of range is refused with the reason, and the pedal is left as it was.
+The whole file is checked before anything is sent. A file with the wrong `format` or `version`, the wrong number of footswitches or relays, an unknown mode, type or pedal response, or a value out of range is refused with the reason, and the pedal is left as it was.
 
 The settings are then sent as NRPN messages (see [Configuration over MIDI](midi.md#configuration-over-midi)) on the channel the pedal is on now, with the new channel last, so the pedal hears everything before it moves. If the panel has read the pedal first, only the settings that differ are sent; otherwise all of them. Like any change over MIDI they apply at once but are not stored: press **Store** to keep them after power-off. With a MIDI input connected, the panel then reads the pedal back.

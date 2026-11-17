@@ -80,6 +80,23 @@
 // 7 = channel volume, 11 = expression.
 #define PEDAL_CC_LIST 7, 11
 
+// Expression pedal response until changed on configuration page 8: 0 = immediate (every
+// move is sent), 1 = pickup: after its CC's value has changed elsewhere (a footswitch or
+// MIDI IN; at power-on it counts as 0), the pedal sends nothing until it reaches that
+// value (within PEDAL_PICKUP_WINDOW CC steps) or passes it. While it waits its EXP LED
+// flashes, every PEDAL_PICKUP_FLASH_MS at the pickup point and 3ms slower per CC step
+// away, and once moved the display shows how far it is from the pickup point (+ above,
+// - below) until PEDAL_PICKUP_SHOW_MS after the last move.
+#ifndef PEDAL_PICKUP_A
+#define PEDAL_PICKUP_A 0
+#endif
+#ifndef PEDAL_PICKUP_B
+#define PEDAL_PICKUP_B 0
+#endif
+#define PEDAL_PICKUP_WINDOW    2
+#define PEDAL_PICKUP_FLASH_MS  40
+#define PEDAL_PICKUP_SHOW_MS   2000
+
 // UP / DOWN program change behaviour.
 // 1 = wrap around (127 -> 0, 0 -> 127), 0 = stop at the ends.
 #ifndef PROGRAM_WRAP
