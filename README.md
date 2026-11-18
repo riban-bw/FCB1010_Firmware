@@ -1,8 +1,8 @@
 # riban FCB1010 stomp-box firmware
 
-The Behringer FCB1010 is a sturdy MIDI foot controller, but its stock firmware is built around presets and banks, which makes it awkward to use as a simple row of effect switches. This replacement firmware turns it into a straightforward MIDI stomp-box: each of the ten footswitches is an on/off switch with its own LED, UP and DOWN step through programs, and the two expression pedals send continuous controllers. Everything is set up on the pedal itself, with no computer or editor needed.
+The Behringer FCB1010 is a sturdy MIDI foot controller, but its stock firmware is built around presets and banks, which makes it awkward to use as a simple row of effect switches. This replacement firmware turns it into a straightforward MIDI stomp-box: each of the ten footswitches is an on/off switch with its own LED, UP and DOWN step through banks, and the two expression pedals send continuous controllers. Everything is set up on the pedal itself, with no computer or editor needed, although there is a web browser editor. MIDI CC, Note On/Off and Program Change can be sent per pedal.
 
-It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-capable amp or synth the way they would on a pedalboard: press to turn on, press again to turn off, and see at a glance what is on.
+It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-capable amp or synth the way they would on a pedalboard: press to turn on, press again to turn off, and see at a glance what is on or who wants a pedal board for playing notes or selecting patches, etc.
 
 ## Features
 
