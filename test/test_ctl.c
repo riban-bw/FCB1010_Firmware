@@ -3879,44 +3879,69 @@ static void nrpn(uint8_t p, uint8_t v)
 
 // Parse a dump from the MIDI log: values[p] (14-bit for CC 6 + CC 38), seen[p], and
 // whether the end marker came last. Returns the number of parameters, or -1 if the bytes
-// are not well-formed NRPN messages with running status.
+// are not well-formed NRPN messages: every CC with its status byte, unless running status
+// is on (then the status may be left out).
 static int dump_values[NP_COUNT], dump_seen[NP_COUNT], dump_end;
+static int dump_i;
+
+// The next CC of the dump: its number (and *v its value), or -1.
+static int dump_cc(int *v)
+{
+    if (dump_i < midi_len && midi_log[dump_i] == CC_STATUS)
+    {
+        dump_i++;
+    }
+    else if (!opt_runstat || dump_i >= midi_len)
+    {
+        return -1;
+    }
+
+    if (dump_i + 1 >= midi_len || midi_log[dump_i] >= 0x80 || midi_log[dump_i + 1] >= 0x80)
+    {
+        return -1;
+    }
+
+    *v = midi_log[dump_i + 1];
+    dump_i += 2;
+    return midi_log[dump_i - 2];
+}
 
 static int parse_dump(int from)
 {
-    int i = from, n = 0, p;
+    int n = 0, p, v, save;
 
     memset(dump_seen, 0, sizeof(dump_seen));
     dump_end = 0;
+    dump_i = from;
 
-    while (i < midi_len)
+    while (dump_i < midi_len)
     {
-        if (midi_log[i] != CC_STATUS || midi_log[i + 1] != 99 || midi_log[i + 2] != NRPN_MSB ||
-            midi_log[i + 3] != 98 || midi_log[i + 5] != 6)
-        {
-            return -1;
-        }
-
-        p = midi_log[i + 4];
-        i += 7;
-
         if (dump_end)
         {
             return -1;           // nothing after the end marker
         }
 
+        if (dump_cc(&v) != 99 || v != NRPN_MSB || dump_cc(&p) != 98 || dump_cc(&v) != 6)
+        {
+            return -1;
+        }
+
         if (p == NP_DUMP_END)
         {
-            dump_end = midi_log[i - 1] == 0;
+            dump_end = v == 0;
             continue;
         }
 
-        dump_values[p] = midi_log[i - 1];
+        dump_values[p] = v;
+        save = dump_i;
 
-        if (i < midi_len && midi_log[i] == 38)
+        if (dump_cc(&v) == 38)
         {
-            dump_values[p] = dump_values[p] * 128 + midi_log[i + 1];
-            i += 2;
+            dump_values[p] = dump_values[p] * 128 + v;
+        }
+        else
+        {
+            dump_i = save;
         }
 
         dump_seen[p] = 1;
@@ -3956,7 +3981,7 @@ static void test_midi_config(void)
     clear_log();
     dump_run(1000);
     n = parse_dump(0);
-    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 2 + 2 + 2 + 4 && dump_end && midi_job == 0);
+    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 2 + 2 + 2 + 4 + 1 && dump_end && midi_job == 0);
     CHECK(dump_values[NP_BANK] == 1 && dump_values[NP_BANKS] == BANK_COUNT);
     CHECK(dump_values[NP_BANK_PC] == 127 && dump_values[NP_BANK_PC_ON] == 0);
     CHECK(dump_values[NP_CHANNEL] == MIDI_CHANNEL);
@@ -3974,18 +3999,19 @@ static void test_midi_config(void)
     CHECK(!dump_seen[88] && !dump_seen[89] && !dump_seen[90] && !dump_seen[91]);
     CHECK(!dump_seen[NP_COMMAND] && !dump_seen[NP_MODE + 10] && !dump_seen[NP_FOLLOW1 + 11]);
 
-    // It goes one parameter per tick, waiting while MIDI OUT has less than 9 bytes free
-    // (7 for a settable parameter, 9 with CC 38).
+    // It goes one parameter per tick, waiting while MIDI OUT has less than 12 bytes free
+    // (9 for a settable parameter, 12 with CC 38: each CC with its status byte, since
+    // running status is off).
     clear_log();
     nrpn(NP_COMMAND, NC_DUMP);
     ticks(1);
-    CHECK(midi_len == 7 && midi_log[4] == NP_CHANNEL);
-    midi_space = 8;
+    CHECK(midi_len == 9 && midi_log[0] == CC_STATUS && midi_log[3] == CC_STATUS && midi_log[5] == NP_CHANNEL && midi_log[6] == CC_STATUS);
+    midi_space = 11;
     ticks(5);
-    CHECK(midi_len == 7);
+    CHECK(midi_len == 9);
     midi_space = 15;
     ticks(1);
-    CHECK(midi_len == 7 + 9 && midi_log[11] == NP_VERSION && midi_log[14] == 38);
+    CHECK(midi_len == 9 + 12 && midi_log[14] == NP_VERSION && midi_log[19] == 38);
     dump_run(1000);
 
     // A dump fed back in changes nothing and sends nothing.
@@ -5175,7 +5201,7 @@ static void test_pedal_cc_config(void)
     // Over MIDI: NRPN 96 / 97, the bank in use; the pedal sends on it from then on.
     reset_world();
     pk_mask = 0;
-    CHECK(np_kind(NP_PEDAL_CC) == NK_SET && np_kind(NP_PEDAL_CC + 1) == NK_SET && np_kind(NP_ASENSE + 1) == NK_NONE);
+    CHECK(np_kind(NP_PEDAL_CC) == NK_SET && np_kind(NP_PEDAL_CC + 1) == NK_SET && np_kind(NP_READ_BANK + 1) == NK_NONE);
     nrpn(NP_PEDAL_CC, 20);
     CHECK(pedal_cc[0] == 20 && nrpn_get(NP_PEDAL_CC) == 20 && nrpn_get(NP_PEDAL_CC + 1) == cc_b);
     pedal(0, 0);
@@ -5973,6 +5999,117 @@ static void test_config_indicators(void)
     reset_world();
 }
 
+// Reading another bank's saved settings over NRPN without changing bank (user's request):
+// NP_READ_BANK starts a dump of that bank; the bank in use gives its live settings.
+static void test_read_bank(void)
+{
+    int n, ok;
+
+    printf("NRPN: reading another bank without changing bank\n");
+    reset_world();
+    store_bank_msg(1, 3, MT_NOTE, 64, 90, 10, PM_MOMENTARY);
+    store_relay(1, 0, 1u << 2, 33, 0);
+    store_y(1, 0, 6);                       // bank 2's program change: program 5
+    store_y(1, 1, (uint8_t)(0x80 | 20));    // pedal A: CC 20, pickup
+    nrpn(NP_ON + 2, 5);                     // bank 1, live and not saved
+    ticks(2);                               // (inverted momentary: the old off goes out)
+    clear_log();
+    nrpn(NP_READ_BANK, 2);
+    for (n = 0; n < 1000 && midi_job; n++) ticks(1);
+    n = parse_dump(0);
+    CHECK(n > 0 && dump_end && hal_bank == 0 && bank_next == 0 && !bank_busy && MSG_ON(2) == 5);
+    CHECK(dump_values[NP_READ_BANK] == 2 && dump_values[NP_BANK] == 1);
+    CHECK(dump_values[NP_TYPE + 3] == MT_NOTE && dump_values[NP_NUM + 3] == 64 && dump_values[NP_ON + 3] == 90 &&
+          dump_values[NP_OFF + 3] == 10 && dump_values[NP_MODE + 3] == PM_MOMENTARY);
+    CHECK(dump_values[NP_FOLLOW1 + 2] == 1 && dump_values[NP_FOLLOW1 + 3] == 0 && dump_values[NP_TRIGGER] == 33);
+    CHECK(dump_values[NP_BANK_PC] == 5 && dump_values[NP_BANK_PC_ON] == 1);
+    CHECK(dump_values[NP_PICKUP] == 1 && dump_values[NP_PEDAL_CC] == 20 && dump_values[NP_PICKUP + 1] == 0);
+    CHECK(dump_values[NP_ON + 2] == 127);   // bank 2's switch 3: the default
+    // A bank never saved: its defaults (the note banks' notes).
+    clear_log();
+    nrpn(NP_READ_BANK, NOTE_BANK_1 ? NOTE_BANK_1 : 3);
+    for (n = 0; n < 1000 && midi_job; n++) ticks(1);
+    parse_dump(0);
+    CHECK(dump_values[NP_TYPE] == (NOTE_BANK_1 ? MT_NOTE : MT_CC) && dump_values[NP_BANK_PC_ON] == 0 &&
+          dump_values[NP_PEDAL_CC + 1] == 11);
+    // The bank in use: live.
+    clear_log();
+    nrpn(NP_READ_BANK, 1);
+    for (n = 0; n < 1000 && midi_job; n++) ticks(1);
+    parse_dump(0);
+    CHECK(dump_values[NP_ON + 2] == 5 && dump_values[NP_READ_BANK] == 1);
+    // A dump fed back (CC 6 = 0) and out-of-range banks do nothing; sets still go live.
+    clear_log();
+    nrpn(NP_READ_BANK, 0);
+    nrpn(NP_READ_BANK, BANK_COUNT + 1);
+    CHECK(midi_job == 0 && midi_len == 0);
+    nrpn(NP_ON + 2, 6);
+    CHECK(MSG_ON(2) == 6);
+    ok = 1;
+    reset_world();
+    CHECK(ok);
+}
+
+// Reset to defaults (user's request): NRPN command 6, and power-on with footswitch 9
+// held ("+INI"; UP resets, any other key cancels).
+static void test_factory_reset(void)
+{
+    int n;
+
+    printf("reset to defaults (NRPN, and footswitch 9 held at power-on)\n");
+    reset_world();
+    cal_stored_valid = 1;
+    stored_heel[0] = 20; stored_toe[0] = 220; stored_heel[1] = 0; stored_toe[1] = 255;
+    nrpn(NP_ON + 2, 5);
+    nrpn(NP_LEVEL, 30);
+    nrpn(NP_PEDAL_CC, 40);
+    nrpn(NP_COMMAND, NC_DEFAULTS);
+    CHECK(msg_saved == BANK_COUNT * STOMP_COUNT && bank_saved == BANK_COUNT && cfg_saved == 1 && cal_saved == 0);
+    CHECK(saved_msg[2][2] == 127 && saved_cfg[0] == MIDI_CHANNEL && saved_cfg[2] == (LEVEL_VALID | LED_BRIGHTNESS));
+#if NOTE_BANK_1 > 0
+    CHECK((saved_msg[(NOTE_BANK_1 - 1) * BANK_RECS][0] & 3) == MT_NOTE);
+#endif
+    CHECK(MSG_ON(2) == 127 && led_level == LED_BRIGHTNESS && hw_level == LED_BRIGHTNESS && pedal_cc[0] == 7);
+    CHECK(heel[0] == 20 && toe[0] == 220 && hal_bank == 0 && !rec_def);
+
+    // Power-on with footswitch 9 held: "+INI" flashes; its release, holds and the pedals
+    // do nothing; DOWN cancels.
+    reset_world();
+    power_on();
+    ctl_settle_key(sw_code(9));
+    CHECK(ini_prompt && !boot_anim && display == SHOWN_TEXT(HAL_TEXT_INI) && blank == 0);
+    ticks(CHAN_FLASH_TICKS);
+    CHECK(blank == 7);
+    ticks(CHAN_FLASH_TICKS);
+    CHECK(blank == 0 && display == SHOWN_TEXT(HAL_TEXT_INI));
+    ctl_key_release(sw_code(9));
+    ctl_key_hold(CTL_KEY_UP);
+    pedal(0, 200);
+    CHECK(ini_prompt && midi_len == 0);
+    ctl_key_press(CTL_KEY_DOWN);
+    ctl_key_release(CTL_KEY_DOWN);
+    ticks(2);
+    CHECK(!ini_prompt && msg_saved == 0 && cfg_saved == 0 && display == 1 && blank == 0 && hal_bank == 0 && mode == MODE_RUN);
+    // UP resets.
+    reset_world();
+    power_on();
+    ctl_settle_key(sw_code(9));
+    ctl_key_press(CTL_KEY_UP);
+    CHECK(!ini_prompt && msg_saved == BANK_COUNT * STOMP_COUNT && cfg_saved == 1 && display == 1 && blank == 0);
+    ctl_key_release(CTL_KEY_UP);
+    ticks(2);
+    CHECK(hal_bank == 0 && bank_next == 0 && !pc_mode && mode == MODE_RUN);
+    // Any other footswitch held at power-on: no prompt.
+    reset_world();
+    power_on();
+    for (n = 1; n <= 10; n++)
+    {
+        if (n != 9) ctl_settle_key(sw_code(n));
+    }
+    CHECK(!ini_prompt && boot_anim);
+    reset_world();
+}
+
 // Shared (global) settings (user's request): brightness, channel, clock display, running
 // status and active sensing. Over NRPN (98-101, 0 the channel); and a long UP with only
 // these changed saves and leaves without the bank prompt.
@@ -6292,6 +6429,24 @@ static void test_running_status(void)
     CHECK(midi_len == SX_REPLY_LEN);
     tap(0);
     CHECK(midi_len == SX_REPLY_LEN + 3 && midi_log[SX_REPLY_LEN] == CC_STATUS);
+    // A dump: one status byte for all of it with running status on, one per CC with it
+    // off (some interfaces read running-status data as notes).
+    clear_log();
+    dump_run(1000);
+    {
+        int on_len = midi_len, statuses = 0, k;
+
+        for (k = 0; k < midi_len; k++)
+        {
+            statuses += midi_log[k] >= 0x80;
+        }
+
+        CHECK(parse_dump(0) > 0 && dump_end && statuses == 0);
+        opt_runstat = 0;
+        clear_log();
+        dump_run(1000);
+        CHECK(parse_dump(0) > 0 && dump_end && midi_len == on_len + on_len / 2);
+    }
     reset_world();
 }
 
@@ -6335,6 +6490,8 @@ int main(void)
     test_config_indicators();
     test_led_brightness();
     test_global_settings();
+    test_read_bank();
+    test_factory_reset();
     test_pc_mode();
     test_shared_state();
     test_cc_memory();

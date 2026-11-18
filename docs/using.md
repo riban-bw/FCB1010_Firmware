@@ -108,3 +108,7 @@ With the visual metronome turned on (configuration page 8), the pedal also follo
 ## Power-on
 
 At power-on a banner scrolls across the display for 2 seconds and every LED lights for the first second. The display then shows the bank number and the pedal LEDs show their normal state Footswitch bank 1 is selected. The device is ready for use immediately, even before the banner finishes scrolling. Stomp states are OFF, except switches in inverted momentary mode, which start ON. The pedal sends its identity (the SysEx Identity Reply, see [Device identity](midi.md#device-identity)) once at power-on.
+
+### Resetting to defaults
+
+To put every setting back to its default, hold footswitch 9 while switching the pedal on. The display flashes `Ini`. Press UP to reset (`Ini` flickers while the settings are written): every bank's footswitches, relays, expression pedal settings and program change, and the shared settings (MIDI channel, brightness, the misc settings), go back to their defaults and are stored, which takes about 2 seconds. Press any other key instead to leave everything as it is. Either way the pedal then starts as usual. The pedal calibration is kept: it belongs to the pedal's own expression pedals. The same reset can be done from the editor page (**Reset to defaults**, see [Configuring from a computer](configuration.md#configuring-from-a-computer)). Storing every bank writes the part of the EEPROM where Behringer's own presets were kept.

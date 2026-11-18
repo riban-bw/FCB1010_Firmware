@@ -25,6 +25,14 @@ void main(void)
 
         ctl_settle_tick();
 
+        // A key held at power-on (footswitch 9 offers the reset to defaults).
+        code = hw_next_event();
+
+        if (code != KEY_EV_NONE && KEY_EV_TYPE(code) == KEY_EV_PRESS)
+        {
+            ctl_settle_key(KEY_EV_CODE(code));
+        }
+
         if (hw_poll_pedals())
         {
             ctl_pedal_sample(0, hw_pedal[0]);

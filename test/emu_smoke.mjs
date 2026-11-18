@@ -789,12 +789,14 @@ check("it toggles between programs 5 and 6 (following the default pedal mode)", 
 
 console.log("editor: configuration over MIDI (the page's configurator, NRPN)");
 const conf = fcb.conf, NP = fcb.NP, NC = fcb.NC;
+// Wait (in 50ms steps, up to n) until the configurator has no read or command in progress.
+function idle(n, step = wait) { for (let t = 0; t < n && (conf.waiting || conf.after || t < 200); t += 50) step(50); }
 const rec = () => JSON.parse(store["fcb1010-eeprom-v2"]);
 wait(100); sent();
 check("before any read the panel holds the editor's settings from page load (the defaults here)",
       [conf.known, conf.v[NP.NUM + 2], conf.v[NP.TYPE + 3], conf.v[NP.MODE + 4], typeof conf.v[NP.CHANNEL]], [false, STOMP_CC[2], 0, DEF_MODE, "number"]);
 conf.ch = 1 + ((fcb.state().midiChannel) % 16);    // the wrong channel: Find has to locate it
-fcb.confRead(true); wait(400);
+fcb.confRead(true, []); idle(3000);
 check("Find reads the pedal and learns its channel", [conf.waiting, conf.ch, !!conf.v], ["", fcb.state().midiChannel, true]);
 check("the dump has footswitch 3 (note 60, 100, 20) and 4 (programs 5 / 6)",
       [conf.v[NP.TYPE + 2], conf.v[NP.NUM + 2], conf.v[NP.ON + 2], conf.v[NP.OFF + 2], conf.v[NP.TYPE + 3], conf.v[NP.ON + 3], conf.v[NP.OFF + 3]],
@@ -808,31 +810,31 @@ fcb.confChanged(NP.NUM + 9, 99);
 fcb.confChanged(NP.TRIGGER + 2, 70);
 wait(20);
 check("a set applies at once, unsaved", [fcb.state().msgs[9].num, fcb.state().swThr[2], rec().fs9 === undefined || rec().fs9[1] !== 99], [99, 70, true]);
-fcb.confCommand(NC.SAVE, "saved"); wait(600);
+fcb.confCommand(NC.SAVE, "saved"); idle(3000);
 // The footswitch record's bits 6-7 hold part of the bank's pedal settings; the trigger is in the bank's record.
 check("Save stores it and the configurator reads it back",
       [[rec().fs9[0] & 0x3F, ...rec().fs9.slice(1)], rec().bank[2] & 0x7F, conf.waiting, conf.v[NP.NUM + 9]], [[fcb.state().pedalModes[9] << 2, 99, 127, 0], 70, "", 99]);
 fcb.confChanged(NP.NUM + 9, 98); wait(20);
-fcb.confCommand(NC.RELOAD, "dropped"); wait(600);
+fcb.confCommand(NC.RELOAD, "dropped"); idle(3000);
 check("Discard goes back to the saved settings", [fcb.state().msgs[9].num, conf.v[NP.NUM + 9]], [99, 99]);
 check("the dump has the bank (1) and the bank count", [conf.v[NP.BANK], conf.v[NP.BANKS] > 0], [1, true]);
 // A never-saved bank's footswitch number: the note banks (config.h) play NOTE_BANK_SCALE from their first note.
 const NOTE_SCALE = cfgText.match(/#define NOTE_BANK_SCALE\s+([0-9, ]+)/)[1].split(",").map(Number);
 const bankNum = (b, i) => b === cfgNum("NOTE_BANK_1") ? cfgNum("NOTE_BANK_1_FIRST") + NOTE_SCALE[i] :
   b === cfgNum("NOTE_BANK_2") ? cfgNum("NOTE_BANK_2_FIRST") + NOTE_SCALE[i] : STOMP_CC[i];
-fcb.confBank(3); wait(600);
+fcb.confBank(3); idle(3000);
 check("choosing bank 3 switches the pedal and reads that bank back",
       [fcb.state().bank, conf.v[NP.BANK], conf.known, conf.v[NP.NUM + 9], fcb.state().msgs[9].num], [2, 3, true, bankNum(3, 9), bankNum(3, 9)]);
 fcb.confChanged(NP.NUM + 0, 88); wait(20);
-fcb.confCommand(NC.SAVE, "saved"); wait(600);
+fcb.confCommand(NC.SAVE, "saved"); idle(3000);
 check("Store keeps bank 3's footswitches in its own records", [rec().b3fs0 && rec().b3fs0[1], rec().fs0 === undefined || rec().fs0[1] !== 88], [88, true]);
-fcb.confBank(1); wait(600);
+fcb.confBank(1); idle(3000);
 check("and bank 1 is as it was", [fcb.state().bank, conf.v[NP.NUM + 9], conf.v[NP.NUM + 0]], [0, 99, STOMP_CC[0]]);
 // Copy bank / Paste bank (user's request): bank 1's settings into bank 6, the channel left alone.
 fcb.confChanged(NP.TRIGGER + 1, 33); fcb.confChanged(NP.PEDAL_CC + 1, 44); wait(20);
 fire("cfCopy", "click");
 check("Copy bank keeps the bank shown", [/^Copied bank 1\b/.test(el0("confStatus").textContent)], [true]);
-fcb.confBank(6); wait(600);
+fcb.confBank(6); idle(3000);
 check("bank 6 is not yet like it", [fcb.state().bank, conf.v[NP.NUM + 9], conf.v[NP.PEDAL_CC + 1] === 44], [5, bankNum(6, 9), false]);
 const chBefore = fcb.state().midiChannel;
 fire("cfPaste", "click"); wait(160);
@@ -845,20 +847,20 @@ check("and says so", /^Pasted bank 1's settings into bank 6 \(\d+ settings\)/.te
 fire("cfPaste", "click"); wait(160);
 check("pasting again changes nothing", /already match/.test(el0("confStatus").textContent), true);
 wait(600);
-fcb.confCommand(NC.RELOAD, "dropped"); wait(600);
-fcb.confBank(1); wait(600);
-fcb.confCommand(NC.RELOAD, "dropped"); wait(600);
+fcb.confCommand(NC.RELOAD, "dropped"); idle(3000);
+fcb.confBank(1); idle(3000);
+fcb.confCommand(NC.RELOAD, "dropped"); idle(3000);
 check("back on bank 1 with its saved settings", [fcb.state().bank, conf.v[NP.NUM + 9], fcb.state().swThr[1]], [0, 99, 0]);
 check("the page is called the FCB1010 Editor", /<title>FCB1010 Editor<\/title>/.test(html) && /<h1>FCB1010 Editor<\/h1>/.test(html), true);
 longChord();
-fcb.confRead(false); wait(2000);
+fcb.confRead(false, []); wait(2000);
 check("in config mode the pedal does not answer", [conf.waiting, fcb.state().mode], ["", 1]);
 press(DOWN, OVER_MS);
 
 console.log("editor: settings files (save to file, load from file)");
 const el2 = el0;
 wait(200);
-fcb.confRead(false); wait(400);
+fcb.confRead(false, []); idle(3000);
 const file = JSON.parse(JSON.stringify(fcb.confToFile()));
 check("a saved file has the pedal's settings in readable form",
       [file.format, file.version, file.global.channel, file.footswitches[2], file.footswitches[3].type, file.relays.length],
@@ -940,7 +942,7 @@ delete sandbox.showSaveFilePicker;
 el2("cfFileName").value = "fcb1010-settings.json";
 
 const el = (id) => sandbox.document.getElementById(id);
-conf.known = false; fcb.confRead(false); wait(400);
+conf.known = false; fcb.confRead(false, []); idle(3000);
 check("the pedal, port and channel selectors are never disabled; the file and store buttons wait for a read",
       [el("cfTarget").disabled, el("cfOut").disabled, el("cfIn").disabled, el("cfChannel").disabled, el("cfRead").disabled, el("cfFind").disabled],
       [undefined, undefined, undefined, undefined, undefined, undefined]);
@@ -971,21 +973,21 @@ check("access granted: the only ports are chosen, and nothing is disabled",
       [conf.out && conf.out.id, conf.inp && conf.inp.id, el("cfOut").value, el("cfIn").value, el("cfTarget").disabled, el("cfOut").disabled],
       ["out1", "in1", "out1", "in1", undefined, undefined]);
 conf.ch = oldCh % 16 + 1;
-fcb.confRead(true); waitMidi(600);
+fcb.confRead(true, []); idle(3000, waitMidi);
 check("Find through the interface reads the pedal", [conf.waiting, conf.ch, !!conf.v, conf.v && conf.v[NP.NUM + 1]], ["", oldCh, true, 77]);
 fcb.confChanged(NP.ON + 1, 55); waitMidi(50);
-fcb.confCommand(NC.SAVE, "stored"); waitMidi(600);
+fcb.confCommand(NC.SAVE, "stored"); idle(3000, waitMidi);
 // The record's type byte carries the pedal mode in bits 2-3.
 check("a change and Store reach the pedal", [fcb.state().msgs[1].on, rec().fs1, conf.v[NP.ON + 1]],
       [55, [1 | (fcb.state().pedalModes[1] << 2), 77, 55, 10], 55]);
 fakeIn.onmidimessage = null;
 const heardBefore = conf.heard;
-fcb.confRead(false); waitMidi(2000);
+fcb.confRead(false, []); idle(3000, waitMidi);
 check("with nothing coming back, it says so", [conf.waiting, /nothing at all came in/.test(el("confStatus").textContent) || heardBefore > 0], ["", true]);
 console.log("editor: configurator with a MIDI output only (no input, so no reads)");
 conf.inp = null; conf.known = false;
 const st0 = JSON.stringify(fcb.state().msgs);
-fcb.confRead(false);
+fcb.confRead(false, []);
 check("Read says it needs an input", [conf.waiting, /need a MIDI input/.test(el("confStatus").textContent)], ["", true]);
 const oneWay = fcb.confToFile();
 oneWay.footswitches[5] = { mode: "stomp", type: "cc", number: 33, on: 100, off: 1 };
@@ -997,7 +999,7 @@ check("every setting was sent (no read, so nothing is assumed), and the pedal to
       [{ type: 0, num: 33, on: 100, off: 1 }, 0, 1 << 9, 12, true]);
 check("the status says it cannot read back", /cannot read it back/.test(el("confStatus").textContent), true);
 fcb.confChanged(NP.OFF + 5, 2); waitMidi(50);
-fcb.confCommand(NC.SAVE, "Stored."); waitMidi(600);
+fcb.confCommand(NC.SAVE, "Stored."); idle(3000, waitMidi);
 check("a change and Store work without an input", [[rec().fs5[0] & 0x3F, ...rec().fs5.slice(1)], rec().bank[2] & 0x7F], [[fcb.state().pedalModes[5] << 2, 33, 100, 2], 12]);
 check("saving a file without a read leaves out the firmware version", [fcb.confToFile().firmware, fcb.confToFile().footswitches[5].off], [undefined, 2]);
 conf.out = null;
@@ -1052,6 +1054,63 @@ pkFile.pedals[0] = { response: "immediate", cc: 200 };
 check("a CC over 127 is refused", [fcb.confLoad(pkFile), /cc must be 0 to 127/.test(el("confStatus").textContent)], [false, true]);
 fcb.confChanged(NP.PEDAL_CC + 1, PCC[1]); waitMidi(100);
 check("a set over NRPN 97 puts it back", fcb.state().pedalCc[1], PCC[1]);
+
+console.log("editor: reading every bank without changing bank, and reset to defaults");
+{
+  const BANKS = Number(cfgText.match(/#define BANK_COUNT\s+(\d+)/)[1]);
+  const NOTE1 = Number(cfgText.match(/#define NOTE_BANK_1\s+(\d+)/)[1]);
+  const other = NOTE1 > 1 ? NOTE1 : 2;
+  const until = (cond, n) => { for (let t = 0; t < n && !cond(); t += 50) waitMidi(50); };
+  const bank0 = fcb.state().bank;
+  m0 = mark();
+  fcb.confRead(false);
+  until(() => !conf.waiting, 30000);
+  const pcs = since(m0).filter((l) => /^C/.test(l));
+  check("Read fetches every bank, and the pedal stays on its bank (no program change sent)",
+        [Object.keys(conf.banks).length, fcb.state().bank, pcs.length, /all \d+ banks/.test(el("confStatus").textContent)], [BANKS, bank0, 0, true]);
+  if (NOTE1 > 0) check("another bank's stored settings came back (the note bank's notes)", conf.banks[NOTE1][NP.TYPE], 1);
+  fcb.confShowBank(other);
+  check("the bank box shows another bank at once, without switching", [conf.view, fcb.state().bank, el("cfBank").value, conf.v[NP.BANK]],
+        [other, bank0, String(other), bank0 + 1]);
+  const on0 = fcb.state().msgs[0].on;
+  fcb.confChanged(NP.ON, on0 === 5 ? 6 : 5); waitMidi(100);
+  check("a bank not in use is not changed (the panel says to switch first)", [fcb.state().msgs[0].on, /not in use/.test(el("confStatus").textContent)], [on0, true]);
+  fire("cfUseBank", "click"); until(() => !conf.waiting && !conf.after, 3000);
+  check("Use on pedal switches the pedal to it", [fcb.state().bank, conf.v[NP.BANK], conf.view], [other - 1, other, other]);
+  fcb.confBank(bank0 + 1); until(() => !conf.waiting && !conf.after, 3000);
+  check("and back", fcb.state().bank, bank0);
+  fcb.confShowBank(other);
+  fcb.confCopy();
+  fcb.confPaste(); waitMidi(600);
+  check("Copy from a bank shown (not in use), Paste into the bank in use", [conf.view, fcb.state().msgs[0].type], [bank0 + 1, NOTE1 === other ? 1 : 0]);
+  fcb.confCommand(NC.RELOAD, "dropped"); idle(3000, waitMidi);
+
+  // Reset to defaults from the panel: every bank and the shared settings stored as defaults.
+  const DEF_CH = Number(cfgText.match(/#define MIDI_CHANNEL\s+(\d+)/)[1]);
+  fcb.confChanged(NP.ON + 2, 33); waitMidi(100);
+  fcb.confCommand(NC.SAVE, "stored"); idle(3000, waitMidi);
+  check("a stored change before the reset", rec().fs2[2], 33);
+  fcb.confDefaults(true);
+  until(() => !conf.after && !conf.waiting, 40000);
+  check("Reset to defaults stores the defaults, and the panel finds the pedal and reads every bank again",
+        [rec().fs2[2], fcb.state().msgs[2].on, fcb.state().midiChannel, conf.ch, Object.keys(conf.banks).length, conf.known],
+        [127, 127, DEF_CH, DEF_CH, BANKS, true]);
+
+  // Power-on with footswitch 9 held: "Ini" flashes; DOWN cancels, UP resets.
+  fcb.confChanged(NP.ON + 2, 44); waitMidi(100);
+  fcb.confCommand(NC.SAVE, "stored"); idle(3000, waitMidi);
+  fcb.reset(); fcb.down(9); wait(400);
+  check("footswitch 9 held at power-on: Ini", [fcb.hw.text, el0("display").getAttribute("aria-label")], [27, "Display Ini"]);
+  const lit = new Set(); for (let t = 0; t < 600; t += 10) { wait(10); lit.add(fcb.hw.blank & 7); }
+  check("it flashes", [...lit].sort(), [0, 7]);
+  fcb.up(9); wait(300);
+  check("letting go of footswitch 9 keeps the prompt", fcb.hw.text, 27);
+  press(DOWN, 100);
+  check("DOWN cancels: settings kept, the bank shown", [fcb.hw.text, fcb.hw.display, rec().fs2[2]], [0, 1, 44]);
+  fcb.reset(); fcb.down(9); wait(400);
+  press(UP, 100); wait(200);
+  check("UP resets to defaults", [fcb.hw.text, rec().fs2[2], fcb.state().msgs[2].on], [0, 127, 127]);
+}
 
 console.log(fail ? "editor smoke test FAILED" : "editor smoke test passed");
 process.exit(fail);

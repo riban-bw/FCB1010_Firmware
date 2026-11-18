@@ -264,6 +264,16 @@ void emu_tick(void)
         // runs, and key events are discarded.
         ctl_settle_tick();
 
+        // A key held at power-on (footswitch 9 offers the reset to defaults).
+        {
+            uint8_t e = keys_next_event();
+
+            if (e != KEY_EV_NONE && KEY_EV_TYPE(e) == KEY_EV_PRESS)
+            {
+                ctl_settle_key(KEY_EV_CODE(e));
+            }
+        }
+
         if (poll_pedals(&a, &b))
         {
             ctl_pedal_sample(0, a);

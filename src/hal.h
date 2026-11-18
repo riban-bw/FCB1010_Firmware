@@ -108,7 +108,9 @@ void    hal_display(uint8_t value);
 // "On" and "Of": a misc setting's value.
 #define HAL_TEXT_ON             (HAL_TEXT_MODE + 10)
 #define HAL_TEXT_OFF            (HAL_TEXT_MODE + 11)
-#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 12)
+// "Ini": the reset prompt at power-on; the leftmost "1" lit with a lowercase "ni".
+#define HAL_TEXT_INI            (HAL_TEXT_MODE + 12)
+#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 13)
 
 void    hal_display_text(uint8_t text);
 

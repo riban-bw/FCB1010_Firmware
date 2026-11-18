@@ -21,6 +21,8 @@ void    ctl_tick(void);
 // Call once per tick during the start-up settling, before ctl_tick runs: keeps the
 // power-on scroll moving.
 void    ctl_settle_tick(void);
+// A key pressed during the start-up settling: footswitch 9 offers the reset to defaults.
+void    ctl_settle_key(uint8_t code);
 
 // The key has now been held down for the hold threshold (sent once per press).
 void    ctl_key_hold(uint8_t code);

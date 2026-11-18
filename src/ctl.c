@@ -412,6 +412,23 @@ static BIT_T          sw_named;
 static BIT_T          misc_named;
 // A long UP with only shared settings changed: ctl_tick saves and leaves.
 static BIT_T          save_due;
+// Power-on with footswitch 9 held: "Ini" flashes, UP resets every setting to its default
+// (user's request), any other key cancels.
+static BIT_T          ini_prompt;
+static BIT_T          ini_up;
+static void ini_end(void);
+// rec_read takes the defaults whatever the EEPROM holds (the reset), except the
+// calibration, which belongs to the pedal.
+static BIT_T          rec_def;
+// nrpn_get reads the saved settings of bank dump_bank (a dump of another bank). These
+// bytes are in the external SRAM: not time-critical, and internal RAM is the stack's.
+static BIT_T          get_saved;
+static XDATA uint8_t  dump_bank;
+static XDATA uint8_t  sv_p;
+static XDATA uint8_t  sv_i;
+static XDATA uint8_t  sv_y;
+static XDATA uint8_t  sv_q;
+static XDATA uint8_t  sv_bank;
 // The editor: the edited setting's panel LED flickers (user's request).
 static BIT_T          par_on;
 static IDATA uint8_t  par_ticks;
@@ -462,13 +479,17 @@ static IDATA uint8_t  met_sign;
 #define NP_METRO        99      // MIDI clock display (visual metronome) 0 / 1
 #define NP_RUNSTAT      100     // running status on MIDI OUT 0 / 1
 #define NP_ASENSE       101     // active sensing on MIDI OUT 0 / 1
-#define NP_COUNT        102
+#define NP_READ_BANK    102     // a set (1 to BANK_COUNT) dumps that bank's saved settings
+#define NP_COUNT        103
 
 // Commands (values of NP_COMMAND).
 #define NC_DUMP         1       // send every parameter, then NP_DUMP_END
 #define NC_SAVE         2       // store the settings, as leaving configuration mode does
 #define NC_RELOAD       3       // drop unsaved changes: back to what the EEPROM holds
 // 4 and 5 (heel, toe) are gone, so are ignored: calibration is set on the pedal only.
+// Footswitch index held at power-on for the reset prompt (switch 9).
+#define INI_SWITCH      8
+#define NC_DEFAULTS     6       // reset every setting of every bank to its default, stored
 
 // Parameter kinds.
 #define NK_NONE         0
@@ -758,7 +779,7 @@ static void rec_read(void)
 {
     uint8_t q;
 
-    if (!hal_rec_load(rec_n))
+    if ((rec_def && rec_n != HAL_REC_CAL) || !hal_rec_load(rec_n))
     {
         // The defaults: a CC from STOMP_CC_LIST (on 127, off 0) in DEFAULT_PEDAL_MODE,
         // followed by neither relay; the pedal settings of bank_def; no relay triggers;
@@ -912,13 +933,52 @@ static uint8_t records_match(uint8_t last);
 
 // Store every setting and the calibration, the footswitches as bank hal_bank's. If a
 // write fails the new settings still apply until power-off.
-static void save_settings(void)
+static void save_records(uint8_t last)
 {
-    for (rec_n = 0; rec_n < HAL_RECORDS; rec_n++)
+    for (; rec_n < last; rec_n++)
     {
         rec_pack();
         hal_rec_save(rec_n);
     }
+}
+
+static void save_settings(void)
+{
+    rec_n = 0;
+    save_records(HAL_RECORDS);
+}
+
+// Reset to defaults (user's request): every bank's records and the shared settings are
+// stored with their default values, then bank 1 is loaded. The calibration is kept: it
+// belongs to the pedal. Blocks for the EEPROM writes (about 2 seconds), with "Ini"
+// flickering meanwhile, one bank lit and the next dark (user's request).
+static void ini_show(void);
+
+static void factory_reset(void)
+{
+    rec_def = 1;
+
+    for (sv_bank = 0; sv_bank < BANK_COUNT; sv_bank++)
+    {
+        blink_on = !(sv_bank & 1);
+        ini_show();
+        hal_bank = sv_bank;
+        rec_n    = 0;
+        load_records(HAL_REC_CAL);
+        rec_n = 0;
+        save_records(HAL_REC_CAL);
+    }
+
+    rec_n = HAL_REC_CFG;
+    load_records(HAL_RECORDS);
+    rec_n = HAL_REC_CFG;
+    save_records(HAL_RECORDS);
+    rec_def   = 0;
+    hal_bank  = 0;
+    bank_next = 0;
+    load_settings();
+    hal_led_level(led_level);
+    hal_display_blank(0);
 }
 
 // 1 if every setting matches what the EEPROM holds, taken the way loading takes it. So the
@@ -3054,8 +3114,11 @@ void ctl_init(void)
     uint8_t i;
 
     // Power-on is always in bank 1, with no CC or note value known.
-    hal_bank  = 0;
-    bank_next = 0;
+    hal_bank   = 0;
+    bank_next  = 0;
+    ini_prompt = 0;
+    rec_def    = 0;
+    dump_bank  = 0;
     load_settings();
     hal_led_level(led_level);
 
@@ -3222,6 +3285,11 @@ void ctl_key_hold(uint8_t code)
 {
     uint8_t index = stomp_index(code);
 
+    if (ini_prompt)
+    {
+        return;
+    }
+
     // In configuration mode a long UP saves and leaves, a long DOWN cancels and
     // leaves. Only for a key pressed on its own (not part of, or left over from, an
     // UP + DOWN chord). Its release then does nothing.
@@ -3294,6 +3362,12 @@ void ctl_key_release(uint8_t code)
 {
     uint8_t  index;
     uint16_t bit;
+
+    // Footswitch 9's release (held from power-on) does not answer the reset prompt.
+    if (ini_prompt)
+    {
+        return;
+    }
 
     if (code == CTL_KEY_UP || code == CTL_KEY_DOWN)
     {
@@ -3415,6 +3489,14 @@ void ctl_key_press(uint8_t code)
     uint8_t  index;
     uint8_t  on;
     uint16_t bit;
+
+    if (ini_prompt)
+    {
+        ini_prompt = 0;
+        ini_up     = (code == CTL_KEY_UP) ? 1 : 0;
+        ini_end();
+        return;
+    }
 
     flush_reverts();
 
@@ -3723,7 +3805,7 @@ static uint8_t np_kind(uint8_t p)
         return NK_SET;
     }
 
-    if ((p >= NP_VERSION && p < NP_VERSION + 3) || p == NP_BANKS)
+    if ((p >= NP_VERSION && p < NP_VERSION + 3) || p == NP_BANKS || p == NP_READ_BANK)
     {
         return NK_READ;
     }
@@ -3731,9 +3813,109 @@ static uint8_t np_kind(uint8_t p)
     return NK_NONE;
 }
 
+// A dump of another bank (NP_READ_BANK) reads its saved settings, without changing bank
+// (user's request): record sv_i of bank dump_bank into hal_rec, as loading would take it
+// (the defaults for a bank never saved). No parameters (IDATA statics), as these call
+// others and their parameters would take directly addressed RAM.
+static void saved_rec(void)
+{
+    sv_bank  = hal_bank;
+    hal_bank = dump_bank;
+    rec_n    = sv_i;
+    rec_read();
+    hal_bank = sv_bank;
+}
+
+// Packed pedal settings byte sv_p (0 bank_pc, 1 / 2 pedal A / B's CC | pickup << 7) of
+// bank dump_bank: footswitch n holds bits (n & 3) * 2 of byte n >> 2, the bank record's
+// byte k bit 4 + k of byte 2.
+static uint8_t saved_y(void)
+{
+    sv_y = 0;
+
+    for (sv_i = (uint8_t)(sv_p * 4); sv_i < (uint8_t)(sv_p * 4 + 4) && sv_i < STOMP_COUNT; sv_i++)
+    {
+        saved_rec();
+        sv_y |= (uint8_t)((uint8_t)(hal_rec[0] >> 6) << ((sv_i & 3) << 1));
+    }
+
+    if (sv_p == 2)
+    {
+        sv_i = HAL_REC_BANK;
+        saved_rec();
+
+        for (sv_i = 0; sv_i < 4; sv_i++)
+        {
+            sv_y |= (uint8_t)((uint8_t)(hal_rec[sv_i] >> 7) << (4 + sv_i));
+        }
+    }
+
+    return sv_y;
+}
+
+// Bank parameter sv_p (NP_MODE to NP_PEDAL_CC + 1) of bank dump_bank, as saved. sv_q
+// keeps the parameter (saved_y uses sv_p and sv_i).
+static uint8_t saved_get(void)
+{
+    sv_q = sv_p;
+
+    if (sv_q >= NP_PICKUP)
+    {
+        sv_p = (uint8_t)(((sv_q - NP_PICKUP) & 1) + 1);
+        saved_y();
+        return (sv_q < NP_PEDAL_CC) ? (uint8_t)(sv_y >> 7) : (uint8_t)(sv_y & 0x7F);
+    }
+
+    if (sv_q >= NP_BANK_PC)
+    {
+        sv_p = 0;
+        saved_y();
+        return (sv_q == NP_BANK_PC) ? (uint8_t)((uint8_t)(sv_y - 1) & 0x7F) : (uint8_t)(sv_y != 0);
+    }
+
+    if (sv_q >= NP_TRIGGER)
+    {
+        sv_i = HAL_REC_BANK;
+        saved_rec();
+        return (uint8_t)(hal_rec[(uint8_t)(sv_q - NP_TRIGGER)] & 0x7F);
+    }
+
+    // A follow flag (bit 4 SWITCH 1, bit 5 SWITCH 2), a message byte (type in bits 0-1,
+    // then number, on and off), or the pedal mode (bits 2-3).
+    if (sv_q >= NP_FOLLOW1)
+    {
+        sv_i = (uint8_t)((uint8_t)(sv_q - NP_FOLLOW1) % (uint8_t)(NP_FOLLOW2 - NP_FOLLOW1));
+        saved_rec();
+        return (uint8_t)((hal_rec[0] & ((sv_q >= NP_FOLLOW2) ? 0x20 : 0x10)) != 0);
+    }
+
+    if (sv_q >= NP_TYPE)
+    {
+        sv_i = (uint8_t)((uint8_t)(sv_q - NP_TYPE) % (uint8_t)STOMP_COUNT);
+        saved_rec();
+        sv_q = (uint8_t)((uint8_t)(sv_q - NP_TYPE) / (uint8_t)STOMP_COUNT);
+        return (sv_q == 0) ? (uint8_t)(hal_rec[0] & 3) : hal_rec[sv_q];
+    }
+
+    sv_i = (uint8_t)(sv_q - NP_MODE);
+    saved_rec();
+    return (uint8_t)((hal_rec[0] >> 2) & 3);
+}
+
 // The current value of known parameter p.
 static uint8_t nrpn_get(uint8_t p)
 {
+    if (get_saved && p >= NP_MODE && p < NP_LEVEL)
+    {
+        sv_p = p;
+        return saved_get();
+    }
+
+    if (p == NP_READ_BANK)
+    {
+        return (uint8_t)(dump_bank + 1);
+    }
+
     if (p == NP_CHANNEL)
     {
         return midi_channel;
@@ -3828,36 +4010,35 @@ static uint8_t nrpn_get(uint8_t p)
 // the last. Reads midi_job instead of taking a parameter: no fixed RAM.
 static void nrpn_send(void)
 {
-    tx_flash = TX_FLASH_TICKS;
-    tx_status((uint8_t)(0xB0 | (midi_channel - 1)));
-    hal_midi_tx(99);
-    hal_midi_tx(NRPN_MSB);
-    hal_midi_tx(98);
-    hal_midi_tx((midi_job > NP_COUNT) ? NP_DUMP_END : (uint8_t)(midi_job - 1));
-    hal_midi_tx(6);
+    // Each CC has its status byte unless running status is turned on (send_cc), so
+    // interfaces that mishandle running status still pass the dump.
+    get_saved = (dump_bank != hal_bank) ? 1 : 0;
+    send_cc(99, NRPN_MSB);
+    send_cc(98, (midi_job > NP_COUNT) ? NP_DUMP_END : (uint8_t)(midi_job - 1));
 
     if (midi_job > NP_COUNT)
     {
-        hal_midi_tx(0);
+        send_cc(6, 0);
     }
     else if (np_kind((uint8_t)(midi_job - 1)) == NK_READ)
     {
-        hal_midi_tx((uint8_t)(nrpn_get((uint8_t)(midi_job - 1)) >> 7));
-        hal_midi_tx(38);
-        hal_midi_tx((uint8_t)(nrpn_get((uint8_t)(midi_job - 1)) & 0x7F));
+        send_cc(6, (uint8_t)(nrpn_get((uint8_t)(midi_job - 1)) >> 7));
+        send_cc(38, nrpn_get((uint8_t)(midi_job - 1)));
     }
     else
     {
-        hal_midi_tx(nrpn_get((uint8_t)(midi_job - 1)));
+        send_cc(6, nrpn_get((uint8_t)(midi_job - 1)));
     }
+
+    get_saved = 0;
 }
 
 // ctl_tick's share of MIDI configuration (run mode): the next step of a dump, one
 // parameter per tick once MIDI OUT has room for it.
 static void midi_job_run(void)
 {
-    // At most 9 bytes: CC 99, 98 and 6 with running status (7), plus CC 38 (2).
-    if (hal_midi_space() < 9)
+    // At most 12 bytes: CC 99, 98, 6 and 38, each with its status byte.
+    if (hal_midi_space() < 12)
     {
         return;
     }
@@ -3943,6 +4124,15 @@ static void bank_run(void)
     relays_compute();
 }
 
+// After the reset: bank 1's switches to their resting states (next tick), the pedals
+// re-read, the program or bank shown.
+static void reset_settle(void)
+{
+    cfg_dirty = ALL_SWITCHES;
+    resync_pedals();
+    show_program();
+}
+
 // A command (in rx_data1). Save and reload run at once, so a command that follows (a dump,
 // say) cannot overtake them; the EEPROM access is still less deep on the stack than from
 // the key handlers. A dump starts on the next tick (and a new one restarts it).
@@ -3950,7 +4140,13 @@ static void nrpn_command(void)
 {
     if (rx_data1 == NC_DUMP)
     {
-        midi_job = 1;
+        dump_bank = hal_bank;
+        midi_job  = 1;
+    }
+    else if (rx_data1 == NC_DEFAULTS)
+    {
+        factory_reset();
+        reset_settle();
     }
     else if (rx_data1 == NC_SAVE)
     {
@@ -3994,6 +4190,19 @@ static void nrpn_set(void)
     if (nrpn_lsb == NP_COMMAND)
     {
         nrpn_command();
+        return;
+    }
+
+    // A dump of bank rx_data1's saved settings (the bank in use: its live ones), without
+    // changing bank. Read only otherwise, so a dump fed back (CC 6 = 0) changes nothing.
+    if (nrpn_lsb == NP_READ_BANK)
+    {
+        if (rx_data1 >= 1 && rx_data1 <= BANK_COUNT)
+        {
+            dump_bank = (uint8_t)(rx_data1 - 1);
+            midi_job  = 1;
+        }
+
         return;
     }
 
@@ -4351,6 +4560,11 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
 
     last_raw[channel] = raw;
 
+    if (ini_prompt)
+    {
+        return;
+    }
+
     flush_reverts();
 
     if (mode != MODE_RUN)
@@ -4556,6 +4770,49 @@ static void relays_update(void)
     }
 }
 
+// "Ini" (flashing, on while blink_on): the leftmost "1" and a lowercase "ni".
+static void ini_show(void)
+{
+    if (blink_on)
+    {
+        hal_display_text(HAL_TEXT_INI);
+    }
+    else
+    {
+        hal_display_blank(7);
+    }
+}
+
+// A key pressed during the start-up settling (so held at power-on): footswitch 9 offers
+// the reset to defaults (user's request). Anything else is ignored, as before.
+void ctl_settle_key(uint8_t code)
+{
+    if (stomp_index(code) == INI_SWITCH && !ini_prompt)
+    {
+        boot_end();
+        ini_prompt  = 1;
+        blink_on    = 1;
+        blink_ticks = 0;
+        ini_show();
+    }
+}
+
+// The reset prompt's end: UP resets (EEPROM writes, about 2 seconds, "Ini" flickering),
+// anything else leaves the settings alone. Then run mode as after power-on.
+static void ini_end(void)
+{
+    if (ini_up)
+    {
+        blink_on = 1;
+        ini_show();
+        factory_reset();
+        reset_settle();
+    }
+
+    hal_display_blank(0);
+    show_program();
+}
+
 // During the start-up settling (no ctl_tick yet): only the power-on scroll moves on.
 void ctl_settle_tick(void)
 {
@@ -4567,6 +4824,19 @@ void ctl_settle_tick(void)
 
 void ctl_tick(void)
 {
+    // The reset prompt: only the flash.
+    if (ini_prompt)
+    {
+        if (++blink_ticks >= CHAN_FLASH_TICKS)
+        {
+            blink_ticks = 0;
+            blink_on    = !blink_on;
+            ini_show();
+        }
+
+        return;
+    }
+
     flush_reverts();
     flush_program();
 
