@@ -1401,8 +1401,13 @@ static void version_show(void)
         }
         else
         {
-            // Major and minor in decimal, the build in hex (user's request).
-            hal_display_hex((s < 2) ? bcd_of(fw_version[s]) : fw_version[s]);
+            // Major and minor in decimal, the build in hex (user's request). Major
+            // and minor of 100 and up use the leftmost "1", which hal_display
+            // shows with the tens digit always drawn.
+            if (s < 2 && fw_version[s] >= 100)
+                hal_display(fw_version[s]);
+            else
+                hal_display_hex((s < 2) ? bcd_of(fw_version[s]) : fw_version[s]);
             hal_display_dots(fw_version_dots[s]);
         }
     }

@@ -34,8 +34,8 @@ if not row:
 line = row.group(0)
 # Each example in backticks: `MM.` (no dot before), `.mm.`, `.bb` (no dot after).
 examples = [
-    (r"`[0-9A-Fa-f]{2}\.`", "`%02d.`" % major),
-    (r"`\.[0-9A-Fa-f]{2}\.`", "`.%02d.`" % minor),
+    (r"`1?[0-9A-Fa-f]{2}\.`", "`%02d.`" % major),
+    (r"`\.1?[0-9A-Fa-f]{2}\.`", "`.%02d.`" % minor),
     (r"`\.[0-9A-Fa-f]{2}`", "`.%02X`" % build),
 ]
 

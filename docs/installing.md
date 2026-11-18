@@ -34,3 +34,15 @@ The 27C512 image is the 32KB firmware twice, so it runs whether the socket drive
 6. **Power on.** "riban" should scroll across the display, then it should show `0`. Press UP and release it, and the display should show `1`.
 
 To lower the risk, program a spare chip first and keep the original in a safe place. The firmware has not yet run on a real FCB1010 (see [Testing](testing.md)).
+
+## Using a One ROM
+
+A [One ROM](https://onerom.org) (the 28-pin "Fire" board) can take the place of the chip. It is programmed over USB with the `onerom` command-line tool, so no programmer is needed:
+
+```
+onerom program --slot file=build/fcb1010_27c512.bin,type=27C512
+```
+
+**The pedal's reset is too short for it.** The One ROM takes longer to start than the pedal's processor, so when both are powered by the pedal the processor runs before the One ROM serves the firmware. Without code to run, it switches itself into power-down within about 50 microseconds and stays there until it is switched off. The pedal stays dark and does not respond. It works if the One ROM's USB socket is connected to a computer before the pedal is switched on.
+
+The fix is a longer reset. The processor's reset comes from a TL7705 supervisor chip whose timing capacitor (on its CT pin, in series with a 1kΩ resistor to ground) is 10nF in my unit, which gives about 130 microseconds. The reset time is about 13ms per µF (1.3 × 10⁴ × CT), and can be half or double that from chip to chip. I replaced the 10nF with a 4.7µF electrolytic (about 60ms; + to the CT pin side, − to ground, rated 6.3V or more), and the pedal now starts every time without USB. Anything up to 10µF (TI's recommended maximum) should work. The bigger capacitor takes longer to discharge, so leave the pedal off for a second or two before switching it on again.

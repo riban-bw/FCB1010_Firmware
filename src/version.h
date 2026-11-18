@@ -3,12 +3,12 @@
 
 #include "platform.h"
 
-// Firmware version: major and minor in decimal, 0-99 (the build number is shown in hex).
-#define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 4
+// Firmware version: major and minor in decimal, 0-199 (the build number is shown in hex).
+#define FW_VERSION_MAJOR 1
+#define FW_VERSION_MINOR 0
 
-#if FW_VERSION_MAJOR > 99 || FW_VERSION_MINOR > 99
-#error FW_VERSION_MAJOR and FW_VERSION_MINOR must be 0-99
+#if FW_VERSION_MAJOR > 199 || FW_VERSION_MINOR > 199
+#error FW_VERSION_MAJOR and FW_VERSION_MINOR must be 0-199
 #endif
 
 // The build number is in src/version_build.inc, which `make` increments each time it

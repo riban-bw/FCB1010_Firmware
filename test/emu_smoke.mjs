@@ -405,7 +405,10 @@ const verText = readFileSync(new URL("../src/version.h", import.meta.url), "utf8
 const verText2 = verText + readFileSync(new URL("../src/version_build.inc", import.meta.url), "utf8");
 // As hal_display_hex is given them: major and minor in decimal (two BCD digits), the build in hex.
 const VER_N = ["MAJOR", "MINOR", "BUILD"].map((k) => Number(verText2.match(new RegExp("#define FW_VERSION_" + k + " (0x[0-9A-Fa-f]+|[0-9]+)"))[1]));
-const VER = VER_N.map((v, i) => i < 2 ? Math.floor(v / 10) * 16 + v % 10 : v);
+const BCD = (v) => Math.floor(v / 10) * 16 + v % 10;
+// Major and minor from 100 are shown as a number (hal_display); counted here as 0x100 + BCD.
+const VER = VER_N.map((v, i) => i < 2 ? (v >= 100 ? 0x100 + BCD(v - 100) : BCD(v)) : v);
+const verShown = () => fcb.hw.hex >= 0 ? fcb.hw.hex : fcb.hw.display >= 100 ? 0x100 + BCD(fcb.hw.display - 100) : -1;
 fcb.down(UP); wait(60); fcb.up(UP); wait(40);
 check("UP goes to page 8: every LED lit at once, the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [7, 4, 0, 7, 1]);
 // Page 7 opened at most 40 ms ago; the lead-in and the text are eight frames.
@@ -414,11 +417,11 @@ for (let t = 0; t < FRAME * 8 - 104; t += 8) { wait(8); if (fcb.hw.text && pageF
 check("the scroll runs through every frame", pageFrames, SCROLL_TEXT);
 // The trailing dot (two frames), then halfway into major.
 wait(FRAME * 2 + 64 + BOOT_SHOW / 2);
-check("major version with a trailing dot", [fcb.hw.hex, fcb.hw.dots, fcb.hw.lamp], [VER[0], 1, 4]);
+check("major version with a trailing dot", [verShown(), fcb.hw.dots, fcb.hw.lamp], [VER[0], 1, 4]);
 wait(1000);
-check("then minor with leading and trailing dots", [fcb.hw.hex, fcb.hw.dots], [VER[1], 5]);
+check("then minor with leading and trailing dots", [verShown(), fcb.hw.dots], [VER[1], 5]);
 wait(1000);
-check("then build with a leading dot", [fcb.hw.hex, fcb.hw.dots], [VER[2], 4]);
+check("then build with a leading dot", [verShown(), fcb.hw.dots], [VER[2], 4]);
 // The page draws it: lit segments of the two hex digits plus the leading dot.
 const SEGS = [6, 2, 5, 5, 4, 5, 6, 3, 7, 6, 6, 5, 4, 5, 5, 4];
 const litNow = () => (sandbox.document.getElementById("display").innerHTML.match(/var\(--seg-on\)/g) || []).length;
@@ -436,7 +439,7 @@ wait(FRAME);
 check("then the scroll again", [fcb.hw.text, fcb.hw.dots], [SCROLL_TEXT[0], SCROLL_DOTS[0]]);
 // Halfway into " r": the rest of the text and the trailing dot, then halfway into major.
 wait(FRAME * 7.5 + BOOT_SHOW / 2);
-check("then major again", [fcb.hw.hex, fcb.hw.dots], [VER[0], 1]);
+check("then major again", [verShown(), fcb.hw.dots], [VER[0], 1]);
 // It keeps repeating while the page is open, the LEDs lit all along.
 // Over two more cycles every part (and the blank, -1) shows again.
 // The drawn footswitch LEDs: at most one dark at a time, switches 1 to 10 in turn.
@@ -444,7 +447,7 @@ const darkNow = () => [...Array(10).keys()].filter((i) => !sandbox.document.getE
 const pageLamps = new Set(), pageParts = new Set(), darkSeq = [];
 let darkMax = 0;
 for (let t = 0; t < 14000; t += 8) {
-  wait(8); pageLamps.add(fcb.hw.lamp); pageParts.add(fcb.hw.hex);
+  wait(8); pageLamps.add(fcb.hw.lamp); pageParts.add(verShown());
   const d = darkNow(); darkMax = Math.max(darkMax, d.length);
   if (d.length && darkSeq[darkSeq.length - 1] !== d[0]) darkSeq.push(d[0]);
 }
@@ -458,11 +461,11 @@ check("with unsaved changes the CONFIG LED flashes on page 7", [fcb.hw.lamp, dra
 check("while the other LEDs stay lit", drawnOver("ledChan", CFG_FLASH_MS * 3), [true]);
 // Footswitch 8 held: the minor version stays, LED 8 dark; released, it carries on.
 fcb.down(8); wait(60);
-check("holding footswitch 8 shows the minor version, its LED dark", [fcb.hw.hex, fcb.hw.dots, darkNow()], [VER[1], 5, [7]]);
+check("holding footswitch 8 shows the minor version, its LED dark", [verShown(), fcb.hw.dots, darkNow()], [VER[1], 5, [7]]);
 wait(BOOT_SHOW * 9);
-check("and keeps it while held", [fcb.hw.hex, fcb.hw.dots, darkNow()], [VER[1], 5, [7]]);
+check("and keeps it while held", [verShown(), fcb.hw.dots, darkNow()], [VER[1], 5, [7]]);
 fcb.up(8); wait(BOOT_SHOW + 600);
-check("released: it carries on to the build (its LED lit again after its flash)", [fcb.hw.hex, fcb.hw.dots, darkNow()], [VER[2], 4, []]);
+check("released: it carries on to the build (its LED lit again after its flash)", [verShown(), fcb.hw.dots, darkNow()], [VER[2], 4, []]);
 fcb.down(0); wait(60);
 check("footswitch 1 shows \" r\", its LED dark", [fcb.hw.text, fcb.hw.dots, darkNow()], [SCROLL_TEXT[0], SCROLL_DOTS[0], [0]]);
 fcb.up(0); wait(FRAME + 100);

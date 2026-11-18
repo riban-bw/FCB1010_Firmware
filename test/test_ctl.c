@@ -52,6 +52,10 @@ static uint8_t  blank;
 #define SHOWN_MODE(m) SHOWN_TEXT(HAL_TEXT_MODE + (m))
 // hal_display_hex(v) is recorded as display = SHOWN_HEX(v); dots and the lamp test too.
 #define SHOWN_HEX(v) (0x1000 + (v))
+// Version part i as page 8 shows it: major and minor in decimal (two BCD digits, or
+// hal_display's number from 100), the build in hex.
+#define VER_BCD(v) (((v) / 10) * 16 + (v) % 10)
+#define VER_SHOWN(i) ((i) == 2 ? SHOWN_HEX(fw_version[2]) : fw_version[i] >= 100 ? (int)fw_version[i] : SHOWN_HEX(VER_BCD(fw_version[i])))
 // hal_display_signed(v), with v as a signed value -127..127.
 #define SHOWN_SIGNED(v) (0x2000 + (v))
 #define BOOT_LED (DEFAULT_PEDAL_MODE == 3)
@@ -1935,18 +1939,18 @@ static void test_config_version(void)
     clear_log();
     expect_lead();
     expect_scroll();
-    CHECK(lamp == HAL_LAMP_LEDS_STOMPS && display == SHOWN_HEX(fw_version[0]) && dots == 0x01);
+    CHECK(lamp == HAL_LAMP_LEDS_STOMPS && display == VER_SHOWN(0) && dots == 0x01);
 
     for (k = 0; k < VER_STEP_TICKS * VER_ITEM_STEPS - 1; k++)
     {
         ticks(1);
-        CHECK(lamp == HAL_LAMP_LEDS_STOMPS && display == SHOWN_HEX(fw_version[0]) && dots == 0x01);
+        CHECK(lamp == HAL_LAMP_LEDS_STOMPS && display == VER_SHOWN(0) && dots == 0x01);
     }
 
     ticks(1);
-    CHECK(display == SHOWN_HEX(fw_version[1]) && dots == 0x05);
+    CHECK(display == VER_SHOWN(1) && dots == 0x05);
     ticks(VER_STEP_TICKS * VER_ITEM_STEPS);
-    CHECK(display == SHOWN_HEX(fw_version[2]) && dots == 0x04 && lamp == HAL_LAMP_LEDS_STOMPS);
+    CHECK(display == VER_SHOWN(2) && dots == 0x04 && lamp == HAL_LAMP_LEDS_STOMPS);
     // Then a blank display (no dots, LEDs still lit) for one part's time, then major.
     ticks(VER_STEP_TICKS * VER_ITEM_STEPS);
     CHECK(display == 0 && blank == 7 && dots == 0 && lamp == HAL_LAMP_LEDS_STOMPS);
@@ -1956,13 +1960,13 @@ static void test_config_version(void)
     ticks(1);
     expect_lead();
     expect_scroll();
-    CHECK(display == SHOWN_HEX(fw_version[0]) && dots == 0x01 && lamp == HAL_LAMP_LEDS_STOMPS);
+    CHECK(display == VER_SHOWN(0) && dots == 0x01 && lamp == HAL_LAMP_LEDS_STOMPS);
     CHECK(midi_len == 0);
 
     // A footswitch runs it all again, sending nothing.
-    CHECK(cfg_page == PAGE_VERSION && display == SHOWN_HEX(fw_version[0]));
+    CHECK(cfg_page == PAGE_VERSION && display == VER_SHOWN(0));
     ticks(VER_STEP_TICKS * VER_ITEM_STEPS);
-    CHECK(display == SHOWN_HEX(fw_version[1]));
+    CHECK(display == VER_SHOWN(1));
     // Switch 1 goes back to the scroll's first frame (test_config_version_jump has more).
     tap(sw_code(1));
     CHECK(lamp == HAL_LAMP_LEDS_STOMPS && display == SHOWN_TEXT(HAL_TEXT_SCROLL) && dots == scroll_dot_of[0]);
@@ -1974,7 +1978,7 @@ static void test_config_version(void)
         CHECK(lamp == HAL_LAMP_LEDS_STOMPS && display == SHOWN_TEXT(HAL_TEXT_SCROLL) && dots == scroll_dot_of[0]);
     }
     ticks(VER_STEP_TICKS * (VER_SCROLL_END + VER_ITEM_STEPS * 2));
-    CHECK(display == SHOWN_HEX(fw_version[2]) && lamp == HAL_LAMP_LEDS_STOMPS);
+    CHECK(display == VER_SHOWN(2) && lamp == HAL_LAMP_LEDS_STOMPS);
 
     // Pedals do nothing here.
     pedal(0, 10);
@@ -2001,7 +2005,7 @@ static void test_config_version(void)
         tap(CTL_KEY_UP);
     }
     ticks(VER_STEP_TICKS * (VER_LEAD_FRAMES * VER_SCROLL_STEPS + VER_SCROLL_END) + 1);
-    CHECK(display == SHOWN_HEX(fw_version[0]) && dots == 0x01);
+    CHECK(display == VER_SHOWN(0) && dots == 0x01);
     chord_long();
     CHECK(mode == MODE_RUN && lamp == HAL_LAMP_NORMAL && dots == 0 && display == 1);
 }
@@ -2052,19 +2056,19 @@ static void test_config_version_jump(void)
     // down (two whole cycles here).
     ticks(VER_STEP_TICKS * 3);
     ctl_key_press(sw_code(8));
-    CHECK(display == SHOWN_HEX(fw_version[1]) && dots == 0x05 && stomp_leds_but(7) && ver_paused == 1);
+    CHECK(display == VER_SHOWN(1) && dots == 0x05 && stomp_leds_but(7) && ver_paused == 1);
     ticks(VER_STEP_TICKS * VER_END_STEP * 2);
-    CHECK(display == SHOWN_HEX(fw_version[1]) && dots == 0x05 && stomp_leds_but(7));
+    CHECK(display == VER_SHOWN(1) && dots == 0x05 && stomp_leds_but(7));
     CHECK(lamp == HAL_LAMP_LEDS_STOMPS && midi_len == 0);
     // Released: it carries on from the start of that segment (LED lights after the flash).
     ctl_key_release(sw_code(8));
     CHECK(ver_paused == 0);
     ticks(VER_STEP_TICKS * VER_FLASH_STEPS - 1);
-    CHECK(stomp_leds_but(7) && display == SHOWN_HEX(fw_version[1]));
+    CHECK(stomp_leds_but(7) && display == VER_SHOWN(1));
     ticks(1);
     CHECK(stomp_leds_but(-1));
     ticks(VER_STEP_TICKS * (VER_ITEM_STEPS - VER_FLASH_STEPS));
-    CHECK(display == SHOWN_HEX(fw_version[2]) && dots == 0x04 && stomp_leds_but(8));
+    CHECK(display == VER_SHOWN(2) && dots == 0x04 && stomp_leds_but(8));
 
     // Switch 1 from the build: " r", no dots, LED 1 dark, the others lit again.
     ctl_key_press(sw_code(1));
@@ -2086,7 +2090,7 @@ static void test_config_version_jump(void)
         }
         else if (k < STOMP_COUNT)
         {
-            CHECK(display == SHOWN_HEX(fw_version[k - 7]) && dots == fw_version_dots[k - 7]);
+            CHECK(display == VER_SHOWN(k - 7) && dots == fw_version_dots[k - 7]);
         }
         else
         {

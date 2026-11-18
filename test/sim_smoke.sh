@@ -337,11 +337,12 @@ VER_EXPECT=$(python3 -I -c '
 import re
 t = open("src/version.h").read()
 v = int(re.search(r"#define FW_VERSION_MAJOR (0x[0-9A-Fa-f]+|[0-9]+)", t).group(1), 0)
-v = (v // 10) * 16 + v % 10   # shown in decimal
 seg = [0xFC, 0x60, 0xDA, 0xF2, 0x66, 0xB6, 0xBE, 0xE0, 0xFE, 0xF6, 0xEE, 0x3E, 0x9C, 0x7A, 0x9E, 0x8E]
-units = (~seg[v & 15]) & 0xFE
-tens = ((~seg[v >> 4]) & 0xFE) | 1
-print("%02x %02x ff" % (units, tens))')
+left = 0xFF if v < 100 else ((~seg[1]) & 0xFE) | 1   # the leftmost "1" from 100
+v = v % 100
+units = (~seg[v % 10]) & 0xFE
+tens = ((~seg[v // 10]) & 0xFE) | 1
+print("%02x %02x %02x" % (units, tens, left))')
 # The lead-in: units blank with its dot (bit 0, lit low), tens and left blank.
 SCROLL_EXPECT="fe ff ff"
 # Dump times from config.h (about 595 steps per ms), counted from the last tap's release
