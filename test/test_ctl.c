@@ -3956,7 +3956,7 @@ static void test_midi_config(void)
     clear_log();
     dump_run(1000);
     n = parse_dump(0);
-    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 4 + 2 + 2 + 2 + 4 && dump_end && midi_job == 0);
+    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 2 + 2 + 2 + 4 && dump_end && midi_job == 0);
     CHECK(dump_values[NP_BANK] == 1 && dump_values[NP_BANKS] == BANK_COUNT);
     CHECK(dump_values[NP_BANK_PC] == 127 && dump_values[NP_BANK_PC_ON] == 0);
     CHECK(dump_values[NP_CHANNEL] == MIDI_CHANNEL);
@@ -3970,8 +3970,8 @@ static void test_midi_config(void)
     // Parameters 70 and 82 (once following program mode) are gone.
     CHECK(!dump_seen[NP_FOLLOW1 + 10] && !dump_seen[NP_FOLLOW2 + 10]);
     CHECK(dump_values[NP_TRIGGER + 1] == 77 && dump_values[NP_TRIGGER] == 0);
-    CHECK(dump_values[NP_CAL] == 3 && dump_values[NP_CAL + 1] == 250 && dump_values[NP_CAL + 2] == 129 &&
-          dump_values[NP_CAL + 3] == 200);
+    // The calibration (once 88-91) is not reported: it is set on the pedal only.
+    CHECK(!dump_seen[88] && !dump_seen[89] && !dump_seen[90] && !dump_seen[91]);
     CHECK(!dump_seen[NP_COMMAND] && !dump_seen[NP_MODE + 10] && !dump_seen[NP_FOLLOW1 + 11]);
 
     // It goes one parameter per tick, waiting while MIDI OUT has less than 9 bytes free
@@ -4074,7 +4074,7 @@ static void test_midi_config(void)
 
     // Read-only parameters and the end marker cannot be set.
     reset_world();
-    nrpn(NP_CAL, 5);
+    nrpn(88, 5);
     nrpn(NP_VERSION, 5);
     nrpn(NP_DUMP_END, 1);
     nrpn(6, 1);
@@ -4152,22 +4152,14 @@ static void test_midi_config(void)
     ticks(2);
     CHECK(leds[0] == (DEFAULT_PEDAL_MODE == PM_MOM_INV));
 
-    // Calibration: the pedals' readings become the heel or toe, if each is CAL_MIN_SPAN
-    // from the other end; the next reading is only recorded.
+    // Calibration cannot be set over MIDI (user's request): the old heel / toe commands
+    // (4, 5) are ignored.
     reset_world();
     pedal(0, 20); pedal(1, 30);
-    clear_log();
-    nrpn(NP_COMMAND, NC_HEEL);
-    CHECK(heel[0] == 20 && heel[1] == 30 && toe[0] == 255 && midi_len == 0);
+    nrpn(NP_COMMAND, 4);
     pedal(0, 200); pedal(1, 220);
-    CHECK(midi_len == 0);
-    nrpn(NP_COMMAND, NC_TOE);
-    CHECK(toe[0] == 200 && toe[1] == 220);
-    pedal(0, 40); pedal(1, 230);
-    nrpn(NP_COMMAND, NC_TOE);              // pedal A too close to the heel: nothing changes
-    CHECK(toe[0] == 200 && toe[1] == 220);
-    nrpn(NP_COMMAND, NC_HEEL);             // pedal B too close to the toe
-    CHECK(heel[0] == 20 && heel[1] == 30);
+    nrpn(NP_COMMAND, 5);
+    CHECK(heel[0] == 0 && heel[1] == 0 && toe[0] == 255 && toe[1] == 255);
 }
 
 // Store footswitch sw's (0-9) message in bank b (0-based) of the fake EEPROM, with mode m.

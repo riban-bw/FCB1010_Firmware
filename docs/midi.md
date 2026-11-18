@@ -58,7 +58,7 @@ Settings travel as NRPN controllers on the pedal's channel, so any MIDI tool can
 |---|---|---|
 | 0 | MIDI channel | 1 to 16; the pedal listens on the new channel at once |
 | 1, 2, 3 | Firmware major, minor and build (read only) | 0 to 255, sent as CC 6 (bit 7) and CC 38 (bits 0 to 6) |
-| 4 | Command (never sent) | 1 dump, 2 save, 3 discard unsaved changes, 4 heel from the pedals' positions, 5 toe from the pedals' positions |
+| 4 | Command (never sent) | 1 dump, 2 save, 3 discard unsaved changes |
 | 5 | End of a dump (sent only) | 0 |
 | 6 | Footswitch bank | 1 to `BANK_COUNT`; setting it changes bank, as UP / DOWN do while DIRECT SELECT is dark |
 | 7 | Number of banks, `BANK_COUNT` (read only) | 1 to 30, as CC 6 + CC 38 |
@@ -71,7 +71,6 @@ Settings travel as NRPN controllers on the pedal's channel, so any MIDI tool can
 | 72 to 81 | SWITCH 2, the same | 0 / 1 |
 | 84, 85 | SWITCH 1 trigger, pedal A, pedal B | 1 to 127, 0 off |
 | 86, 87 | SWITCH 2 trigger, pedal A, pedal B | 1 to 127, 0 off |
-| 88 to 91 | Calibration: heel A, toe A, heel B, toe B (read only) | 0 to 255 raw readings, as CC 6 + CC 38 |
 | 92 | The program change the bank in use sends when it is chosen (configuration page 7) | 0 to 127; setting it also turns it on. Reads 127 while it is off |
 | 93 | Whether the bank in use sends that program change | 0 none (`--` on the pedal), 1 on (with the program parameter 92 reads) |
 | 94, 95 | Expression pedal A, pedal B response (configuration pages 3 and 4) | 0 immediate, 1 pickup |
@@ -83,7 +82,7 @@ Settings travel as NRPN controllers on the pedal's channel, so any MIDI tool can
 
 - A set takes effect at once but is not saved; command 2 saves everything, as leaving configuration mode does, and command 3 reloads what is saved. Unknown parameters, read-only ones, out-of-range values and values equal to the current one are ignored.
 - A footswitch whose mode or message changes goes to its resting state on the next 2ms tick (as on a save in configuration mode). If it was ON when its message changed, the old message's OFF is sent first (not for a program change).
-- Commands 4 and 5 take the pedals' current readings as the heel or toe, if both are at least `CAL_MIN_SPAN` from the other end; otherwise nothing changes. Read the calibration back to see whether it took.
+- The pedal calibration is not available over MIDI: it belongs to the unit's own pedals and is set only on configuration pages 3 and 4, so settings sent from another unit cannot spoil it. Commands 4 and 5 and parameters 88 to 91 (calibration, in earlier firmware) are ignored.
 - The dump (command 1) sends every parameter except the command and the end marker, one per tick once MIDI OUT has room: CC 99, 98 and 6 with running status, plus CC 38 for the read-only ones, then parameter 5. It takes about 0.2 seconds. A settable value is sent in CC 6 alone, so a dump fed back to the pedal changes nothing. The pedal sends nothing else in reply.
 - A bank change (parameter 6) happens on the next tick, once any pending stomp with momentary revert has gone out, and sends only the new bank's program change, if it has one (configuration page 7, or parameters 92 and 93); the new bank's pedal controllers, pedal responses and relay settings apply from then on. A dump asked for meanwhile waits for it, but sets sent before it finishes apply to the old bank and are lost, so read back (or wait about 50ms) before setting the new bank's footswitches. Unsaved changes to the old bank's settings are dropped; save (command 2) first to keep them. The states passed on to the new bank are worked out from the old bank's saved records, so with unsaved message changes they follow the saved messages.
 - A pedal in pickup mode sends nothing after its controller's value has changed elsewhere (a footswitch sending it, or a CC received on MIDI IN; at power-on it counts as 0) until the pedal reaches that value or passes it. Then it sends as usual. Turning pickup on while the pedal is the last thing that set its controller changes nothing until the value changes elsewhere. After a change of controller (parameters 96 and 97, or a bank whose pedal sends another one) a pickup pedal waits for the new controller's value.

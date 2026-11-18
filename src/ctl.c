@@ -453,7 +453,7 @@ static IDATA uint8_t  met_sign;
 #define NP_FOLLOW1      60      // + switch 0-9: SWITCH 1 follows it, 0 / 1 (70 was program mode, gone)
 #define NP_FOLLOW2      72      // the same for SWITCH 2
 #define NP_TRIGGER      84      // + relay * 2 + pedal: trigger value 1-127, 0 = off
-#define NP_CAL          88      // heel A, toe A, heel B, toe B: raw readings 0-255 (read only)
+// 88-91 were the calibration (read only), gone: it is set on the pedal only (user's request).
 #define NP_BANK_PC      92      // the bank's program change 0-127; setting it turns it on
 #define NP_BANK_PC_ON   93      // 1 if the bank sends its program change, 0 none ("--")
 #define NP_PICKUP       94      // + pedal 0-1: 1 pickup mode, 0 sends at once
@@ -468,8 +468,7 @@ static IDATA uint8_t  met_sign;
 #define NC_DUMP         1       // send every parameter, then NP_DUMP_END
 #define NC_SAVE         2       // store the settings, as leaving configuration mode does
 #define NC_RELOAD       3       // drop unsaved changes: back to what the EEPROM holds
-#define NC_HEEL         4       // the pedals' positions now become the heel ...
-#define NC_TOE          5       // ... or the toe, if each is CAL_MIN_SPAN from the other end
+// 4 and 5 (heel, toe) are gone, so are ignored: calibration is set on the pedal only.
 
 // Parameter kinds.
 #define NK_NONE         0
@@ -3724,7 +3723,7 @@ static uint8_t np_kind(uint8_t p)
         return NK_SET;
     }
 
-    if ((p >= NP_VERSION && p < NP_VERSION + 3) || p == NP_BANKS || (p >= NP_CAL && p < NP_CAL + 4))
+    if ((p >= NP_VERSION && p < NP_VERSION + 3) || p == NP_BANKS)
     {
         return NK_READ;
     }
@@ -3822,13 +3821,7 @@ static uint8_t nrpn_get(uint8_t p)
                                             (bit16((uint8_t)(p - NP_FOLLOW2)) & sw_mask[1]) != 0);
     }
 
-    if (p < NP_CAL)
-    {
-        return sw_thr[(uint8_t)(p - NP_TRIGGER)];
-    }
-
-    p = (uint8_t)(p - NP_CAL);
-    return (p & 1) ? toe[p >> 1] : heel[p >> 1];
+    return sw_thr[(uint8_t)(p - NP_TRIGGER)];
 }
 
 // Send the dump's next parameter (midi_job - 1), or its end marker once midi_job is past
@@ -3969,28 +3962,6 @@ static void nrpn_command(void)
         hal_led_level(led_level);
         // Every switch goes to its resting state under the reloaded settings (next tick).
         cfg_dirty = ALL_SWITCHES;
-        resync_pedals();
-    }
-    else if (rx_data1 == NC_HEEL || rx_data1 == NC_TOE)
-    {
-        // Both pedals must be CAL_MIN_SPAN from the other end, as on the calibration pages.
-        if (span_of(last_raw[0], (rx_data1 == NC_HEEL) ? toe[0] : heel[0]) < CAL_MIN_SPAN ||
-            span_of(last_raw[1], (rx_data1 == NC_HEEL) ? toe[1] : heel[1]) < CAL_MIN_SPAN)
-        {
-            return;
-        }
-
-        if (rx_data1 == NC_HEEL)
-        {
-            heel[0] = last_raw[0];
-            heel[1] = last_raw[1];
-        }
-        else
-        {
-            toe[0] = last_raw[0];
-            toe[1] = last_raw[1];
-        }
-
         resync_pedals();
     }
 }
