@@ -21,12 +21,11 @@ while chip < size:
 print("firmware size: %d bytes (%.1f KB), %d free of %d; fits a %d KB or larger chip"
       % (size, size / 1024, rom_size - size, rom_size, chip // 1024))
 
-# The One ROM image-switch plugin (onerom/fcb1010-switch) reserves the last 256 bytes
-# below 16KB and 32KB (0x3F00-0x3FFF, 0x7F00-0x7FFF): code there would be read as frames.
-for top in (0x4000, 0x8000):
-    if top - 256 < size <= top:
-        print("note: the code reaches 0x%04X, in the page 0x%04X-0x%04X that the One ROM "
-              "switch plugin reserves" % (size - 1, top - 256, top - 1))
+# The ROM socket decodes A0-A14, so 32KB is the limit; warn well before it, so the code
+# can be optimised for size in time.
+if size > rom_size - 2048:
+    print("note: the code is within %d bytes of the %d byte ROM: time to optimise for size"
+          % (rom_size - size, rom_size))
 
 # No space before the unit (documentation style); an older spaced sentence is still found.
 pattern = re.compile(r"The code is about [0-9.]+ ?KB \([0-9]+ bytes at the last build\), "

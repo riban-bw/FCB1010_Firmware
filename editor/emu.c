@@ -28,6 +28,7 @@ IMPORT("js_display_blank") void js_display_blank(uint8_t mask);
 IMPORT("js_display_hex")  void js_display_hex(uint8_t value);
 IMPORT("js_display_signed") void js_display_signed(uint8_t value);
 IMPORT("js_display_dots") void js_display_dots(uint8_t mask);
+IMPORT("js_display_sign") void js_display_sign(uint8_t sign);
 IMPORT("js_lamp_test")    void js_lamp_test(uint8_t how);
 // Record 0 = settings, 1 = calibration, 2 / 3 = relay triggers; four bytes each. Load returns 1 if one was stored.
 IMPORT("js_store_load") uint8_t js_store_load(unsigned record, uint8_t *data);
@@ -140,6 +141,7 @@ void hal_display_blank(uint8_t mask)          { js_display_blank(mask); }
 void hal_display_hex(uint8_t value)           { js_display_hex(value); }
 void hal_display_signed(uint8_t value)        { js_display_signed(value); }
 void hal_display_dots(uint8_t mask)           { js_display_dots(mask); }
+void hal_display_sign(uint8_t sign)           { js_display_sign(sign); }
 void hal_lamp_test(uint8_t how)               { js_lamp_test(how); }
 
 void    hal_relays(uint8_t mask)          { js_relays(mask); }

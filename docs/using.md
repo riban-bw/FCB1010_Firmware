@@ -17,17 +17,17 @@ Everything uses a single MIDI channel (channel 1 by default but can be changed i
 
 | LED | While playing | In configuration mode |
 |---|---|---|
-| Footswitches 1 to 10 | Lit while that footswitch is ON | Depends on the page: the selected footswitch (page 1), the choice made in the editor (others that can be chosen dim), the footswitches a relay follows (pages 5 and 6), the pedal setting last chosen (pages 3 and 4, the other two dim); while a number is typed, the digits that can come next are dim |
+| Footswitches 1 to 10 | Lit while that footswitch is ON | Depends on the page: the selected footswitch (page 1), the choice made in the editor (others that can be chosen dim), the footswitches a relay follows (pages 5 and 6, the others dim), the pedal setting last chosen (pages 3 and 4, the other two dim), the misc setting last chosen (page 8, the other dim); while a number is typed, the digits that can come next are dim |
 | SWITCH 1, SWITCH 2 | Lit while that relay is closed | Marks page 5 (SWITCH 1) or page 6 (SWITCH 2) |
 | DIRECT SELECT | Lit in program mode: UP, DOWN and the footswitches change program. Dark while UP and DOWN choose footswitch banks | Page 7: lit (it marks the page). Dark on the other pages |
-| MIDI FUNCTION | Flickers when MIDI is sent | Marks page 1 (footswitches), and the pedal mode in the footswitch editor |
+| MIDI FUNCTION | Flickers when MIDI is sent | Marks page 1 (footswitches) and the footswitch editor |
 | MIDI CHAN | Flickers when MIDI arrives | Marks page 2 (MIDI channel) |
-| EXP 1, EXP 2 | Flashing while that pedal waits to pick up (faster the closer it is), otherwise dark | Mark page 3 (EXP 1, pedal A) and page 4 (EXP 2, pedal B). Pages 5 and 6: lit while the relay follows that pedal |
-| SELECT, NUMBER, VALUE 1, VALUE 2 | Dark | Page 1 and the footswitch editor: the setting shown (type, number, ON value, OFF value). NUMBER also lights in the pedal CC editor (pages 3 and 4) |
-| SWITCH (between SWITCH 2 and SELECT) | Dark | Dark, except in page 8's lamp test |
+| EXP 1, EXP 2 | Flashing while that pedal waits to pick up (faster the closer it is), otherwise dark | Mark page 3 (EXP 1, pedal A) and page 4 (EXP 2, pedal B). Pages 5 and 6: lit while the relay follows that pedal, dim while it does not |
+| SELECT, NUMBER, VALUE 1, VALUE 2 | Dark | Page 1 and the footswitch editor: the setting shown (type, number, ON value, OFF value). NUMBER also lights in the pedal CC editor (pages 3 and 4); SELECT marks page 8 (misc) |
+| SWITCH (between SWITCH 2 and SELECT) | Dark | Page 1 and the footswitch editor: the pedal mode shown; and page 9's lamp test |
 | CONFIG | Dark | Lit; flashes while a change is not saved |
 
-For a second at power-on, and for a second on entering configuration page 8, every LED is lit. Page 8 then lights the panel LEDs one at a time along the row and back, while the footswitch LEDs show its steps (the CONFIG LED still flashes for an unsaved change); holding footswitch 10 there lights every LED and display segment.
+For a second at power-on, and for a second on entering configuration page 9, every LED is lit. Page 9 then lights the panel LEDs one at a time along the row and back, while the footswitch LEDs show its steps (the CONFIG LED still flashes for an unsaved change); holding footswitch 10 there lights every LED and display segment.
 
 ## Footswitch modes
 
@@ -101,6 +101,8 @@ The pedal listens on its MIDI IN socket. When your DAW or synth sends one of the
 
 The pedal never sends these back out, so it is safe to connect MIDI OUT and MIDI IN to the same device. The MIDI CHAN LED flickers whenever MIDI arrives.
 
+With the visual metronome turned on (configuration page 8), the pedal also follows the MIDI clock: after a Start or Continue, the `-` on the left of the display flashes with the beat, and `+` marks beat 1 of each bar once the song position is known (see [Misc settings](configuration.md#misc-settings)).
+
 ## Power-on
 
-At power-on a banner scrolls across the display for 2 seconds and every LED lights for the first second. The display then shows the bank number and the pedal LEDs show their normal state Footswitch bank 1 is selected. The device is ready for use immediately, even before the banner finishes scrolling. Stomp states are OFF, except switches in inverted momentary mode, which start ON.
+At power-on a banner scrolls across the display for 2 seconds and every LED lights for the first second. The display then shows the bank number and the pedal LEDs show their normal state Footswitch bank 1 is selected. The device is ready for use immediately, even before the banner finishes scrolling. Stomp states are OFF, except switches in inverted momentary mode, which start ON. The pedal sends its identity (the SysEx Identity Reply, see [Device identity](midi.md#device-identity)) once at power-on.

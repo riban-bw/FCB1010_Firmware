@@ -1,6 +1,5 @@
 # Build output (make, make test, make editor)
 /build/
-/onerom/*/build/
 
 # Notes for Claude Code
 /CLAUDE.md

@@ -8,6 +8,11 @@
 #define MIDI_CHANNEL 1
 #endif
 
+// The misc page's settings until one is saved (shared by every bank): the visual
+// metronome (1 on) and running status on MIDI OUT (1 on).
+#define DEFAULT_METRONOME         0
+#define DEFAULT_RUNNING_STATUS    0
+
 // Pedal mode every footswitch starts with until it is changed in configuration mode:
 // 0 = stomp (toggle), 1 = stomp with momentary on a long press, 2 = momentary.
 // 3 = inverted momentary (0 while pressed, 127 on release).

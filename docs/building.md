@@ -16,17 +16,17 @@ make editor     # update editor/index.html and run its checks (needs clang and N
 test/sim_smoke.sh # runs the real image in the uCsim 8051 simulator (apt install sdcc-ucsim)
 ```
 
-There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb1010_27c128.bin` (16KB), `build/fcb1010_27c256.bin` (32KB, also for a 28C256) and `build/fcb1010_27c512.bin` (64KB, the 32KB image twice). Each is the code padded with 0xFF and repeated to fill the chip; the build fails if the code outgrows a chip. The code is linked for addresses below 32KB only, since how the FCB1010 wires the top address line of a 27C512 socket is not known.
+There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb1010_27c128.bin` (16KB, only while the code fits), `build/fcb1010_27c256.bin` (32KB, also for a 28C256) and `build/fcb1010_27c512.bin` (64KB, the 32KB image twice). Each is the code padded with 0xFF and repeated to fill the chip. An image the code does not fit is not made (a note says so): the code is now larger than 16KB, so there is no 27C128 image. The code is linked for addresses below 32KB only: the socket carries address lines A0 to A14, so the pedal can address 32KB of program memory.
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser editor in `editor/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 15.7KB (16115 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 16.3KB (16717 bytes at the last build), so it needs a 32KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit, and prints a note once less than 2KB is left, so the code can be optimised for size in time).
 
-Each build also updates the documentation: the code size above, the firmware version on configuration page 8 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
+Each build also updates the documentation: the code size above, the firmware version on configuration page 9 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
 ## Firmware version
 
-The version shows on configuration page 8 as major, minor and build. Major and minor are set by hand in `src/version.h`, in decimal (0 to 199), and shown in decimal (from 100 with the display's leftmost "1"); the build number is shown in hex. The build number in `src/version_build.inc` goes up by one each time `make` rebuilds the firmware image; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone.
+The version shows on configuration page 9 as major, minor and build. Major and minor are set by hand in `src/version.h`, in decimal (0 to 199), and shown in decimal (from 100 with the display's leftmost "1"); the build number is shown in hex. The build number in `src/version_build.inc` goes up by one each time `make` rebuilds the firmware image; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone.
 
 ## Compile-time configuration
 
@@ -69,9 +69,11 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `BANK_PC_LABEL_MS` | 1000 | How long (ms) configuration page 7 shows `Pr`, then the program, in turn. A multiple of 50, up to 6350 |
 | `SCROLL_FRAME_MS` | 200 | Time (ms) each frame of the "riban" scroll shows; power-on is ten frames (3 seconds at 300); smaller scrolls faster. A multiple of 50, at least 100 |
 | `BOOT_LAMP_MS` | 1000 | Time (ms) from power-on that every LED is lit, before the normal LEDs show while the scroll finishes. A multiple of 50 |
-| `LAMP_TEST_MS` | 1000 | Time (ms) every LED is lit on entering configuration page 8, before the chase. A multiple of 50 |
-| `LAMP_CHASE_MS` | 100 | Time (ms) each panel LED is lit in page 8's chase along the row and back. A multiple of 50 |
-| `VERSION_SHOW_MS` | 1000 | Time (ms) each version part shows on page 8. A multiple of 50; 10 x `SCROLL_FRAME_MS` + 4 x `VERSION_SHOW_MS` must be at most 12750 |
+| `DEFAULT_METRONOME` | 0 | The visual metronome (configuration page 8) until one is saved: 1 on |
+| `DEFAULT_RUNNING_STATUS` | 0 | Running status on MIDI OUT (configuration page 8) until one is saved: 1 on |
+| `LAMP_TEST_MS` | 1000 | Time (ms) every LED is lit on entering configuration page 9, before the chase. A multiple of 50 |
+| `LAMP_CHASE_MS` | 100 | Time (ms) each panel LED is lit in page 9's chase along the row and back. A multiple of 50 |
+| `VERSION_SHOW_MS` | 1000 | Time (ms) each version part shows on page 9. A multiple of 50; 10 x `SCROLL_FRAME_MS` + 4 x `VERSION_SHOW_MS` must be at most 12750 |
 | `DEBOUNCE_SAMPLES` | 3 | Consecutive key scans (12ms apart) that must agree before a press or release counts |
 | `KEY_ACTIVE_LEVEL` | 1 | Input level of a pressed key. Change it if every key reads inverted |
 | `STARTUP_TICKS` | 100 | 2ms ticks to settle at power-on; key events in this time are discarded |

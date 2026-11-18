@@ -120,13 +120,26 @@ void hal_aux_led(uint8_t which, uint8_t on)
 
     row = aux_led_row[which];
 
-    if (on)
+    if (on == 1)
     {
         led_map[row] &= (uint8_t)~aux_led_mask[which];
     }
     else
     {
         led_map[row] |= aux_led_mask[which];
+    }
+
+    // Dim: lit for the key scan's part of the slot only, as a dim footswitch LED.
+    if (row == 3)
+    {
+        if (on == HAL_LED_DIM)
+        {
+            led_dim[0] &= (uint8_t)~aux_led_mask[which];
+        }
+        else
+        {
+            led_dim[0] |= aux_led_mask[which];
+        }
     }
 }
 
@@ -181,8 +194,8 @@ void hal_display(uint8_t value)
 
 // Segment patterns for the HAL_TEXT_* words, tens then units, same bit order as
 // digit_segments. Every letter is full height
-// r = A E F, i = E F (the left side, so it is not a "1"), n = A B C E F (an arch),
-// o = A B C D E F.
+// r = A B E F (SCROLL_R, user's request), i = E F (the left side, so it is not a "1"),
+// n = A B C E F (an arch), o = A B C D E F.
 // "Er" = E (A D E F G), r; "Lo" = L (D E F), o; "Hi" = H (B C E F G), i.
 // Then the "riban" frames: " r", "ri", "ib", "ba", "an", "n " (space = 0x00;
 // b = C D E F G). The scroll has its own r, SCROLL_R (user's design), and its a is
@@ -190,15 +203,16 @@ void hal_display(uint8_t value)
 // Then the footswitch message types: "CC" = C (A D E F) twice; "nt" = n, t (D E F G);
 // "Pr" = P (A B E F G), a small r (E G; user's request). Then "--" (G twice), then "Ab"
 // (A B C E F G, b). Then the pedal modes: "St" = S (A C D F G), t; "St" again (with
-// "+"); "Pu" = P, a small u (C D E); "Pu" again (with "-"). Then "PU" = P, U (B C D E F).
+// "+"); "Pu" = P, a small u (C D E); "Pu" again (with "-"). Then "PU" = P, U (B C D E F). Then "On" = O (A B C D E F), n; "Of" = O, F (A E F G).
 // Bits: A 0x80, B 0x40, C 0x20, D 0x10, E 0x08, F 0x04, G 0x02 (0x01 is the dot).
 #define SCROLL_R 0xCC   // A B E F: the r with its top-right corner
 #define SCROLL_A 0xFA   // lowercase a, A B C D E G (uppercase A is 0xEE, A B C E F G)
 static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
-    0x9E, 0x8C, 0x1C, 0xFC, 0x6E, 0x0C,
+    0x9E, SCROLL_R, 0x1C, 0xFC, 0x6E, 0x0C,
     0x00, SCROLL_R, SCROLL_R, 0x0C, 0x0C, 0x3E, 0x3E, SCROLL_A, SCROLL_A, 0xEC, 0xEC, 0x00,
     0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x0A, 0x02, 0x02, 0xEE, 0x3E,
-    0xB6, 0x1E, 0xB6, 0x1E, 0xCE, 0x38, 0xCE, 0x38, 0xCE, 0x7C
+    0xB6, 0x1E, 0xB6, 0x1E, 0xCE, 0x38, 0xCE, 0x38, 0xCE, 0x7C,
+    0xFC, 0xEC, 0xFC, 0x8E
 };
 
 // The leftmost position's sign, lit with its "1" (B C). G drives the "-" bar (seen on a
@@ -207,6 +221,15 @@ static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
 // and the dot have LEDs, so the others light nothing.
 #define SIGN_MINUS 0x02
 #define SIGN_PLUS  (0x02 | 0x04 | 0x08 | 0x10 | 0x80)
+
+// The metronome's sign: the segments the scan ISR lights on the leftmost position on
+// top of led_map (a set bit lights).
+static volatile IDATA uint8_t disp_sign;
+
+void hal_display_sign(uint8_t sign)
+{
+    disp_sign = (sign == HAL_SIGN_PLUS) ? SIGN_PLUS : (sign == HAL_SIGN_MINUS) ? SIGN_MINUS : 0;
+}
 
 void hal_display_signed(uint8_t value)
 {
@@ -358,6 +381,13 @@ void timer0_isr(void) __interrupt(1)
                // Every LED lit except CONFIG (it flashes for unsaved changes).
                (uint8_t)(led_map[scan_row] & lamp_keep_leds[scan_row - 3]) :
                led_map[scan_row];
+
+    // The metronome's sign on the leftmost position.
+    if (scan_row == 2)
+    {
+        scan_seg &= (uint8_t)~disp_sign;
+    }
+
     // The dim footswitch LEDs too, until the end of the ISR.
     PERIPHERALS[P_LATCH_SEGMENTS] = (scan_row == 3 || scan_row == 4) ?
                                     (uint8_t)(scan_seg & led_dim[scan_row - 3]) : scan_seg;
@@ -679,6 +709,7 @@ void hw_init(void)
 
     led_dim[0] = 0xFF;
     led_dim[1] = 0xFF;
+    disp_sign  = 0;
 
     // The key tables are in the external SRAM, which holds random data at power-on.
     for (i = 0; i < KEY_COUNT; i++)

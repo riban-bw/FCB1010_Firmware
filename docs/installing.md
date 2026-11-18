@@ -8,15 +8,15 @@ The stock presets, banks, direct-select modes and the Behringer SysEx editor do 
 
 ## Flashing to an EPROM or EEPROM
 
-The program memory is a 28-pin chip in a socket. The EPROM used in my FCB1010 is an HT27C512-70, which is 64KB. Some units have the smaller 27C256 (32KB) or 27C128 (16KB). The firmware is the same for each; only the image file and the replacement chip differ.
+The program memory is a 28-pin chip in a socket. The EPROM used in my FCB1010 is an HT27C512-70, which is 64KB. Some units have the smaller 27C256 (32KB) or 27C128 (16KB). The firmware is the same for each; only the image file and the replacement chip differ. The firmware is larger than 16KB, so a 27C128 unit needs a 27C256 in its place: the socket carries address lines A0 to A14 (pin 27 is A14 on a 27C256), enough for 32KB.
 
 | Chip in the socket | Size | Image to write | Replacement chips |
 |---|---|---|---|
 | 27C512 (for example HT27C512) | 64KB | `build/fcb1010_27c512.bin` | A 27C512-pinout part: W27C512 (electrically erasable, so it can be reprogrammed in the programmer), or a one-time programmable AT27C512R |
 | 27C256 | 32KB | `build/fcb1010_27c256.bin` | A 27C256-pinout part such as an AT27C256R, or an AT28C256 EEPROM on an adapter (see step 3) |
-| 27C128 | 16KB | `build/fcb1010_27c128.bin` | A 27C128-pinout part, or a larger chip of the socket's pinout with its image |
+| 27C128 | 16KB | `build/fcb1010_27c256.bin` | The firmware does not fit a 16KB chip: use a 27C256-pinout part such as an AT27C256R |
 
-The 27C512 image is the 32KB firmware twice, so it runs whether the socket drives the chip's top address line (pin 1, A15) high or low. All three images are built by `make` and offered by the GitHub build.
+The 27C512 image is the 32KB firmware twice, so it runs whether the socket drives the chip's top address line (pin 1, A15) high or low. Both images are built by `make` and offered by the GitHub build.
 
 1. **Identify the stock chip.** Open the case (16 screws on the underside). The program memory is the 28-pin socketed chip, often under a label or hot glue. Read the part number and find it in the table above; go by what is printed on yours. I recommend taking a photo of the original physical installation to have a record of what it looked like before you started to make changes.
 2. **Back up the original.** Read the stock chip with your programmer and save the file. Put a fresh label on it and keep it. This may allow you to flash the stock firmware to your new, target (E)EPROM to validate the flashing process. It is unlikely that the original chip is rewritable.

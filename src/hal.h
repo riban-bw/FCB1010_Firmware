@@ -39,9 +39,13 @@ void    hal_status_led(uint8_t on);
 #define HAL_LED_NUMBER     8
 #define HAL_LED_VALUE_1    9
 #define HAL_LED_VALUE_2    10
-// The panel's SWITCH LED, between SWITCH 2 and SELECT (only lit by the lamp test).
+// The panel's SWITCH LED, between SWITCH 2 and SELECT (the footswitch editor's pedal
+// mode, and the lamp test's chase).
 #define HAL_LED_SWITCH     11
 #define HAL_LED_COUNT      12
+// hal_aux_led's on: 0 off, 1 lit, HAL_LED_DIM lit faintly (only the LEDs on the
+// footswitch LED rows: MIDI CHAN, MIDI FUNCTION, EXP 1, EXP 2, SWITCH 1, SWITCH 2).
+#define HAL_LED_DIM        2
 
 void    hal_aux_led(uint8_t which, uint8_t on);
 
@@ -94,13 +98,23 @@ void    hal_display(uint8_t value);
 #define HAL_TEXT_MODE           (HAL_TEXT_CC + 5)
 // "PU": an expression pedal in pickup mode (the pedal page shows it with both dots, "P.U.").
 #define HAL_TEXT_PICKUP         (HAL_TEXT_MODE + 4)
-#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 5)
+// "On" and "Of": a setting on the misc page.
+#define HAL_TEXT_ON             (HAL_TEXT_MODE + 5)
+#define HAL_TEXT_OFF            (HAL_TEXT_MODE + 6)
+#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 7)
 
 void    hal_display_text(uint8_t text);
 
 // Show -127..127 (value as a signed byte): the number as hal_display shows it, with "+"
 // or "-" on the leftmost position (nothing for 0).
 void    hal_display_signed(uint8_t value);
+
+// The visual metronome's sign on the leftmost position, lit on top of whatever the
+// display shows (until changed here): HAL_SIGN_NONE, HAL_SIGN_MINUS or HAL_SIGN_PLUS.
+#define HAL_SIGN_NONE   0
+#define HAL_SIGN_MINUS  1
+#define HAL_SIGN_PLUS   2
+void    hal_display_sign(uint8_t sign);
 
 // Blank display positions until the next hal_display or hal_display_text: bit 0 is
 // the units digit, bit 1 the tens, bit 2 the leftmost position.

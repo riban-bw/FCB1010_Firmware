@@ -12,8 +12,23 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 run_sim() {
-    # $1 = command file, $2 = output file for UART bytes
+    # $1 = command file, $2 = output file for UART bytes. The SysEx identity sent at
+    # power-on (the first bytes, F0 to F7) is moved to $2.id, so the scenarios see only
+    # what their keys send; scenarios 3 and 12 check it.
     s51 -t 80C32 -X 12M -S out="$2" "$IHX" < "$1" > "$TMP/console.txt" 2>&1
+    strip_id "$2"
+}
+
+# Move a leading SysEx (the power-on identity) from UART output file $1 to $1.id.
+strip_id() {
+    python3 -I - "$1" <<'PY'
+import sys
+p = sys.argv[1]
+d = open(p, 'rb').read()
+n = d.find(b'\xf7') + 1 if d[:1] == b'\xf0' else 0
+open(p + '.id', 'wb').write(d[:n])
+open(p, 'wb').write(d[n:])
+PY
 }
 
 hex_of() {
@@ -168,6 +183,17 @@ quit
 EOF
 run_sim "$TMP/s3.txt" "$TMP/s3.out"
 check "no MIDI output while idle" "$(hex_of "$TMP/s3.out")" ""
+# The identity at power-on: F0 7E <channel - 1> 06 02 7D "FC10", the version (bits 0-6),
+# their bit 7s, F7.
+ID_EXPECT=$(python3 -I -c '
+import re
+t = open("src/version.h").read() + open("src/version_build.inc").read()
+v = [int(re.search(r"#define FW_VERSION_" + k + r" (0x[0-9A-Fa-f]+|[0-9]+)", t).group(1), 0) for k in ("MAJOR", "MINOR", "BUILD")]
+c = int(re.search(r"#define MIDI_CHANNEL (\d+)", open("src/config.h").read()).group(1))
+b = [0xF0, 0x7E, c - 1, 0x06, 0x02, 0x7D, 0x46, 0x43, 0x31, 0x30] + [x & 0x7F for x in v]
+b += [sum(((x >> 7) & 1) << i for i, x in enumerate(v)), 0xF7]
+print("".join("%02x" % x for x in b))')
+check "the SysEx identity sent once at power-on" "$(hex_of "$TMP/s3.out.id")" "$ID_EXPECT"
 
 echo "scenario 4: UP + DOWN held opens config mode; a long UP asks for a bank and a short UP saves and leaves, a long DOWN cancels, a long UP + DOWN saves and leaves"
 # 0xff presses both key rows, so UP, DOWN and switches 1-10 are all down together. The
@@ -228,6 +254,7 @@ state
 quit
 EOF4
 s51 -t 80C32 -X 12M -S out="$TMP/s4.out" "$IHX" < "$TMP/s4.txt" > "$TMP/s4.console" 2>&1
+strip_id "$TMP/s4.out"
 MODES=$(grep -E "^0x$(printf '%02x' "$MODE_ADDR") " "$TMP/s4.console" | awk '{print $2}' | tr '\n' ' ')
 check "mode: chord, release, long UP, release, short UP, chord, long DOWN, release, chord, release, chord, release (1 1 1 1 0 1 0 0 1 1 0 0)" \
       "$MODES" "01 01 01 01 00 01 00 00 01 01 00 00 "
@@ -268,6 +295,7 @@ state
 quit
 EOF2
 s51 -t 80C32 -X 12M -S out="$TMP/s5.out" "$IHX" < "$TMP/s5.txt" > "$TMP/s5.console" 2>&1
+strip_id "$TMP/s5.out"
 check "key presses still produce the same MIDI under receive load" \
       "$(messages "$TMP/s5.out")" \
       "$(expect "$V1" $(pc_down 1))"
@@ -325,10 +353,10 @@ check "ten stomp taps and nothing else, no program change" \
       "$(messages "$TMP/s9.out")" \
       "$(SWITCHES="$CC1 $CC2 $CC3 $CC4 $CC5 $CC6 $CC7 $CC8 $CC9 $CC10" expect "$V1")"
 
-echo "scenario 10: config page 8 lights every LED, scrolls riban, then shows the major version"
-# Into config mode, then seven taps of row 2 (UP, plus switches 6-10, which only edit
-# settings on the way; on pages 3 and 4, EXP A and B, they do nothing, as UP is down
-# when they are let go) reach page 8.
+echo "scenario 10: config page 9 lights every LED, scrolls riban, then shows the major version"
+# Into config mode, then eight taps of row 2 (UP, plus switches 6-10, which only edit
+# settings on the way; on pages 3, 4 and 8, EXP A, EXP B and misc, they do nothing, as
+# UP is down when they are let go) reach page 9.
 # About 0.1 s in, led_map (units, tens, left) holds the scroll's lead-in: digits blank,
 # the units' dot lit; about 3.5 s in (after the ten scroll frames, 3 s with the default
 # SCROLL_FRAME_MS) the major version with the dot after the units.
@@ -358,7 +386,7 @@ print((36 + f // 2) * 595, 2 * f * 595, (15 * f // 2 + v // 2) * 595)')
     echo "set hardware port[1] 0x9f"; echo "step 800000"
     echo "set hardware port[1] 0xff"; echo "step 900000"
     echo "set hardware port[1] 0x9f"; echo "step 300000"
-    for i in 1 2 3 4 5 6 7; do
+    for i in 1 2 3 4 5 6 7 8; do
         echo "set hardware port[1] 0xbf"; echo "step 60000"
         echo "set hardware port[1] 0x9f"; echo "step 60000"
     done
@@ -373,6 +401,7 @@ print((36 + f // 2) * 595, 2 * f * 595, (15 * f // 2 + v // 2) * 595)')
     echo "quit"
 } > "$TMP/s10.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s10.out" "$IHX" < "$TMP/s10.txt" > "$TMP/s10.console" 2>&1
+strip_id "$TMP/s10.out"
 # Each address is dumped three times: the lead-in, " r", and the major version.
 check "at once the display shows the scroll's lead-in dot (units, tens, left: $SCROLL_EXPECT)" \
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | head -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$SCROLL_EXPECT"
@@ -384,7 +413,7 @@ check "then the first riban frame, the scroll's r (A B E F) with the dot after t
 check "after the scroll the display shows the major version (units, tens, left: $VER_EXPECT)" \
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | tail -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$VER_EXPECT"
 # The channel page taps changed the channel, so a change is unsaved. By now (past the
-# LAMP_TEST_MS lamp test) page 8 shows the chase: one panel LED lit at a time (row 3's
+# LAMP_TEST_MS lamp test) page 9 shows the chase: one panel LED lit at a time (row 3's
 # SWITCH 1 / 2 and the MIDI / EXP bits, row 5's SWITCH, SELECT to VALUE 2 and DIRECT
 # SELECT), and a footswitch LED lit at the start of each segment (switches 4 and 5 are
 # row 3's 0x80 / 0x40, the other eight all of row 4). Lit is a low bit. So no row shows
@@ -399,6 +428,7 @@ check "after the scroll the display shows the major version (units, tens, left: 
     echo "quit"
 } > "$TMP/s10b.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s10b.out" "$IHX" < "$TMP/s10b.txt" > "$TMP/s10b.console" 2>&1
+strip_id "$TMP/s10b.out"
 # s51 prints a dump either as one line (0x1ff8, both bytes) or one line per byte; both
 # are paired up here. Too few samples fails rather than passing on nothing.
 LAMP10=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s10b.console" | awk '
@@ -423,7 +453,7 @@ LAMP10=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s10b.console
     $1 == "0x1ff8" { com = $2; next }
     $1 == "0x1ff9" && com != "" { sample(com, $2); com = "" }
     END { print (bad ? "bad" : "ok"), (total >= 150 ? "enough" : "few:" total + 0), (n >= 20 ? "many" : n + 0), on + 0, off + 0, chase3 + 0, chase5 + 0, blink + 0 }')
-check "page 8 with an unsaved change: the chase, CONFIG flashing, a footswitch LED lit (state, samples, row-5 samples, CONFIG lit, CONFIG dark, chase row 3, chase row 5, footswitch lit)" \
+check "page 9 with an unsaved change: the chase, CONFIG flashing, a footswitch LED lit (state, samples, row-5 samples, CONFIG lit, CONFIG dark, chase row 3, chase row 5, footswitch lit)" \
       "$LAMP10" "ok enough many 1 1 1 1 1"
 # The entry chord taps all ten stomps in run mode (their CCs); page changes send no program.
 check "no program change was sent" "$(messages "$TMP/s10.out" | tr ' ' '\n' | grep -c '^c')" "0"
@@ -450,6 +480,7 @@ dump iram $BANK_ADDR $BANK_ADDR 1
 quit
 EOF11
 s51 -t 80C32 -X 12M -S out="$TMP/s11.out" "$IHX" < "$TMP/s11.txt" > "$TMP/s11.console" 2>&1
+strip_id "$TMP/s11.out"
 B11=$(grep -E "^0x$(printf '%02x' "$BANK_ADDR") " "$TMP/s11.console" | awk '{print $2}')
 N11=$((16#${B11:-ff}))
 PC11=$(messages "$TMP/s11.out" | tr ' ' '\n' | grep -c '^c')
@@ -490,6 +521,7 @@ echo "scenario 12: power-on: every LED lit while riban scrolls, then run mode on
     echo "quit"
 } > "$TMP/s12.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s12.out" "$IHX" < "$TMP/s12.txt" > "$TMP/s12.console" 2>&1
+strip_id "$TMP/s12.out"
 # Samples in order; the first 60 dumps are during the animation, the rest after it.
 BOOT12=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s12.console" | awk '
     function sample(c, v) {
@@ -502,7 +534,7 @@ BOOT12=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s12.console"
     $1 == "0x1ff9" && com != "" { sample(com, $2); com = "" }
     END { print (during >= 3 ? "seen" : "few:" during + 0), (dbad ? "not-lit" : "lit"), (after >= 3 ? "seen" : "few:" after + 0), (abad ? "still-lit" : "normal") }')
 check "LED row 3 lit during the animation, normal afterwards (samples, state, samples, state)" "$BOOT12" "seen lit seen normal"
-check "nothing sent at power-on" "$(messages "$TMP/s12.out")" ""
+check "nothing sent at power-on but the identity" "$(messages "$TMP/s12.out") $(hex_of "$TMP/s12.out.id")" " $ID_EXPECT"
 
 echo "scenario 13: by default (DIRECT SELECT dark) UP and DOWN change footswitch bank, not program"
 # Row 2 (0xbf, UP with switches 6-10) three times and row 1 (0xdf, DOWN with switches
@@ -519,6 +551,7 @@ echo "scenario 13: by default (DIRECT SELECT dark) UP and DOWN change footswitch
     echo "state"; echo "quit"
 } > "$TMP/s13.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s13.out" "$IHX" < "$TMP/s13.txt" > "$TMP/s13.console" 2>&1
+strip_id "$TMP/s13.out"
 BANKS13=$(grep -E "^0x$(printf '%02x' "$BANK_ADDR") " "$TMP/s13.console" | awk '{print $2}' | tr '\n' ' ')
 check "bank after UP, UP, UP, DOWN (2 3 4 3, stored from 0)" "$BANKS13" "01 02 03 02 "
 check "no program change was sent" "$(messages "$TMP/s13.out" | tr ' ' '\n' | grep -c '^c')" "0"
@@ -551,6 +584,7 @@ SS_ADDR=$((16#$(awk '/_stomp_state:/ {print $1}' build/ctl.rst | head -1)))
     echo "quit"
 } > "$TMP/s14.txt"
 s51 -t 80C32 -X 12M -S out="$TMP/s14.out" "$IHX" < "$TMP/s14.txt" > "$TMP/s14.console" 2>&1
+strip_id "$TMP/s14.out"
 STATES14=$(grep -E "^0x($(printf '%02x' "$SS_ADDR")|$(printf '%02x' "$BANK_ADDR")) " "$TMP/s14.console" | awk '{printf "%s ", ($3 == "" || $3 == ".") ? $2 : $2 $3}')
 check "states and bank after UP row, DOWN row, UP row, DOWN row (6-10 on in 2; all in 1; 1-5 in 2; none in 1)" \
       "$STATES14" "e003 01 ff03 00 1f00 01 0000 00 "

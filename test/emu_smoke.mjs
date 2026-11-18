@@ -133,7 +133,12 @@ wait(100);
 check("then run mode: normal LEDs, no dots, bank 1 (bank mode, DIRECT SELECT dark)", [fcb.hw.lamp, fcb.hw.hex, fcb.hw.text, fcb.hw.dots, fcb.hw.display, fcb.state().mode, fcb.hw.aux[4]], [0, -1, 0, 0, 1, 0, 0]);
 wait(BOOT_SHOW * 4);
 check("and it does not repeat", [fcb.hw.lamp, fcb.hw.hex], [0, -1]);
-check("nothing sent while idle", sent(), []);
+{
+  const id = sent();
+  check("at power-on the SysEx identity goes out, once", [id.length, (id[0] || "").slice(0, 29)], [1, "f0 7e 00 06 02 7d 46 43 31 30"]);
+}
+wait(500);
+check("then nothing sent while idle", sent(), []);
 
 console.log("editor: stomp switches (default mode " + DEF_MODE + ")");
 press(0, 300);
@@ -217,9 +222,6 @@ console.log("editor: MIDI IN");
 fcb.midiIn([0xb0, STOMP_CC[1], 127]); wait(20);
 check("CC " + STOMP_CC[1] + " = 127 on channel 1 lights switch 2", fcb.hw.leds[1], 1);
 check("and nothing is echoed", sent(), []);
-// CC 20 (once the UP + DOWN controller) is an ordinary CC: it leaves DIRECT SELECT alone.
-fcb.midiIn([0xb0, 20, 127]); wait(20);
-check("CC 20 = 127 does not light DIRECT SELECT", [fcb.hw.aux[4], sent()], [0, []]);
 // The MIDI IN card sends a CC, note on, note off or program change on the chosen channel.
 fcb.midiIn([0xb0, STOMP_CC[1], 0]); wait(20);
 el0("inType").value = "cc"; el0("inCc").value = String(STOMP_CC[1]); el0("inVal").value = "127"; el0("inCh").value = "1";
@@ -295,11 +297,11 @@ fcb.up(2); wait(40);
   const shown = [];
   for (let t = 0; t < SHOW_MS * 5; t += 8) {
     wait(8);
-    const k = fcb.hw.text + ":" + (fcb.hw.text ? 0 : fcb.hw.display) + ":" + [1, 7, 8, 9, 10].map((a) => fcb.hw.aux[a]).join("");
+    const k = fcb.hw.text + ":" + (fcb.hw.text ? 0 : fcb.hw.display) + ":" + [1, 11, 7, 8, 9, 10].map((a) => fcb.hw.aux[a]).join("");
     if (shown[shown.length - 1] !== k) shown.push(k);
   }
-  check("then its settings in turn: type, number, on value, off value, mode, each with its LED", shown,
-        [(15 + fcb.state().pedalModes[2]) + ":0:10000", "10:0:01000", "0:" + STOMP_CC[2] + ":00100", "0:127:00010", "0:0:00001", (15 + fcb.state().pedalModes[2]) + ":0:10000"]);
+  check("then its settings in turn: type, number, on value, off value, mode, each with its LED (MIDI FUNCTION lit throughout, SWITCH for the mode)", shown,
+        [(15 + fcb.state().pedalModes[2]) + ":0:110000", "10:0:101000", "0:" + STOMP_CC[2] + ":100100", "0:127:100010", "0:0:100001", (15 + fcb.state().pedalModes[2]) + ":0:110000"]);
 }
 const CFG_FLASH_MS = Number(cfgText.match(/#define CONFIG_CHANGED_FLASH_MS\s+(\d+)/)[1]);
 const statusOver = (ms) => { const seen = new Set(); for (let t = 0; t < ms; t += 10) { wait(10); seen.add(fcb.hw.status); } return [...seen].sort(); };
@@ -318,7 +320,7 @@ check("with the mode back as it was, the CONFIG LED is steady again", statusOver
 press(DOWN, 100);
 check("DOWN on the mode closes the editor", [fcb.state().edit, fcb.state().cfgPage, fcb.state().pedalModes[2]], [0, 0, mode3]);
 // The MIDI channel is page 6, before the version page (user's request).
-const TEXT_PROG = 12, TEXT_ABS = 14, TEXT_PICKUP = 19;   // HAL_TEXT_PROG, _ABS, _PICKUP, + 1
+const TEXT_PROG = 12, TEXT_ABS = 14, TEXT_PICKUP = 19, TEXT_ON = 20, TEXT_OFF = 21;   // HAL_TEXT_PROG, _ABS, _PICKUP, _ON, _OFF, + 1
 const BANK_LABEL = cfgMs("BANK_PC_LABEL_MS");
 const toPage = (n) => { while (fcb.state().cfgPage < n) press(UP, 100); while (fcb.state().cfgPage > n) press(DOWN, 100); };
 toPage(1);
@@ -374,15 +376,25 @@ press(9, 100);
 check("pressed again: \"Lo\" flashing", [fcb.hw.text, fcb.state().calStep, fcb.state().calArmed, pageLeds()], [TEXT_LO, 1, 1, [0, 0, 1, 0]]);
 wait(260);
 check("(blank half the time)", fcb.hw.blank, 7);
+check("while it runs the footswitches have no labels", el0("mode8").textContent, "");
 press(9, 100);
-check("again it takes the heel: \"Hi\" flashing", [fcb.state().calStep, fcb.state().calArmed], [2, 1]);
+check("footswitch 9 does nothing now", [fcb.state().calStep, fcb.state().calArmed], [1, 1]);
+press(DOWN, 100);
+check("DOWN [ESCAPE] on \"Lo\" stops it, still on page 3", [fcb.state().calStep, fcb.state().calArmed, fcb.state().cfgPage], [0, 0, 2]);
 press(9, 100);
-check("again with the pedal still at the heel: \"Er\", the calibration unchanged", [fcb.hw.text, fcb.state().calStep, fcb.state().heel[0], fcb.state().toe[0]], [TEXT_ER, 3, 0, 255]);
+press(UP, 100);
+check("UP [ENTER] takes the heel: \"Hi\" flashing", [fcb.state().calStep, fcb.state().calArmed, fcb.state().cfgPage], [2, 1, 2]);
+press(DOWN, 100);
+check("DOWN [ESCAPE] on \"Hi\" goes back to \"Lo\"", [fcb.hw.text, fcb.state().calStep], [TEXT_LO, 1]);
+press(UP, 100);
+press(UP, 100);
+check("UP with the pedal still at the heel: \"Er\", the calibration unchanged", [fcb.hw.text, fcb.state().calStep, fcb.state().heel[0], fcb.state().toe[0]], [TEXT_ER, 3, 0, 255]);
+check("drawn as \"ER\" (the large r)", el0("display").getAttribute("aria-label"), "Display ER");
 wait(cfgMs("CAL_ERROR_SHOW_MS") + 100);
 check("CAL_ERROR_SHOW_MS later, the pedal's value again", [fcb.state().calStep, fcb.hw.display, fcb.hw.blank], [0, 0, 0]);
-press(9, 100); press(9, 100);
+press(9, 100); press(UP, 100);
 fcb.setRaw(255, 255); wait(100);
-press(9, 100);
+press(UP, 100);
 check("Lo, the heel, the toe: taken (heel 0, toe 255, the default range, so later checks hold), the value shown",
       [fcb.state().calStep, fcb.hw.display, fcb.state().heel[0], fcb.state().toe[0]], [0, 127, 0, 255]);
 // Footswitch 6: first the CC, then (pressed again) its editor, NUMBER lit, typed; a
@@ -430,7 +442,8 @@ check("switch 4 is a relay 1 trigger (its LED lit), DIRECT SELECT dark", [fcb.st
 fcb.setRaw(255, 255); wait(100); fcb.setRaw(128, 255); wait(100);
 check("moving pedal A sets relay 1's trigger value, shown, EXP 1 lit", [fcb.state().swThr[0] > 0, fcb.hw.display === fcb.state().swThr[0], fcb.hw.aux[2]], [true, true, 1]);
 press(UP, 100);
-check("page 6 lights SWITCH 2", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.leds[3]], [5, 0, 1, 0]);
+check("page 6 lights SWITCH 2; the footswitches it does not follow, and EXP 1 / EXP 2 without a trigger, dim", [fcb.state().cfgPage, fcb.hw.aux[5], fcb.hw.aux[6], fcb.hw.leds[3], fcb.hw.aux[2], fcb.hw.aux[3]], [5, 0, 1, 2, 2, 2]);
+check("drawn dim", [el0("led3").classList.contains("dim"), el0("ledExp1").classList.contains("dim")], [true, true]);
 fcb.down(UP); wait(60); fcb.up(UP); wait(40);
 // Page 7: the bank's program change, DIRECT SELECT lit, "Pr" and "--" (none) in turn.
 check("UP goes to page 7: DIRECT SELECT lit, \"Pr\" first", [fcb.state().cfgPage, fcb.hw.aux[4], fcb.hw.aux[6], fcb.hw.text, fcb.hw.lamp, fcb.state().bankPc], [6, 1, 0, TEXT_PROG, 0, 0]);
@@ -456,7 +469,17 @@ const BCD = (v) => Math.floor(v / 10) * 16 + v % 10;
 const VER = VER_N.map((v, i) => i < 2 ? (v >= 100 ? 0x100 + BCD(v - 100) : BCD(v)) : v);
 const verShown = () => fcb.hw.hex >= 0 ? fcb.hw.hex : fcb.hw.display >= 100 ? 0x100 + BCD(fcb.hw.display - 100) : -1;
 fcb.down(UP); wait(60); fcb.up(UP); wait(40);
-check("UP goes to page 8: every LED lit at once (the lamp test), the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [7, 3, 0, 7, 1]);
+// Page 8, misc: SELECT lit, footswitch 1 (the metronome) lit, 9 (running status) dim.
+check("UP goes to page 8, misc: SELECT lit, footswitch 1 lit and 9 dim, \"Of\"", [fcb.state().cfgPage, fcb.hw.aux[7], ledLevels(), fcb.hw.text, fcb.state().misc & 3],
+      [7, 1, [1, 0, 0, 0, 0, 0, 0, 0, 2, 0], TEXT_OFF, 0]);
+check("labelled", [el0("mode0").textContent, el0("mode8").textContent], ["Metronome", "Running status"]);
+press(0, 100);
+check("footswitch 1 again: the metronome on (\"On\")", [fcb.state().misc & 3, fcb.hw.text, el0("display").getAttribute("aria-label")], [1, TEXT_ON, "Display On"]);
+press(0, 100);
+press(9, 100);
+check("footswitch 9 shows running status (off), and the metronome is off again", [fcb.state().misc & 3, fcb.hw.text, ledLevels()[8]], [0, TEXT_OFF, 1]);
+fcb.down(UP); wait(60); fcb.up(UP); wait(40);
+check("UP goes to page 9: every LED lit at once (the lamp test), the scroll's lead-in dot", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.text, fcb.hw.blank, fcb.hw.dots], [8, 3, 0, 7, 1]);
 const LAMP_MS = cfgMs("LAMP_TEST_MS");
 wait(LAMP_MS - 100);
 check("for LAMP_TEST_MS", fcb.hw.lamp, 3);
@@ -541,9 +564,11 @@ fcb.up(0); wait(FRAME + 100);
 check("then \"ri\"", fcb.hw.text, SCROLL_TEXT[1]);
 check("and nothing is sent", sent(), []);
 press(UP, 100);
-check("UP on page 8 stays on page 8 (no wrap)", fcb.state().cfgPage, 7);
+check("UP on page 9 stays on page 9 (no wrap)", fcb.state().cfgPage, 8);
 press(DOWN, 100);
-check("DOWN leaves page 8 for page 7: lamp test off, dots off, \"Pr\", DIRECT SELECT lit", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.dots, fcb.hw.text, fcb.hw.aux[4]], [6, 0, 0, TEXT_PROG, 1]);
+check("DOWN leaves page 9 for page 8: lamp test off, dots off, \"Of\", SELECT lit", [fcb.state().cfgPage, fcb.hw.lamp, fcb.hw.dots, fcb.hw.text, fcb.hw.aux[7]], [7, 0, 0, TEXT_OFF, 1]);
+press(DOWN, 100);
+check("then page 7: \"Pr\", DIRECT SELECT lit", [fcb.state().cfgPage, fcb.hw.text, fcb.hw.aux[4]], [6, TEXT_PROG, 1]);
 press(DOWN, 100);
 check("then page 6", fcb.state().cfgPage, 5);
 press(DOWN, 100);
@@ -598,10 +623,26 @@ check("and back to channel 2", [fcb.state().mode, fcb.state().midiChannel], [0, 
 fcb.reset(); wait(400);
 check("after a power cycle the channel is still 2", fcb.state().midiChannel, 2);
 // Start-up lights the inverted momentary switches (their resting state), sending nothing.
-check("after a power cycle only inverted momentary switches are lit, nothing sent",
-      [fcb.hw.leds.slice(), sent()], [fcb.state().pedalModes.map((m) => (m === 3 ? 1 : 0)), []]);
+check("after a power cycle only inverted momentary switches are lit, and only the identity sent (on channel 2)",
+      [fcb.hw.leds.slice(), sent().map((x) => x.slice(0, 29))], [fcb.state().pedalModes.map((m) => (m === 3 ? 1 : 0)), ["f0 7e 01 06 02 7d 46 43 31 30"]]);
 press(0, 100);
 check("and switch 1 now sends on channel 2", sent(), MOM ? [cc(1, 0, ON), cc(1, 0, OFF)] : [cc(1, 0, 127)]);
+
+console.log("editor: visual metronome");
+// Turned on from page 8 (footswitch 1, already selected there), then saved.
+longChord(); toPage(7); press(0, 100); longChord();
+check("the misc page's footswitch 1 turns the metronome on", [fcb.state().mode, fcb.state().misc & 1], [0, 1]);
+sent();
+fcb.midiIn([0xfa, 0xf8]); wait(20);
+check("MIDI Start, then a clock: \"+\" on beat 1, over the bank number", [fcb.hw.msign, el0("display").getAttribute("aria-label"), fcb.hw.display], [2, "Display +1", 1]);
+fcb.midiIn(Array(12).fill(0xf8)); wait(20);
+check("dark for the second half of the beat", fcb.hw.msign, 0);
+fcb.midiIn(Array(12).fill(0xf8)); wait(20);
+check("beat 2: \"-\"", [fcb.hw.msign, el0("display").getAttribute("aria-label")], [1, "Display -1"]);
+fcb.midiIn([0xfc]); wait(20);
+check("Stop: dark, and nothing is sent", [fcb.hw.msign, sent()], [0, []]);
+longChord(); toPage(7); press(0, 100); longChord();
+check("and off again", fcb.state().misc & 1, 0);
 
 console.log("editor: relays and MIDI IN flash");
 fcb.setRaw(0, 0); wait(100);
@@ -639,13 +680,14 @@ const TEXT_CC = 10, TEXT_NOTE = 11;   // HAL_TEXT_CC / HAL_TEXT_NOTE + 1
 const label = (i) => sandbox.document.getElementById("cc" + i).textContent;
 const chHex = (fcb.state().midiChannel - 1).toString(16);
 // MIDI FUNCTION, SELECT, NUMBER, VALUE 1, VALUE 2 (the editor's parameters in order).
-const editLeds = () => [fcb.hw.aux[1], fcb.hw.aux[7], fcb.hw.aux[8], fcb.hw.aux[9], fcb.hw.aux[10]];
+// The parameter's LED: SWITCH (the pedal mode), SELECT, NUMBER, VALUE 1, VALUE 2.
+const editLeds = () => [fcb.hw.aux[11], fcb.hw.aux[7], fcb.hw.aux[8], fcb.hw.aux[9], fcb.hw.aux[10]];
 longChord();
 check("config mode, page 1", [fcb.state().mode, fcb.state().cfgPage], [1, 0]);
 // A long press of footswitch 3 opens its editor on the pedal mode.
 press(2, OVER_MS);
-check("a long footswitch press opens its editor on the mode: MIDI FUNCTION lit",
-      [fcb.state().edit, editLeds()], [1, [1, 0, 0, 0, 0]]);
+check("a long footswitch press opens its editor on the mode: SWITCH lit, and MIDI FUNCTION (page 1)",
+      [fcb.state().edit, editLeds(), fcb.hw.aux[1]], [1, [1, 0, 0, 0, 0], 1]);
 press(UP, 100);
 check("UP: the type, SELECT lit, \"CC\" shown: footswitch 6 lit, 1 and 10 dim",
       [fcb.state().edit, editLeds(), fcb.hw.text, ledLevels()], [2, [0, 1, 0, 0, 0], TEXT_CC, [2, 0, 0, 0, 0, 1, 0, 0, 0, 2]]);

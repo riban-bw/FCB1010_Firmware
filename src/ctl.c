@@ -54,8 +54,9 @@
 #define PAGE_SW1        4
 #define PAGE_SW2        5
 #define PAGE_BANK_PC    6
-#define PAGE_VERSION    7
-#define PAGE_COUNT      8
+#define PAGE_MISC       7
+#define PAGE_VERSION    8
+#define PAGE_COUNT      9
 // Pages 3 and 4, EXP A / EXP B, and pages 5 and 6, SWITCH 1 / 2 (one compare each: the
 // subtraction wraps for the pages below).
 #define IS_EXP_PAGE(p)  ((uint8_t)((p) - PAGE_EXP_A) < 2)
@@ -66,6 +67,10 @@
 #define PED_PICKUP      7
 #define PED_CAL         8
 #define PED_MASK        ((1u << PED_CC) | (1u << PED_PICKUP) | (1u << PED_CAL))
+// Page 8, misc: footswitch 1 the visual metronome, 9 running status (user's layout).
+#define MISC_METRO      0
+#define MISC_RUNSTAT    8
+#define MISC_MASK       ((1u << MISC_METRO) | (1u << MISC_RUNSTAT))
 
 // A relay's follow mask: bits 0-9 are footswitches 1-10, this bit is bank mode (the UP +
 // DOWN toggle, DIRECT SELECT lit).
@@ -377,6 +382,22 @@ static BIT_T          sx_reply;
 static IDATA uint8_t  sx_hi;
 #define SX_SKIP       6
 #define SX_REPLY_LEN  15
+// Misc settings (shared by every bank, in the channel record's byte 3: bit 0 the
+// metronome, bit 1 running status, bit 7 set).
+#define MISC_VALID    0x80
+#define MISC_DEFAULT  (uint8_t)(MISC_VALID | (DEFAULT_METRONOME ? 1 : 0) | (DEFAULT_RUNNING_STATUS ? 2 : 0))
+static BIT_T          opt_metro;
+static BIT_T          opt_runstat;
+// The last status byte sent (0 none, or after a system message), for running status.
+static IDATA uint8_t  tx_last;
+// The visual metronome: MIDI clock running (after Start or Continue, until Stop), the
+// beat's phase known (from Start or a Song Position Pointer), the next clock's index in
+// its beat (0-23) and that beat's number in the bar (0-3), and the sign shown.
+static BIT_T          met_run;
+static BIT_T          met_phase;
+static IDATA uint8_t  met_next;
+static IDATA uint8_t  met_beat;
+static IDATA uint8_t  met_sign;
 
 // Settings are loaded and saved through the HAL's one record buffer, hal_rec.
 
@@ -513,6 +534,8 @@ static IDATA uint8_t  chan_flash_ticks;
 #define edit_param chan_flash_ticks
 // EXP pages: the footswitch last pressed, whose setting the display shows.
 #define ped_sel chan_flash_ticks
+// The misc page's footswitch last pressed (MISC_METRO or MISC_RUNSTAT).
+#define misc_sel chan_flash_ticks
 // Page 7 shows "Pr" and the program in turn: steps into the current one (cal_step bits
 // 0-6, with ticks in chan_flash_ticks), and BANK_LABEL_ON while "Pr" shows.
 #define bank_label cal_step
@@ -690,7 +713,7 @@ static void rec_pack(void)
         hal_rec[0] = midi_channel;
         hal_rec[1] = 0;
         hal_rec[2] = 0;
-        hal_rec[3] = 0;
+        hal_rec[3] = (uint8_t)(MISC_VALID | (opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0));
     }
 }
 
@@ -764,10 +787,12 @@ static void rec_read(void)
             hal_rec[0] = MIDI_CHANNEL;
         }
 
-        // Byte 1 held the pickup bits before they moved to the banks.
+        // Byte 1 held the pickup bits before they moved to the banks, and bytes 1-3 the
+        // pedal modes before that. Byte 3 holds the misc settings, marked by bit 7, which
+        // no older record set: without it, the defaults.
         hal_rec[1] = 0;
         hal_rec[2] = 0;
-        hal_rec[3] = 0;
+        hal_rec[3] = (hal_rec[3] & MISC_VALID) ? (uint8_t)(hal_rec[3] & (MISC_VALID | 3)) : MISC_DEFAULT;
     }
 }
 
@@ -821,6 +846,8 @@ static void rec_unpack(void)
     else
     {
         midi_channel = hal_rec[0];
+        opt_metro    = (hal_rec[3] & 1) ? 1 : 0;
+        opt_runstat  = (hal_rec[3] & 2) ? 1 : 0;
     }
 }
 
@@ -897,10 +924,23 @@ static void config_changed(void)
     }
 }
 
+// A channel message's status byte, left out when running status is on and it is the
+// same as the last one sent (user's request).
+static void tx_status(uint8_t status)
+{
+    if (opt_runstat && status == tx_last)
+    {
+        return;
+    }
+
+    tx_last = status;
+    hal_midi_tx(status);
+}
+
 static void send_cc(uint8_t cc, uint8_t value)
 {
     tx_flash = TX_FLASH_TICKS;
-    hal_midi_tx((uint8_t)(0xB0 | (midi_channel - 1)));
+    tx_status((uint8_t)(0xB0 | (midi_channel - 1)));
     hal_midi_tx((uint8_t)(cc & 0x7F));
     hal_midi_tx((uint8_t)(value & 0x7F));
 }
@@ -908,7 +948,7 @@ static void send_cc(uint8_t cc, uint8_t value)
 static void send_program(uint8_t value)
 {
     tx_flash = TX_FLASH_TICKS;
-    hal_midi_tx((uint8_t)(0xC0 | (midi_channel - 1)));
+    tx_status((uint8_t)(0xC0 | (midi_channel - 1)));
     hal_midi_tx((uint8_t)(value & 0x7F));
 }
 
@@ -1004,6 +1044,7 @@ static uint8_t rests_on(uint8_t i)
 // nothing), like a CC's two values; its number is not used. A program sent becomes the
 // current program, so UP / DOWN step from it and the run-mode display shows it. The caller has checked there is room for three bytes.
 static void remote_cc(uint8_t cc, uint8_t value);
+static void met_show(void);
 
 static void send_switch(uint8_t index, uint8_t on)
 {
@@ -1026,7 +1067,7 @@ static void send_switch(uint8_t index, uint8_t on)
     }
 
     tx_flash = TX_FLASH_TICKS;
-    hal_midi_tx((uint8_t)(((msg_type(index) == MT_NOTE) ? (on ? 0x90 : 0x80) : 0xB0) | (midi_channel - 1)));
+    tx_status((uint8_t)(((msg_type(index) == MT_NOTE) ? (on ? 0x90 : 0x80) : 0xB0) | (midi_channel - 1)));
     hal_midi_tx(msg_field(index, 0));
     hal_midi_tx(msg_field(index, (uint8_t)(on ? 1 : 2)));
 
@@ -1556,7 +1597,7 @@ static void version_tick(void)
 #define PARAM_BYTE(p) msg[(uint8_t)(MSG_AT(cfg_sel) + (p) - 2)]
 #define EDIT_BYTE     PARAM_BYTE(edit_param)
 // The panel LED that marks setting p: MIDI FUNCTION, SELECT, NUMBER, VALUE 1, VALUE 2.
-#define PARAM_LED(p)  ((uint8_t)(((p) == EP_FUNC) ? HAL_LED_MIDI_FUNC : HAL_LED_SELECT + (p) - 1))
+#define PARAM_LED(p)  ((uint8_t)(((p) == EP_FUNC) ? HAL_LED_SWITCH : HAL_LED_SELECT + (p) - 1))
 // The setting on the display: the editor's parameter, or the one page 1 is showing.
 #define SHOWN_PARAM   (edit_open ? edit_param : cyc_elem)
 
@@ -1765,12 +1806,13 @@ static void cyc_restart(void)
     cyc_steps = 0;
 }
 
-// The footswitch editor: the parameter's panel LED, and the footswitches that choose it:
+// The footswitch editor: MIDI FUNCTION (page 1) and the parameter's panel LED (SWITCH for
+// the pedal mode), and the footswitches that choose it:
 // the pedal mode (1-4) or message type (1, 6, 10), the chosen one lit and the others dim
 // (user's request), or the digits that can come next, dim; the setting on the display.
 static void edit_show(void)
 {
-    led_aux = bit16(PARAM_LED(edit_param));
+    led_aux = (uint16_t)(bit16(PARAM_LED(edit_param)) | LED_BIT(HAL_LED_MIDI_FUNC));
 
     if (edit_param == EP_FUNC)
     {
@@ -1857,7 +1899,7 @@ static void config_show(void)
         }
 
         led_stomp = bit16(ped_sel);
-        led_dim   = PED_MASK;
+        led_dim   = cal_armed ? 0 : PED_MASK;
         show_leds();
         hal_display_dots(cfg_dots());
 
@@ -1888,6 +1930,18 @@ static void config_show(void)
         return;
     }
 
+    // Page 8, misc: SELECT lit, the footswitch last pressed lit and the page's other one
+    // dim, and its setting: "On" or "Of".
+    if (cfg_page == PAGE_MISC)
+    {
+        led_aux   = LED_BIT(HAL_LED_SELECT);
+        led_stomp = bit16(misc_sel);
+        led_dim   = MISC_MASK;
+        show_leds();
+        hal_display_text((uint8_t)(((misc_sel == MISC_METRO) ? opt_metro : opt_runstat) ? HAL_TEXT_ON : HAL_TEXT_OFF));
+        return;
+    }
+
     // Page 7, the bank's program change: DIRECT SELECT lit, the digits that can come next
     // dim (switch 10 also "--"), "Pr" and the program or "--" (none) in turn, but not
     // while a number is typed (user's request), and "--" after switch 10.
@@ -1913,37 +1967,29 @@ static void config_show(void)
         return;
     }
 
-    // A SWITCH page (its SWITCH LED lit) shows that relay's triggers: footswitch LEDs for
-    // the switches it follows, EXP 1 / EXP 2 for a pedal
-    // trigger value. The display is blank until a pedal is moved, then shows the value.
+    // A SWITCH page (its SWITCH LED lit) shows that relay's triggers: footswitch LEDs lit
+    // for the switches it follows and dim for the others, EXP 1 / EXP 2 lit for a pedal
+    // trigger value and dim without one (user's request). The display is blank until a pedal is moved, then shows the value.
     if (IS_SW_PAGE(cfg_page))
     {
         r = (uint8_t)(cfg_page - PAGE_SW1);
-        led_aux = bit16((uint8_t)(HAL_LED_SWITCH_1 + r));
-
-        if (sw_thr[r * 2])
-        {
-            led_aux |= LED_BIT(HAL_LED_EXP_1);
-        }
-
-        if (sw_thr[r * 2 + 1])
-        {
-            led_aux |= LED_BIT(HAL_LED_EXP_2);
-        }
-
+        led_aux   = bit16((uint8_t)(HAL_LED_SWITCH_1 + r));
         led_stomp = sw_mask[r];
+        led_dim   = ALL_SWITCHES;
         show_leds();
+        hal_aux_led(HAL_LED_EXP_1, (uint8_t)(sw_thr[r * 2] ? 1 : HAL_LED_DIM));
+        hal_aux_led(HAL_LED_EXP_2, (uint8_t)(sw_thr[r * 2 + 1] ? 1 : HAL_LED_DIM));
         hal_display(0);
         hal_display_blank(7);
         return;
     }
 
-    // Page 1: the selected footswitch's LED, and its settings in turn, each with its
-    // panel LED (MIDI FUNCTION, SELECT, NUMBER, VALUE 1, VALUE 2; cyc_tick). Page 2:
+    // Page 1: MIDI FUNCTION, the selected footswitch's LED, and its settings in turn, each
+    // with its panel LED (SWITCH, SELECT, NUMBER, VALUE 1, VALUE 2; cyc_tick). Page 2:
     // MIDI CHANNEL, the channel, the digits that can come next dim.
     if (cfg_page == PAGE_MODES)
     {
-        led_aux   = bit16(PARAM_LED(cyc_elem));
+        led_aux   = (uint16_t)(bit16(PARAM_LED(cyc_elem)) | LED_BIT(HAL_LED_MIDI_FUNC));
         led_stomp = bit16(cfg_sel);
         show_leds();
         param_show();
@@ -1991,7 +2037,8 @@ static void config_goto_page(uint8_t page)
     mode_press_live = 0;
     edit_pending = 0;
     num_typing = 0;
-    // Leaving page 8 (or restarting it): normal LEDs again and no dots.
+    cal_armed = 0;
+    // Leaving page 9 (or restarting it): normal LEDs again and no dots.
     hal_lamp_test(HAL_LAMP_NORMAL);
     hal_display_dots(0);
 
@@ -2023,7 +2070,12 @@ static void config_goto_page(uint8_t page)
         chan_flash_ticks = 0;
         num_begin(127, 0);
     }
-    // Page 8 starts with the "riban" scroll's lead-in, every LED lit, then the chase.
+    // The misc page starts on footswitch 1, the metronome.
+    else if (page == PAGE_MISC)
+    {
+        misc_sel = MISC_METRO;
+    }
+    // Page 9 starts with the "riban" scroll's lead-in, every LED lit, then the chase.
     else if (page == PAGE_VERSION)
     {
         ver_step    = VER_START_STEP;
@@ -2096,7 +2148,7 @@ static void sw_pedal(uint8_t ch)
     sw_thr[(uint8_t)((cfg_page - PAGE_SW1) * 2 + ch)] = sent[ch];
     config_changed();
     hal_display(sent[ch]);
-    hal_aux_led((uint8_t)(HAL_LED_EXP_1 + ch), sent[ch] != 0);
+    hal_aux_led((uint8_t)(HAL_LED_EXP_1 + ch), (uint8_t)(sent[ch] ? 1 : HAL_LED_DIM));
 }
 
 // Footswitch pressed on the modes page: a switch that is not selected is selected and its
@@ -2296,13 +2348,12 @@ static void pcc_end(uint8_t accept)
 // A footswitch let go on an EXP page (the CC editor closed), the same on both pages
 // (user's layout): 6 CC, 8 pickup, 9 calibration; the others do nothing. A footswitch not
 // yet selected only shows its setting (user's request): pickup or immediate, the CC, or
-// the pedal's value. Pressed again, 8 toggles pickup and 6 opens the CC editor; 9 steps
-// through the calibration (user's design): "Lo" flashing, then the heel reading with
-// "Hi" flashing, then the toe reading and the value again. The toe must be CAL_MIN_SPAN
-// from the heel, or "Er" shows for CAL_ERROR_SHOW_MS and the calibration is unchanged.
+// the pedal's value. Pressed again, 8 toggles pickup, 6 opens the CC editor and 9 starts
+// the calibration, which UP and DOWN then step through (cal_nav). While it runs, the
+// footswitches do nothing.
 static void ped_press(uint8_t index)
 {
-    if (index != PED_CC && index != PED_PICKUP && index != PED_CAL)
+    if ((index != PED_CC && index != PED_PICKUP && index != PED_CAL) || cal_armed)
     {
         return;
     }
@@ -2322,41 +2373,83 @@ static void ped_press(uint8_t index)
         pcc_begin();
         return;
     }
+    else
+    {
+        cal_step  = CAL_HEEL;
+        cal_armed = 1;
+        blink_restart();
+    }
+
+    config_show();
+}
+
+// The calibration (user's design): "Lo" flashing; UP takes the heel reading and "Hi"
+// flashes, DOWN cancels. On "Hi" UP takes the toe reading and DOWN goes back to "Lo". The
+// toe must be CAL_MIN_SPAN from the heel (either way round), or "Er" shows for
+// CAL_ERROR_SHOW_MS and the calibration is unchanged; then the value again.
+static void cal_nav(uint8_t code)
+{
+    if (code != CTL_KEY_UP)
+    {
+        cal_step = (uint8_t)(cal_step == CAL_TOE ? CAL_HEEL : CAL_DONE);
+    }
     else if (cal_step == CAL_HEEL)
     {
         cal_low  = last_raw[pcc_b];
         cal_step = CAL_TOE;
-        blink_restart();
     }
-    else if (cal_step == CAL_TOE)
+    else if (span_of(last_raw[pcc_b], cal_low) < CAL_MIN_SPAN)
     {
-        if (span_of(last_raw[pcc_b], cal_low) < CAL_MIN_SPAN)
-        {
-            cal_step     = CAL_ERROR;
-            cal_err_left = CAL_ERROR_BLINKS;
-            blink_restart();
-        }
-        else
-        {
-            heel[pcc_b] = cal_low;
-            toe[pcc_b]  = last_raw[pcc_b];
-            cal_step    = CAL_DONE;
-            config_changed();
-        }
+        cal_step     = CAL_ERROR;
+        cal_err_left = CAL_ERROR_BLINKS;
     }
     else
     {
-        cal_step = CAL_HEEL;
-        blink_restart();
+        heel[pcc_b] = cal_low;
+        toe[pcc_b]  = last_raw[pcc_b];
+        cal_step    = CAL_DONE;
+        config_changed();
     }
 
     cal_armed = (uint8_t)(cal_step == CAL_HEEL || cal_step == CAL_TOE);
+    blink_restart();
+    config_show();
+}
+
+// A footswitch let go on the misc page (user's layout): 1 the visual metronome, 9
+// running status. Not yet selected, it only shows its setting; pressed again, it
+// toggles it.
+static void misc_press(uint8_t index)
+{
+    if (index != MISC_METRO && index != MISC_RUNSTAT)
+    {
+        return;
+    }
+
+    if (index != misc_sel)
+    {
+        misc_sel = index;
+    }
+    else if (index == MISC_METRO)
+    {
+        opt_metro = !opt_metro;
+        config_changed();
+    }
+    else
+    {
+        opt_runstat = !opt_runstat;
+        tx_last     = 0;
+        config_changed();
+    }
+
     config_show();
 }
 
 static void enter_config(void)
 {
     mode = MODE_CONFIG;
+    // The metronome's sign goes until the next clock in run mode.
+    met_show();
     // A program number being typed is dropped.
     pc_typing = 0;
 
@@ -2599,6 +2692,10 @@ static void nav_step(uint8_t code)
     else if (pcc_open)
     {
         pcc_end((uint8_t)(code == CTL_KEY_UP));
+    }
+    else if (cal_armed)
+    {
+        cal_nav(code);
     }
     else
     {
@@ -2861,7 +2958,15 @@ void ctl_init(void)
     num_typing    = 0;
     ver_lamp      = 0;
     sx_pos        = 0;
-    sx_reply      = 0;
+    // The identity is sent at power-on too (user's request), once MIDI OUT has room.
+    sx_reply      = 1;
+    tx_last       = 0;
+    met_run       = 0;
+    met_phase     = 0;
+    met_next      = 0;
+    met_beat      = 0;
+    met_sign      = HAL_SIGN_NONE;
+    hal_display_sign(HAL_SIGN_NONE);
     cyc_restart();
     relay_out     = 0;
     relay_lvl     = 0;
@@ -2978,12 +3083,12 @@ void ctl_key_hold(uint8_t code)
     // UP + DOWN chord). Its release then does nothing.
     if (code == CTL_KEY_UP || code == CTL_KEY_DOWN)
     {
-        // In the footswitch and pedal CC editors a long press is a short one: it acts
-        // on release.
+        // In the footswitch and pedal CC editors and the calibration a long press is a
+        // short one: it acts on release.
         // A long UP asks which bank to save to; a long DOWN cancels and leaves. In the
         // save prompt, as in the editors, a long press acts as a short one.
         if (mode == MODE_CONFIG && chord_state == CHORD_NONE && nav_code == code && !edit_open && !pcc_open &&
-            !save_prompt)
+            !save_prompt && !cal_armed)
         {
             nav_code      = NAV_NONE;
             nav_repeating = 0;
@@ -3090,14 +3195,22 @@ void ctl_key_release(uint8_t code)
             return;
         }
 
-        // EXP pages: a footswitch pressed and let go with UP and DOWN up (so not the
-        // simulator's UP with switches 6-10, which only changes page).
-        if (IS_EXP_PAGE(cfg_page))
+        // EXP and misc pages: a footswitch pressed and let go with UP and DOWN up (so not
+        // the simulator's UP with switches 6-10, which only changes page).
+        if (IS_EXP_PAGE(cfg_page) || cfg_page == PAGE_MISC)
         {
             if (mode_press_live && keys_down == 0)
             {
                 mode_press_live = 0;
-                ped_press(index);
+
+                if (cfg_page == PAGE_MISC)
+                {
+                    misc_press(index);
+                }
+                else
+                {
+                    ped_press(index);
+                }
             }
 
             mode_press_live = 0;
@@ -3208,7 +3321,7 @@ void ctl_key_press(uint8_t code)
             bit   = bit16(index);
             sw_mask[cfg_page - PAGE_SW1] ^= bit;
             config_changed();
-            hal_stomp_led(index, (sw_mask[cfg_page - PAGE_SW1] & bit) ? 1 : 0);
+            config_show();
         }
         // EXP pages: a digit in the CC editor; otherwise the footswitch acts on its release
         // (ped_press), if UP and DOWN are up at both ends.
@@ -3226,7 +3339,13 @@ void ctl_key_press(uint8_t code)
                 mode_press_live = (keys_down == 0) ? 1 : 0;
             }
         }
-        // Page 8: a footswitch shows its segment and holds it until released (10 lights
+        // The misc page: the footswitch acts on its release (misc_press), as on the EXP
+        // pages.
+        else if (cfg_page == PAGE_MISC)
+        {
+            mode_press_live = (keys_down == 0) ? 1 : 0;
+        }
+        // Page 9: a footswitch shows its segment and holds it until released (10 lights
         // everything).
         else if (cfg_page == PAGE_VERSION)
         {
@@ -3544,7 +3663,7 @@ static uint8_t nrpn_get(uint8_t p)
 static void nrpn_send(void)
 {
     tx_flash = TX_FLASH_TICKS;
-    hal_midi_tx((uint8_t)(0xB0 | (midi_channel - 1)));
+    tx_status((uint8_t)(0xB0 | (midi_channel - 1)));
     hal_midi_tx(99);
     hal_midi_tx(NRPN_MSB);
     hal_midi_tx(98);
@@ -3888,12 +4007,66 @@ static void nrpn_cc(uint8_t value)
 // pedal's channel - 1, checked apart), 06, 01.
 static const CODE uint8_t sx_request[5] = { 0, 0x7E, 0x7F, 0x06, 0x01 };
 
+// The visual metronome's sign: "-" for the first half of each beat (12 of its 24
+// clocks), "+" instead on beat 1 once the phase is known (user's request); nothing when it
+// is off, the clock stopped, or outside run mode and the power-on animation.
+static void met_show(void)
+{
+    uint8_t sign = HAL_SIGN_NONE;
+
+    if (opt_metro && met_run && mode == MODE_RUN && !boot_anim && met_next < 12)
+    {
+        sign = (uint8_t)((met_phase && met_beat == 0) ? HAL_SIGN_PLUS : HAL_SIGN_MINUS);
+    }
+
+    if (sign != met_sign)
+    {
+        met_sign = sign;
+        hal_display_sign(sign);
+    }
+}
+
+// A MIDI real-time byte: Start (FA) plays from the top, so beat 1 is the next clock
+// (nothing shows until a clock comes);
+// Continue (FB) carries on from where it stopped or from a Song Position Pointer; Stop
+// (FC) stops; each clock (F8, 24 a beat) shows its part of the beat, then moves on.
+static void met_rt(uint8_t byte)
+{
+    if (byte == 0xFA)
+    {
+        met_run   = 1;
+        met_phase = 1;
+        met_next  = 0;
+        met_beat  = 0;
+    }
+    else if (byte == 0xFB)
+    {
+        met_run = 1;
+    }
+    else if (byte == 0xFC)
+    {
+        met_run = 0;
+        met_show();
+    }
+    else if (byte == 0xF8 && met_run)
+    {
+        met_show();
+
+        if (++met_next == 24)
+        {
+            met_next = 0;
+            met_beat = (uint8_t)((met_beat + 1) & 3);
+        }
+    }
+}
+
 void ctl_midi_in(uint8_t byte)
 {
-    // Real-time bytes (clock, start, stop...) can appear anywhere: skip them
-    // without disturbing a message in progress.
+    // Real-time bytes (clock, start, stop...) can appear anywhere: they drive the visual
+    // metronome without disturbing a message in progress.
     if (byte >= 0xF8)
     {
+        met_rt(byte);
         return;
     }
 
@@ -3919,8 +4092,9 @@ void ctl_midi_in(uint8_t byte)
 
         sx_pos = (byte == 0xF0) ? 1 : 0;
 
-        // System messages (including SysEx start and end) cancel running status.
-        rx_status     = (byte >= 0xF0) ? 0 : byte;
+        // System messages (including SysEx start and end) cancel running status; a Song
+        // Position Pointer (F2) is kept for its data.
+        rx_status     = (byte == 0xF2 || byte < 0xF0) ? byte : 0;
         rx_have_data1 = 0;
         return;
     }
@@ -3939,6 +4113,25 @@ void ctl_midi_in(uint8_t byte)
             sx_pos = SX_SKIP;
         }
 
+        return;
+    }
+
+    // A Song Position Pointer: the position in 16ths, LSB first; only its low 4 bits
+    // matter (the beat in a 4/4 bar and the 16th in the beat).
+    if (rx_status == 0xF2)
+    {
+        if (!rx_have_data1)
+        {
+            rx_data1      = byte;
+            rx_have_data1 = 1;
+            return;
+        }
+
+        rx_status     = 0;
+        rx_have_data1 = 0;
+        met_next      = (uint8_t)((rx_data1 & 3) * 6);
+        met_beat      = (uint8_t)((rx_data1 >> 2) & 3);
+        met_phase     = 1;
         return;
     }
 
@@ -4100,6 +4293,8 @@ static void sysex_identity(void)
 
     hal_midi_tx((uint8_t)(sx_hi >> 5));
     hal_midi_tx(0xF7);
+    // A system message: the next channel message sends its status again.
+    tx_last = 0;
 
     if (mode == MODE_RUN)
     {
@@ -4426,6 +4621,7 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_CAL_ARMED:     return cal_armed;
     case CTL_INSPECT_NUM:           return (uint8_t)(num_typing | (num_lo1 << 1));
     case CTL_INSPECT_SHOWN:         return cyc_elem;
+    case CTL_INSPECT_MISC:          return (uint8_t)((opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (met_sign << 2));
     default:                        return 0;
     }
 }
