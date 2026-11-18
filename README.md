@@ -19,7 +19,7 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 - Selectable (global) MIDI channel
 - Reset to defaults: hold footswitch 9 at power-on, or from the editor page
 - Simple configuration on the pedal with ability to save to other banks, e.g. copy bank configuration
-- Configure it from a computer over MIDI, with a web page (no special software or SysEx) with a device simulator
+- Configure it from a computer over MIDI, with a web page (no special software; compact SysEx that other MIDI devices ignore) with a device simulator
 
 [Open the editor in your browser](https://riban-bw.github.io/FCB1010_Firmware/editor/). It has a simulator that runs this firmware's own control code, so you can try the footswitches, pedals and configuration pages before flashing a chip. Its "Configure over MIDI" panel acts as an editor, setting up a real pedal too with save to and load from file. Its on-screen hints explain each control as you use it.
 
@@ -33,7 +33,7 @@ For players:
 
 Technical reference:
 
-- [MIDI implementation](docs/midi.md): what is sent and received, and the NRPN messages for configuration over MIDI
+- [MIDI implementation](docs/midi.md): what is sent and received, and the SysEx messages for configuration over MIDI
 - [Settings file format](docs/settings-file.md): the JSON file the configuration panel saves and loads
 - [Technical implementation](docs/technical.md): how the firmware works inside, its timing, memory, EEPROM settings layout and hardware notes
 - [Building](docs/building.md): building and testing, the firmware version, compile-time options and the source layout

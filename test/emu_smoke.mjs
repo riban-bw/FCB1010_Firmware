@@ -795,17 +795,16 @@ const rec = () => JSON.parse(store["fcb1010-eeprom-v2"]);
 wait(100); sent();
 check("before any read the panel holds the editor's settings from page load (the defaults here)",
       [conf.known, conf.v[NP.NUM + 2], conf.v[NP.TYPE + 3], conf.v[NP.MODE + 4], typeof conf.v[NP.CHANNEL]], [false, STOMP_CC[2], 0, DEF_MODE, "number"]);
-conf.ch = 1 + ((fcb.state().midiChannel) % 16);    // the wrong channel: Find has to locate it
+conf.ch = 1 + ((fcb.state().midiChannel) % 16);    // the wrong channel: SysEx reaches the pedal on any
 fcb.confRead(true, []); idle(3000);
-check("Find reads the pedal and learns its channel", [conf.waiting, conf.ch, !!conf.v], ["", fcb.state().midiChannel, true]);
+check("Read reaches the pedal on any channel and learns its channel", [conf.waiting, conf.ch, !!conf.v], ["", fcb.state().midiChannel, true]);
 check("the dump has footswitch 3 (note 60, 100, 20) and 4 (programs 5 / 6)",
       [conf.v[NP.TYPE + 2], conf.v[NP.NUM + 2], conf.v[NP.ON + 2], conf.v[NP.OFF + 2], conf.v[NP.TYPE + 3], conf.v[NP.ON + 3], conf.v[NP.OFF + 3]],
       [1, 60, 100, 20, 2, 5, 6]);
 check("and the channel, a mode and a stomp CC", [conf.v[NP.CHANNEL], conf.v[NP.MODE], conf.v[NP.NUM + 9]], [fcb.state().midiChannel, DEF_MODE, STOMP_CC[9]]);
 const dumpMsgs = sent();
-check("the dump went out as NRPN controllers on the pedal's channel, ending with the end marker",
-      [dumpMsgs.length > 0, dumpMsgs.every((m) => new RegExp("^b" + chHex + " (63 46|62 [0-6][0-9a-f]|06 [0-7][0-9a-f]|26 [0-7][0-9a-f])$").test(m)),
-       dumpMsgs.slice(-2)], [true, true, ["b" + chHex + " 62 05", "b" + chHex + " 06 00"]]);
+check("the dump went out as one SysEx message (65 bytes) with the pedal's channel, and nothing else",
+      [dumpMsgs.length, dumpMsgs[0].split(" ").length, dumpMsgs[0].slice(0, 17)], [1, 65, "f0 7d 46 43 " + chHex.padStart(2, "0") + " 02"]);
 fcb.confChanged(NP.NUM + 9, 99);
 fcb.confChanged(NP.TRIGGER + 2, 70);
 wait(20);
@@ -943,16 +942,18 @@ el2("cfFileName").value = "fcb1010-settings.json";
 
 const el = (id) => sandbox.document.getElementById(id);
 conf.known = false; fcb.confRead(false, []); idle(3000);
-check("the pedal, port and channel selectors are never disabled; the file and store buttons wait for a read",
-      [el("cfTarget").disabled, el("cfOut").disabled, el("cfIn").disabled, el("cfChannel").disabled, el("cfRead").disabled, el("cfFind").disabled],
-      [undefined, undefined, undefined, undefined, undefined, undefined]);
+check("the pedal and port selectors are never disabled; the file and store buttons wait for a read",
+      [el("cfTarget").disabled, el("cfOut").disabled, el("cfIn").disabled, el("cfRead").disabled],
+      [undefined, undefined, undefined, undefined]);
 
 console.log("editor: configurator through Web MIDI (a fake USB interface wired to the emulated pedal)");
 // The interface's output feeds the pedal's MIDI IN at cable speed; the pedal's MIDI OUT reaches its input
 // as Web MIDI delivers it: one complete message per event, status byte included.
 const fakeIn = { id: "in1", name: "USB MIDI In", state: "connected", onmidimessage: null, open: () => Promise.resolve() };
-const fakeOut = { id: "out1", name: "USB MIDI Out", state: "connected", open: () => Promise.resolve(), send: (b) => fcb.wire(Array.from(b)) };
-sandbox.navigator = { requestMIDIAccess: () => Promise.resolve({ inputs: new Map([["in1", fakeIn]]), outputs: new Map([["out1", fakeOut]]), onstatechange: null }) };
+const outSent = [];
+let accessOpts = null;
+const fakeOut = { id: "out1", name: "USB MIDI Out", state: "connected", open: () => Promise.resolve(), send: (b) => { outSent.push(Array.from(b)); fcb.wire(Array.from(b)); } };
+sandbox.navigator = { requestMIDIAccess: (o) => (accessOpts = o, Promise.resolve({ inputs: new Map([["in1", fakeIn]]), outputs: new Map([["out1", fakeOut]]), onstatechange: null })) };
 const delivered = new Set(fcb.hw.logLines);
 // Wall-clock time (performance.now), which the configurator uses for a real port, follows the test's clock.
 let wall = 0;
@@ -974,12 +975,26 @@ check("access granted: the only ports are chosen, and nothing is disabled",
       ["out1", "in1", "out1", "in1", undefined, undefined]);
 conf.ch = oldCh % 16 + 1;
 fcb.confRead(true, []); idle(3000, waitMidi);
+check("SysEx access asked for, and the read is one SysEx request to any pedal",
+      [accessOpts && accessOpts.sysex, outSent[0]], [true, [0xF0, 0x7D, 0x46, 0x43, 0x7F, 1, 0, 0xF7]]);
 check("Find through the interface reads the pedal", [conf.waiting, conf.ch, !!conf.v, conf.v && conf.v[NP.NUM + 1]], ["", oldCh, true, 77]);
+outSent.length = 0;
 fcb.confChanged(NP.ON + 1, 55); waitMidi(50);
+check("a change is one SysEx set", outSent, [[0xF0, 0x7D, 0x46, 0x43, 0x7F, 3, 41, 55, 0xF7]]);
 fcb.confCommand(NC.SAVE, "stored"); idle(3000, waitMidi);
 // The record's type byte carries the pedal mode in bits 2-3.
 check("a change and Store reach the pedal", [fcb.state().msgs[1].on, rec().fs1, conf.v[NP.ON + 1]],
       [55, [1 | (fcb.state().pedalModes[1] << 2), 77, 55, 10], 55]);
+{
+  const f = fcb.confToFile();
+  f.footswitches[1].on = 56; f.footswitches[2].off = 7; f.relays[0].pedalA = 9;
+  outSent.length = 0;
+  fcb.confLoad(f); idle(3000, waitMidi);
+  const sets = outSent.filter((m) => m[5] === 3);
+  check("a file load is one SysEx set with only what differs, applied whole",
+        [sets.length, sets[0] && sets[0].length, fcb.state().msgs[1].on, fcb.state().msgs[2].off, fcb.state().swThr[0]], [1, 7 + 2 * 3, 56, 7, 9]);
+  fcb.confCommand(NC.RELOAD, "dropped"); idle(3000, waitMidi);
+}
 fakeIn.onmidimessage = null;
 const heardBefore = conf.heard;
 fcb.confRead(false, []); idle(3000, waitMidi);
@@ -988,7 +1003,7 @@ console.log("editor: configurator with a MIDI output only (no input, so no reads
 conf.inp = null; conf.known = false;
 const st0 = JSON.stringify(fcb.state().msgs);
 fcb.confRead(false, []);
-check("Read says it needs an input", [conf.waiting, /need a MIDI input/.test(el("confStatus").textContent)], ["", true]);
+check("Read says it needs an input", [conf.waiting, /needs a MIDI input/.test(el("confStatus").textContent)], ["", true]);
 const oneWay = fcb.confToFile();
 oneWay.footswitches[5] = { mode: "stomp", type: "cc", number: 33, on: 100, off: 1 };
 oneWay.relays[1] = { follows: [10], pedalA: 12, pedalB: 0 };

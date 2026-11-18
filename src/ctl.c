@@ -384,13 +384,23 @@ static IDATA uint8_t  cyc_steps;
 static IDATA uint8_t  ver_lamp;
 static IDATA uint8_t  chase_pos;
 static IDATA uint8_t  chase_steps;
-// SysEx Identity Request (F0 7E <device> 06 01 F7): bytes matched so far (0 none, SX_SKIP
-// another SysEx), and a reply waiting for MIDI OUT room.
+// SysEx in (ctl_midi_in): the position in a message being matched (0 none, 1 after F0,
+// 2-5 an Identity Request, SX_CFG and up a configuration message, SX_SKIP anything else
+// until it ends), and an Identity Reply waiting for MIDI OUT room.
 static IDATA uint8_t  sx_pos;
 static BIT_T          sx_reply;
 static IDATA uint8_t  sx_hi;
-#define SX_SKIP       6
+#define SX_SKIP       0xFF
 #define SX_REPLY_LEN  15
+#define SX_CFG        0x10      // after F0 7D: 46, 43, the device, the command, its data
+#define SX_GET_BANK   (SX_CFG + 4)
+#define SX_GET_END    (SX_CFG + 5)
+#define SX_SET_DATA   (SX_CFG + 6)
+// Configuration commands (after F0 7D 46 43 <device>).
+#define SX_CMD_GET    0x01      // <bank: 0 the bank in use, or 1 to BANK_COUNT>: a dump
+#define SX_CMD_DUMP   0x02      // the dump (sent only)
+#define SX_CMD_SET    0x03      // <parameter> <value> pairs
+#define SX_DUMP_LEN   65
 // Misc settings (shared by every bank, in the channel record's byte 3: bit 0 the
 // metronome, bit 1 running status, bit 2 active sensing, bit 7 set).
 #define MISC_VALID    0x80
@@ -401,7 +411,7 @@ static BIT_T          opt_runstat;
 // Active sensing (FE) on MIDI OUT every ACTIVE_SENSE_MS while on (bit 2), and the ticks
 // to the next.
 static BIT_T          opt_asense;
-// LED brightness, 0 (the minimum) to 127 (page 9, pedal B, and NRPN; saved in the channel
+// LED brightness, 0 (the minimum) to 127 (page 9, pedal B, and over MIDI; saved in the channel
 // record's byte 2 with bit 7 set). Run mode and page 9 use it, the other pages full
 // brightness (led_apply).
 static IDATA uint8_t  led_level;
@@ -420,14 +430,19 @@ static void ini_end(void);
 // rec_read takes the defaults whatever the EEPROM holds (the reset), except the
 // calibration, which belongs to the pedal.
 static BIT_T          rec_def;
-// nrpn_get reads the saved settings of bank dump_bank (a dump of another bank). These
-// bytes are in the external SRAM: not time-critical, and internal RAM is the stack's.
-static BIT_T          get_saved;
-static XDATA uint8_t  dump_bank;
-static XDATA uint8_t  sv_p;
-static XDATA uint8_t  sv_i;
-static XDATA uint8_t  sv_y;
-static XDATA uint8_t  sv_q;
+// A dump asked for (SysEx, sent by ctl_tick once MIDI OUT has room): the bank asked for
+// (0 the bank in use, else the bank + 1), and the packed pedal bytes and loop count while
+// it is built. In the external SRAM: not time-critical, and internal RAM is the stack's.
+static BIT_T          sx_dump_due;
+static XDATA uint8_t  sx_req;
+// A set message's parameter and value pairs, kept until its F7 so a message cut short or
+// too long changes nothing (user's request), and the count of bytes in it.
+#define SX_SET_MAX    204       // 2 * NP_COUNT (checked below)
+static XDATA uint8_t  sx_buf[SX_SET_MAX];
+static XDATA uint8_t  sx_n;
+static XDATA uint8_t  sx_j;
+static XDATA uint8_t  sx_y[3];
+static XDATA uint8_t  sx_k;
 static XDATA uint8_t  sv_bank;
 // The editor: the edited setting's panel LED flickers (user's request).
 static BIT_T          par_on;
@@ -451,15 +466,12 @@ static IDATA uint8_t  met_sign;
 
 // Settings are loaded and saved through the HAL's one record buffer, hal_rec.
 
-// Configuration over MIDI: NRPN numbers (described with the code, below).
-#define NRPN_MSB        0x46
-#define NRPN_NONE       0xFF
-
-// Parameters (the NRPN LSB). Gaps are reserved and ignored.
+// Configuration over MIDI (SysEx, described with the code, below). Parameters: gaps are
+// reserved and ignored (the numbers were the NRPN numbers of the older protocol).
 #define NP_CHANNEL      0       // MIDI channel 1-16
 #define NP_VERSION      1       // 1-3: firmware major, minor, build (read only)
 #define NP_COMMAND      4       // a command (NC_*), never sent
-#define NP_DUMP_END     5       // sent (value 0) after the last parameter of a dump
+// 5 was the NRPN dump's end marker.
 #define NP_BANK         6       // footswitch bank 1 to BANK_COUNT; setting it changes bank
 #define NP_BANKS        7       // BANK_COUNT (read only)
 #define NP_MODE         8       // + switch 0-9: pedal mode 0-3
@@ -479,11 +491,13 @@ static IDATA uint8_t  met_sign;
 #define NP_METRO        99      // MIDI clock display (visual metronome) 0 / 1
 #define NP_RUNSTAT      100     // running status on MIDI OUT 0 / 1
 #define NP_ASENSE       101     // active sensing on MIDI OUT 0 / 1
-#define NP_READ_BANK    102     // a set (1 to BANK_COUNT) dumps that bank's saved settings
-#define NP_COUNT        103
+#define NP_COUNT        102
+#if SX_SET_MAX != 2 * NP_COUNT
+#error "SX_SET_MAX must be 2 * NP_COUNT"
+#endif
 
 // Commands (values of NP_COMMAND).
-#define NC_DUMP         1       // send every parameter, then NP_DUMP_END
+// 1 was the NRPN dump (now SX_CMD_GET).
 #define NC_SAVE         2       // store the settings, as leaving configuration mode does
 #define NC_RELOAD       3       // drop unsaved changes: back to what the EEPROM holds
 // 4 and 5 (heel, toe) are gone, so are ignored: calibration is set on the pedal only.
@@ -496,17 +510,9 @@ static IDATA uint8_t  met_sign;
 #define NK_SET          1
 #define NK_READ         2
 
-// A dump in progress (midi_job, sent by ctl_tick): 0 none, else the next parameter + 1, and
-// NP_COUNT + 1 for the end marker.
-
-// Configuration over MIDI (see "Configuration over MIDI" below): CC 99 selected this
-// pedal's NRPN number. The parameter CC 98 selected (nrpn_lsb) and the dump position
-// (midi_job) are only used in run mode, so they share the configuration page and
-// selected switch (RAM): entering configuration mode sets those afresh, and leaving it
-// clears these two.
-static BIT_T          nrpn_msb_ok;
-#define nrpn_lsb      cfg_sel
-#define midi_job      cfg_page
+// The parameter of a SysEx set being received (run mode only, so it shares the selected
+// configuration item's byte).
+#define sx_param      cfg_sel
 
 // Per stomp (one bit each): down = a press is in progress, held = it will be undone on
 // release (a long press, or a momentary pedal), revert = an undo is waiting for MIDI room,
@@ -608,7 +614,7 @@ static IDATA uint8_t  ref_raw[2];
 // ref_raw is the run-mode pedal reference (set again from the first reading after
 // configuration mode).
 
-// The expression pedals' CCs (pedal A, B), set per bank (pages 3 / 4, NRPN 96 / 97).
+// The expression pedals' CCs (pedal A, B), set per bank (pages 3 / 4, parameters 96 / 97).
 static IDATA uint8_t  pedal_cc[2];
 
 // Expression pedal pickup (user's request). pk_mask: bit 0 pedal A, bit 1 pedal B in
@@ -2661,10 +2667,9 @@ static void enter_config(void)
     stomp_held = 0;
 
     cfg_dirty = 0;
-    // This also drops a dump over MIDI in progress (midi_job is cfg_page) and the
-    // selected NRPN parameter (nrpn_lsb is cfg_sel).
+    // This also drops a dump over MIDI asked for.
     cfg_sel   = 0;
-    nrpn_msb_ok = 0;
+    sx_dump_due = 0;
     edit_open = 0;
     pcc_open  = 0;
     num_typing = 0;
@@ -2773,9 +2778,6 @@ static void exit_config(uint8_t save)
 
     resync_pedals();
     show_program();
-    // cfg_page and cfg_sel become midi_job and nrpn_lsb again: no dump, no parameter.
-    midi_job = 0;
-    nrpn_lsb = NRPN_NONE;
 }
 
 // A long UP: ask which bank to save to, starting at the bank in use (user's request).
@@ -3118,7 +3120,6 @@ void ctl_init(void)
     bank_next  = 0;
     ini_prompt = 0;
     rec_def    = 0;
-    dump_bank  = 0;
     load_settings();
     hal_led_level(led_level);
 
@@ -3154,10 +3155,7 @@ void ctl_init(void)
     nav_ticks   = 0;
     cfg_page      = PAGE_MODES;
     cfg_sel       = 0;
-    // cfg_page and cfg_sel are midi_job and nrpn_lsb in run mode.
-    midi_job      = 0;
-    nrpn_lsb      = NRPN_NONE;
-    nrpn_msb_ok   = 0;
+    sx_dump_due   = 0;
     cal_step      = CAL_DONE;
     cfg_dirty     = 0;
     chan_flash_ticks = 0;
@@ -3780,20 +3778,16 @@ static void remote_cc(uint8_t cc, uint8_t value)
 }
 
 // ---------------------------------------------------------------
-// Configuration over MIDI: NRPN on the pedal's channel
+// Configuration over MIDI: SysEx (user's request: CCs reached other software)
 // ---------------------------------------------------------------
-// CC 99 (NRPN MSB) = NRPN_MSB and CC 98 (NRPN LSB) = a parameter (either order) select it;
-// then CC 6 (data entry) sets it. CC 99 with any other value, or an RPN select (CC 101 or
-// 100), deselects, so other NRPN traffic on the channel is ignored. Run mode only, like the
-// other received messages. A set changes the setting at once (unsaved, as in configuration
-// mode); the save command stores everything. The pedal never answers a set, so a MIDI loop
-// cannot make it talk to itself: it sends parameters only for the dump command, each as
-// CC 99, 98 and 6 with running status. Read-only parameters that can be over 127 (version
-// and calibration) add CC 38: CC 6 holds bits 7 and up, CC 38 bits 0-6. A settable value
-// is always sent in CC 6 alone, so a dump fed back in changes nothing.
+// F0 7D 46 43 <device> <command> ... F7: 7D the non-commercial ID, "FC" as in the
+// identity, the device 7F (any) or the pedal's channel - 1. Commands: SX_CMD_GET <bank>
+// asks for a dump (sx_dump: the shared settings and one bank's, the bank in use live,
+// another as stored, without changing bank), SX_CMD_SET <parameter> <value>... sets
+// parameters once the whole message is in (up to NP_COUNT pairs; param_set in order: at
+// once, unsaved, as in configuration mode; NP_COMMAND for save, reload and reset). Run mode only, like the other received
+// messages. The pedal never answers a set, so a MIDI loop cannot make it talk to itself.
 // The parameter numbers and commands (NP_*, NC_*) are defined near the top.
-
-// The state (nrpn_msb_ok, nrpn_lsb, midi_job) is declared with the other state above.
 
 static uint8_t np_kind(uint8_t p)
 {
@@ -3805,7 +3799,7 @@ static uint8_t np_kind(uint8_t p)
         return NK_SET;
     }
 
-    if ((p >= NP_VERSION && p < NP_VERSION + 3) || p == NP_BANKS || p == NP_READ_BANK)
+    if ((p >= NP_VERSION && p < NP_VERSION + 3) || p == NP_BANKS)
     {
         return NK_READ;
     }
@@ -3813,109 +3807,9 @@ static uint8_t np_kind(uint8_t p)
     return NK_NONE;
 }
 
-// A dump of another bank (NP_READ_BANK) reads its saved settings, without changing bank
-// (user's request): record sv_i of bank dump_bank into hal_rec, as loading would take it
-// (the defaults for a bank never saved). No parameters (IDATA statics), as these call
-// others and their parameters would take directly addressed RAM.
-static void saved_rec(void)
-{
-    sv_bank  = hal_bank;
-    hal_bank = dump_bank;
-    rec_n    = sv_i;
-    rec_read();
-    hal_bank = sv_bank;
-}
-
-// Packed pedal settings byte sv_p (0 bank_pc, 1 / 2 pedal A / B's CC | pickup << 7) of
-// bank dump_bank: footswitch n holds bits (n & 3) * 2 of byte n >> 2, the bank record's
-// byte k bit 4 + k of byte 2.
-static uint8_t saved_y(void)
-{
-    sv_y = 0;
-
-    for (sv_i = (uint8_t)(sv_p * 4); sv_i < (uint8_t)(sv_p * 4 + 4) && sv_i < STOMP_COUNT; sv_i++)
-    {
-        saved_rec();
-        sv_y |= (uint8_t)((uint8_t)(hal_rec[0] >> 6) << ((sv_i & 3) << 1));
-    }
-
-    if (sv_p == 2)
-    {
-        sv_i = HAL_REC_BANK;
-        saved_rec();
-
-        for (sv_i = 0; sv_i < 4; sv_i++)
-        {
-            sv_y |= (uint8_t)((uint8_t)(hal_rec[sv_i] >> 7) << (4 + sv_i));
-        }
-    }
-
-    return sv_y;
-}
-
-// Bank parameter sv_p (NP_MODE to NP_PEDAL_CC + 1) of bank dump_bank, as saved. sv_q
-// keeps the parameter (saved_y uses sv_p and sv_i).
-static uint8_t saved_get(void)
-{
-    sv_q = sv_p;
-
-    if (sv_q >= NP_PICKUP)
-    {
-        sv_p = (uint8_t)(((sv_q - NP_PICKUP) & 1) + 1);
-        saved_y();
-        return (sv_q < NP_PEDAL_CC) ? (uint8_t)(sv_y >> 7) : (uint8_t)(sv_y & 0x7F);
-    }
-
-    if (sv_q >= NP_BANK_PC)
-    {
-        sv_p = 0;
-        saved_y();
-        return (sv_q == NP_BANK_PC) ? (uint8_t)((uint8_t)(sv_y - 1) & 0x7F) : (uint8_t)(sv_y != 0);
-    }
-
-    if (sv_q >= NP_TRIGGER)
-    {
-        sv_i = HAL_REC_BANK;
-        saved_rec();
-        return (uint8_t)(hal_rec[(uint8_t)(sv_q - NP_TRIGGER)] & 0x7F);
-    }
-
-    // A follow flag (bit 4 SWITCH 1, bit 5 SWITCH 2), a message byte (type in bits 0-1,
-    // then number, on and off), or the pedal mode (bits 2-3).
-    if (sv_q >= NP_FOLLOW1)
-    {
-        sv_i = (uint8_t)((uint8_t)(sv_q - NP_FOLLOW1) % (uint8_t)(NP_FOLLOW2 - NP_FOLLOW1));
-        saved_rec();
-        return (uint8_t)((hal_rec[0] & ((sv_q >= NP_FOLLOW2) ? 0x20 : 0x10)) != 0);
-    }
-
-    if (sv_q >= NP_TYPE)
-    {
-        sv_i = (uint8_t)((uint8_t)(sv_q - NP_TYPE) % (uint8_t)STOMP_COUNT);
-        saved_rec();
-        sv_q = (uint8_t)((uint8_t)(sv_q - NP_TYPE) / (uint8_t)STOMP_COUNT);
-        return (sv_q == 0) ? (uint8_t)(hal_rec[0] & 3) : hal_rec[sv_q];
-    }
-
-    sv_i = (uint8_t)(sv_q - NP_MODE);
-    saved_rec();
-    return (uint8_t)((hal_rec[0] >> 2) & 3);
-}
-
 // The current value of known parameter p.
-static uint8_t nrpn_get(uint8_t p)
+static uint8_t param_get(uint8_t p)
 {
-    if (get_saved && p >= NP_MODE && p < NP_LEVEL)
-    {
-        sv_p = p;
-        return saved_get();
-    }
-
-    if (p == NP_READ_BANK)
-    {
-        return (uint8_t)(dump_bank + 1);
-    }
-
     if (p == NP_CHANNEL)
     {
         return midi_channel;
@@ -4006,52 +3900,6 @@ static uint8_t nrpn_get(uint8_t p)
     return sw_thr[(uint8_t)(p - NP_TRIGGER)];
 }
 
-// Send the dump's next parameter (midi_job - 1), or its end marker once midi_job is past
-// the last. Reads midi_job instead of taking a parameter: no fixed RAM.
-static void nrpn_send(void)
-{
-    // Each CC has its status byte unless running status is turned on (send_cc), so
-    // interfaces that mishandle running status still pass the dump.
-    get_saved = (dump_bank != hal_bank) ? 1 : 0;
-    send_cc(99, NRPN_MSB);
-    send_cc(98, (midi_job > NP_COUNT) ? NP_DUMP_END : (uint8_t)(midi_job - 1));
-
-    if (midi_job > NP_COUNT)
-    {
-        send_cc(6, 0);
-    }
-    else if (np_kind((uint8_t)(midi_job - 1)) == NK_READ)
-    {
-        send_cc(6, (uint8_t)(nrpn_get((uint8_t)(midi_job - 1)) >> 7));
-        send_cc(38, nrpn_get((uint8_t)(midi_job - 1)));
-    }
-    else
-    {
-        send_cc(6, nrpn_get((uint8_t)(midi_job - 1)));
-    }
-
-    get_saved = 0;
-}
-
-// ctl_tick's share of MIDI configuration (run mode): the next step of a dump, one
-// parameter per tick once MIDI OUT has room for it.
-static void midi_job_run(void)
-{
-    // At most 12 bytes: CC 99, 98, 6 and 38, each with its status byte.
-    if (hal_midi_space() < 12)
-    {
-        return;
-    }
-
-    while (midi_job <= NP_COUNT && np_kind((uint8_t)(midi_job - 1)) == NK_NONE)
-    {
-        midi_job++;
-    }
-
-    nrpn_send();
-    midi_job = (midi_job > NP_COUNT) ? 0 : (uint8_t)(midi_job + 1);
-}
-
 // A bank change (bank_busy, run mode), once any undo waiting in the revert queue has gone
 // out. Nothing is sent. First the old bank's states go into key_val as the values they
 // stand for (on: the on value, off: the off value; a note 0x80 + state), so a state shown
@@ -4136,14 +3984,9 @@ static void reset_settle(void)
 // A command (in rx_data1). Save and reload run at once, so a command that follows (a dump,
 // say) cannot overtake them; the EEPROM access is still less deep on the stack than from
 // the key handlers. A dump starts on the next tick (and a new one restarts it).
-static void nrpn_command(void)
+static void param_command(void)
 {
-    if (rx_data1 == NC_DUMP)
-    {
-        dump_bank = hal_bank;
-        midi_job  = 1;
-    }
-    else if (rx_data1 == NC_DEFAULTS)
+    if (rx_data1 == NC_DEFAULTS)
     {
         factory_reset();
         reset_settle();
@@ -4162,64 +4005,51 @@ static void nrpn_command(void)
     }
 }
 
-// Write rx_data1 into footswitch i's message field for parameter nrpn_lsb (a leaf).
+// Write rx_data1 into footswitch i's message field for parameter sx_param (a leaf).
 static void msg_write(uint8_t i)
 {
     uint8_t q = MSG_AT(i);
 
-    if (nrpn_lsb < NP_NUM)
+    if (sx_param < NP_NUM)
     {
         msg[q]     = (uint8_t)((msg[q] & 0x7F) | ((rx_data1 & 1) << 7));
         msg[q + 1] = (uint8_t)((msg[q + 1] & 0x7F) | ((rx_data1 & 2) << 6));
         return;
     }
 
-    q = (uint8_t)(q + (uint8_t)(nrpn_lsb - NP_TYPE) / (uint8_t)STOMP_COUNT - 1);
+    q = (uint8_t)(q + (uint8_t)(sx_param - NP_TYPE) / (uint8_t)STOMP_COUNT - 1);
     msg[q] = (uint8_t)((msg[q] & 0x80) | rx_data1);
 }
 
-// Set parameter nrpn_lsb to rx_data1 (the CC 6 value, put there by nrpn_cc, so this takes
+// Set parameter sx_param to rx_data1 (from a SysEx set, put there by ctl_midi_in, so this takes
 // no parameter). Values out of range, read-only parameters and unchanged values are
 // ignored. A changed pedal mode or message puts the switch in its resting state on the next
 // tick (cfg_dirty, settle_dirty), as leaving configuration mode does; a message change to
 // a switch that is on first sends the old message's off and turns it off, as the editor does.
-static void nrpn_set(void)
+static void param_set(void)
 {
     uint8_t i;
 
-    if (nrpn_lsb == NP_COMMAND)
+    if (sx_param == NP_COMMAND)
     {
-        nrpn_command();
-        return;
-    }
-
-    // A dump of bank rx_data1's saved settings (the bank in use: its live ones), without
-    // changing bank. Read only otherwise, so a dump fed back (CC 6 = 0) changes nothing.
-    if (nrpn_lsb == NP_READ_BANK)
-    {
-        if (rx_data1 >= 1 && rx_data1 <= BANK_COUNT)
-        {
-            dump_bank = (uint8_t)(rx_data1 - 1);
-            midi_job  = 1;
-        }
-
+        param_command();
         return;
     }
 
     // The bank's program change: setting the program turns it on, even to the program it
     // already shows while off (so this comes before the unchanged check).
-    if (nrpn_lsb == NP_BANK_PC)
+    if (sx_param == NP_BANK_PC)
     {
         bank_pc = (uint8_t)(rx_data1 + 1);
         return;
     }
 
-    if (np_kind(nrpn_lsb) != NK_SET || nrpn_get(nrpn_lsb) == rx_data1)
+    if (np_kind(sx_param) != NK_SET || param_get(sx_param) == rx_data1)
     {
         return;
     }
 
-    if (nrpn_lsb == NP_CHANNEL)
+    if (sx_param == NP_CHANNEL)
     {
         if (rx_data1 >= 1 && rx_data1 <= 16)
         {
@@ -4231,7 +4061,7 @@ static void nrpn_set(void)
 
     // On / off (the value differs, so it is 0 or 1 here only if it changes): on keeps the
     // program parameter 92 reads (127 if it was never set).
-    if (nrpn_lsb == NP_BANK_PC_ON)
+    if (sx_param == NP_BANK_PC_ON)
     {
         if (rx_data1 <= 1)
         {
@@ -4242,7 +4072,7 @@ static void nrpn_set(void)
     }
 
     // The brightness (a data byte, so always 0-127), used at once.
-    if (nrpn_lsb == NP_LEVEL)
+    if (sx_param == NP_LEVEL)
     {
         led_level = rx_data1;
         led_apply();
@@ -4250,16 +4080,16 @@ static void nrpn_set(void)
     }
 
     // An option on / off: the value differs, so a 0 or 1 flips it.
-    if (nrpn_lsb >= NP_METRO)
+    if (sx_param >= NP_METRO)
     {
         if (rx_data1 <= 1)
         {
-            if (nrpn_lsb == NP_METRO)
+            if (sx_param == NP_METRO)
             {
                 opt_metro = !opt_metro;
                 met_show();
             }
-            else if (nrpn_lsb == NP_RUNSTAT)
+            else if (sx_param == NP_RUNSTAT)
             {
                 opt_runstat = !opt_runstat;
                 tx_last     = 0;
@@ -4275,15 +4105,15 @@ static void nrpn_set(void)
 
     // A pedal's CC (a data byte, so always 0-127), or its pickup mode on / off (the value
     // differs, so a 0 or 1 flips it). The pedal's value then counts as where it is.
-    if (nrpn_lsb >= NP_PICKUP)
+    if (sx_param >= NP_PICKUP)
     {
-        if (nrpn_lsb >= NP_PEDAL_CC)
+        if (sx_param >= NP_PEDAL_CC)
         {
-            pedal_cc[(uint8_t)(nrpn_lsb - NP_PEDAL_CC)] = rx_data1;
+            pedal_cc[(uint8_t)(sx_param - NP_PEDAL_CC)] = rx_data1;
         }
         else if (rx_data1 <= 1)
         {
-            pk_mask ^= (uint8_t)(1 << (nrpn_lsb - NP_PICKUP));
+            pk_mask ^= (uint8_t)(1 << (sx_param - NP_PICKUP));
         }
 
         pedals_rebase();
@@ -4292,7 +4122,7 @@ static void nrpn_set(void)
 
     // A bank change, as UP / DOWN make one in bank mode (bank_run). Unsaved changes to
     // the old bank's footswitches are dropped.
-    if (nrpn_lsb == NP_BANK)
+    if (sx_param == NP_BANK)
     {
         if (rx_data1 >= 1 && rx_data1 <= BANK_COUNT)
         {
@@ -4308,11 +4138,11 @@ static void nrpn_set(void)
         return;
     }
 
-    if (nrpn_lsb < NP_TYPE)
+    if (sx_param < NP_TYPE)
     {
         if (rx_data1 < PM_COUNT)
         {
-            i = (uint8_t)(nrpn_lsb - NP_MODE);
+            i = (uint8_t)(sx_param - NP_MODE);
             pedal_mode_set(i, rx_data1);
             cfg_dirty |= bit16(i);
         }
@@ -4320,14 +4150,14 @@ static void nrpn_set(void)
         return;
     }
 
-    if (nrpn_lsb < NP_FOLLOW1)
+    if (sx_param < NP_FOLLOW1)
     {
-        if (nrpn_lsb < NP_NUM && rx_data1 > MT_PROG)
+        if (sx_param < NP_NUM && rx_data1 > MT_PROG)
         {
             return;
         }
 
-        i = (uint8_t)((uint8_t)(nrpn_lsb - NP_TYPE) % (uint8_t)STOMP_COUNT);
+        i = (uint8_t)((uint8_t)(sx_param - NP_TYPE) % (uint8_t)STOMP_COUNT);
 
         if (stomp_on(i))
         {
@@ -4345,53 +4175,34 @@ static void nrpn_set(void)
         return;
     }
 
-    if (nrpn_lsb < NP_TRIGGER)
+    if (sx_param < NP_TRIGGER)
     {
         // A follow flag: the value differs from the current one, so a 0 or 1 flips it.
         if (rx_data1 <= 1)
         {
-            if (nrpn_lsb < NP_FOLLOW2)
+            if (sx_param < NP_FOLLOW2)
             {
-                sw_mask[0] ^= bit16((uint8_t)(nrpn_lsb - NP_FOLLOW1));
+                sw_mask[0] ^= bit16((uint8_t)(sx_param - NP_FOLLOW1));
             }
             else
             {
-                sw_mask[1] ^= bit16((uint8_t)(nrpn_lsb - NP_FOLLOW2));
+                sw_mask[1] ^= bit16((uint8_t)(sx_param - NP_FOLLOW2));
             }
         }
 
         return;
     }
 
-    sw_thr[(uint8_t)(nrpn_lsb - NP_TRIGGER)] = rx_data1;
-}
-
-// A received CC on the pedal's channel in run mode (number in rx_data1): the NRPN selects
-// and data entry.
-static void nrpn_cc(uint8_t value)
-{
-    if (rx_data1 == 99)
-    {
-        nrpn_msb_ok = (value == NRPN_MSB) ? 1 : 0;
-    }
-    else if (rx_data1 == 98)
-    {
-        nrpn_lsb = value;
-    }
-    else if (rx_data1 == 101 || rx_data1 == 100)
-    {
-        nrpn_msb_ok = 0;
-    }
-    else if (rx_data1 == 6 && nrpn_msb_ok && nrpn_lsb < NP_COUNT)
-    {
-        rx_data1 = value;
-        nrpn_set();
-    }
+    sw_thr[(uint8_t)(sx_param - NP_TRIGGER)] = rx_data1;
 }
 
 // The Identity Request after F0, by sx_pos (1-4): 7E, the device (7F all, or the
 // pedal's channel - 1, checked apart), 06, 01.
 static const CODE uint8_t sx_request[5] = { 0, 0x7E, 0x7F, 0x06, 0x01 };
+
+// A configuration message after F0 7D (sx_pos SX_CFG to SX_CFG + 2): 46 43, then the
+// device (7F all, or the channel - 1, checked apart).
+static const CODE uint8_t sx_cfg[3] = { 0x46, 0x43, 0x7F };
 
 // The visual metronome's sign: "-" for the first half of each beat (12 of its 24
 // clocks), "+" instead on beat 1 once the phase is known (user's request); nothing when it
@@ -4476,6 +4287,28 @@ void ctl_midi_in(uint8_t byte)
             sx_reply = 1;
         }
 
+        // A whole dump request (run mode: checked at the command).
+        if (byte == 0xF7 && sx_pos == SX_GET_END)
+        {
+            sx_dump_due = 1;
+        }
+
+        // A whole set message: its pairs, in order (parameter in sx_param, value in
+        // rx_data1, as param_set takes them); an odd count is not whole.
+        if (byte == 0xF7 && sx_pos == SX_SET_DATA && !(sx_n & 1) && mode == MODE_RUN)
+        {
+            for (sx_j = 0; sx_j < sx_n; sx_j += 2)
+            {
+                sx_param = sx_buf[sx_j];
+                rx_data1 = sx_buf[(uint8_t)(sx_j + 1)];
+
+                if (sx_param < NP_COUNT)
+                {
+                    param_set();
+                }
+            }
+        }
+
         sx_pos = (byte == 0xF0) ? 1 : 0;
 
         // System messages (including SysEx start and end) cancel running status; a Song
@@ -4488,11 +4321,51 @@ void ctl_midi_in(uint8_t byte)
     // In a SysEx: F0 7E <device> 06 01 F7 is the Identity Request (Universal
     // Non-Realtime, General Information), for the pedal's device (its channel - 1, as it
     // replies) or all (7F). Anything else is skipped until it ends.
+    // Or a configuration message, F0 7D 46 43 <device> <command> (SX_CFG and up): a dump
+    // request's bank, or a set's parameter and value pairs, kept until its F7.
     if (sx_pos)
     {
-        if (sx_pos < 5 && (byte == sx_request[sx_pos] || (sx_pos == 2 && byte == (uint8_t)(midi_channel - 1))))
+        if (sx_pos == SX_SKIP)
         {
-            sx_pos++;
+            return;
+        }
+
+        if (sx_pos == 1 && byte == 0x7D)
+        {
+            sx_pos = SX_CFG;
+        }
+        else if (sx_pos < 5 || (sx_pos >= SX_CFG && sx_pos < SX_CFG + 3))
+        {
+            // The identity request's bytes, or 46 43 and the device: the channel - 1
+            // matches the device position (2, or SX_CFG + 2) too.
+            if (byte == ((sx_pos < 5) ? sx_request[sx_pos] : sx_cfg[sx_pos & 3]) ||
+                ((sx_pos & 0x0F) == 2 && byte == midi_channel - 1))
+            {
+                sx_pos++;
+            }
+            else
+            {
+                sx_pos = SX_SKIP;
+            }
+        }
+        else if (sx_pos == SX_CFG + 3 && mode == MODE_RUN && byte == SX_CMD_GET)
+        {
+            sx_pos = SX_GET_BANK;
+        }
+        else if (sx_pos == SX_CFG + 3 && mode == MODE_RUN && byte == SX_CMD_SET)
+        {
+            sx_pos = SX_SET_DATA;
+            sx_n   = 0;
+        }
+        else if (sx_pos == SX_GET_BANK && byte <= BANK_COUNT)
+        {
+            sx_req = byte;
+            sx_pos = SX_GET_END;
+        }
+        else if (sx_pos == SX_SET_DATA && sx_n < SX_SET_MAX)
+        {
+            sx_buf[sx_n] = byte;
+            sx_n++;
         }
         else
         {
@@ -4546,12 +4419,6 @@ void ctl_midi_in(uint8_t byte)
     }
 
     remote_cc(rx_data1, byte);
-
-    // Configuration over MIDI (after remote_cc: nrpn_cc may reuse rx_data1).
-    if ((rx_status & 0xF0) == 0xB0 && mode == MODE_RUN)
-    {
-        nrpn_cc(byte);
-    }
 }
 
 void ctl_pedal_sample(uint8_t channel, uint8_t raw)
@@ -4701,6 +4568,89 @@ static void sysex_identity(void)
     {
         tx_flash = TX_FLASH_TICKS;
     }
+}
+
+// The settings dump (SX_DUMP_LEN bytes; docs/midi.md): F0 7D 46 43 <channel - 1> 02, the
+// bank it describes (1 to BANK_COUNT), the shared settings (channel, version major, minor
+// and build in bits 0-6 and their bit 7s as in the identity, the bank in use, BANK_COUNT,
+// brightness, misc: clock display | running status << 1 | active sensing << 2), then the
+// bank's: per footswitch its record's flags (type | pedal mode << 2 | SWITCH 1 follows << 4
+// | SWITCH 2 << 5), number, on value and off value; the four triggers; the pedals (pickup A
+// | pickup B << 1 | program change on << 2, the program, pedal A's CC, pedal B's CC); F7.
+// The bank comes from its records in their saved form: the bank in use packed from the
+// live settings (rec_pack), another read from the EEPROM (rec_read, the defaults if never
+// saved), so the bank in use does not change. The packed pedal bytes (BANK_Y) are gathered
+// from the records' spare bits into sx_y.
+static void sx_dump(void)
+{
+    sv_bank = hal_bank;
+    sx_req  = (uint8_t)(sx_req ? sx_req - 1 : hal_bank);
+
+    for (sx_k = 0; sx_k < 4; sx_k++)
+    {
+        hal_midi_tx((uint8_t)((sx_k == 0) ? 0xF0 : (sx_k == 1) ? 0x7D : sx_cfg[(uint8_t)(sx_k - 2)]));
+    }
+
+    hal_midi_tx((uint8_t)(midi_channel - 1));
+    hal_midi_tx(SX_CMD_DUMP);
+    hal_midi_tx((uint8_t)(sx_req + 1));
+    hal_midi_tx(midi_channel);
+    sx_hi = 0;
+
+    for (sx_k = 0; sx_k < 3; sx_k++)
+    {
+        sx_hi = (uint8_t)((sx_hi >> 1) | (fw_version[sx_k] & 0x80));
+        hal_midi_tx((uint8_t)(fw_version[sx_k] & 0x7F));
+    }
+
+    hal_midi_tx((uint8_t)(sx_hi >> 5));
+    hal_midi_tx((uint8_t)(bank_next + 1));
+    hal_midi_tx(BANK_COUNT);
+    hal_midi_tx(led_level);
+    hal_midi_tx((uint8_t)((opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (opt_asense ? 4 : 0)));
+    sx_y[0] = 0;
+    sx_y[1] = 0;
+    sx_y[2] = 0;
+
+    for (rec_n = 0; rec_n <= HAL_REC_BANK; rec_n++)
+    {
+        if (sx_req == sv_bank)
+        {
+            rec_pack();
+        }
+        else
+        {
+            hal_bank = sx_req;
+            rec_read();
+            hal_bank = sv_bank;
+        }
+
+        if (rec_n < STOMP_COUNT)
+        {
+            sx_y[rec_n >> 2] |= (uint8_t)((uint8_t)(hal_rec[0] >> 6) << ((rec_n & 3) << 1));
+            hal_rec[0] &= 0x3F;
+        }
+        else
+        {
+            for (sx_k = 0; sx_k < 4; sx_k++)
+            {
+                sx_y[2] |= (uint8_t)((uint8_t)(hal_rec[sx_k] >> 7) << (4 + sx_k));
+            }
+        }
+
+        for (sx_k = 0; sx_k < 4; sx_k++)
+        {
+            hal_midi_tx((uint8_t)(hal_rec[sx_k] & 0x7F));
+        }
+    }
+
+    hal_midi_tx((uint8_t)((sx_y[1] >> 7) | ((sx_y[2] >> 6) & 2) | (sx_y[0] ? 4 : 0)));
+    hal_midi_tx((uint8_t)((uint8_t)(sx_y[0] - 1) & 0x7F));
+    hal_midi_tx((uint8_t)(sx_y[1] & 0x7F));
+    hal_midi_tx((uint8_t)(sx_y[2] & 0x7F));
+    hal_midi_tx(0xF7);
+    tx_last  = 0;
+    tx_flash = TX_FLASH_TICKS;
 }
 
 // Run mode, every tick: each relay's triggers give on if any is on (logical OR): a
@@ -4866,9 +4816,10 @@ void ctl_tick(void)
             bank_run();
         }
 
-        if (midi_job && !bank_busy)
+        if (sx_dump_due && !bank_busy && hal_midi_space() >= SX_DUMP_LEN)
         {
-            midi_job_run();
+            sx_dump_due = 0;
+            sx_dump();
         }
 
         if (cfg_dirty)

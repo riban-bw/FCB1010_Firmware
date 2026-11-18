@@ -3863,114 +3863,159 @@ static void test_config_editor(void)
     memset(msg_stored_valid, 0, sizeof(msg_stored_valid));
 }
 
-// Send one NRPN set on channel ch (1-16): CC 99 = 0x46, CC 98 = p, CC 6 = v.
-static void nrpn_on(uint8_t ch, uint8_t p, uint8_t v)
+// A SysEx configuration message to device dev (7F all, or a channel - 1): F0 7D 46 43
+// <dev> <cmd>, the n bytes in d, F7.
+static void sx_send(uint8_t dev, uint8_t cmd, const uint8_t *d, int n)
 {
-    ctl_midi_in((uint8_t)(0xB0 | (ch - 1)));
-    ctl_midi_in(99); ctl_midi_in(NRPN_MSB);
-    ctl_midi_in(98); ctl_midi_in(p);
-    ctl_midi_in(6);  ctl_midi_in(v);
+    int i;
+
+    ctl_midi_in(0xF0); ctl_midi_in(0x7D); ctl_midi_in(0x46); ctl_midi_in(0x43);
+    ctl_midi_in(dev);  ctl_midi_in(cmd);
+
+    for (i = 0; i < n; i++)
+    {
+        ctl_midi_in(d[i]);
+    }
+
+    ctl_midi_in(0xF7);
 }
 
-static void nrpn(uint8_t p, uint8_t v)
+// Set parameter p to v, addressed to channel ch (1-16), or to the pedal's channel.
+static void mset_on(uint8_t ch, uint8_t p, uint8_t v)
 {
-    nrpn_on(midi_channel, p, v);
+    uint8_t d[2];
+
+    d[0] = p;
+    d[1] = v;
+    sx_send((uint8_t)(ch - 1), SX_CMD_SET, d, 2);
 }
 
-// Parse a dump from the MIDI log: values[p] (14-bit for CC 6 + CC 38), seen[p], and
-// whether the end marker came last. Returns the number of parameters, or -1 if the bytes
-// are not well-formed NRPN messages: every CC with its status byte, unless running status
-// is on (then the status may be left out).
-static int dump_values[NP_COUNT], dump_seen[NP_COUNT], dump_end;
-static int dump_i;
-
-// The next CC of the dump: its number (and *v its value), or -1.
-static int dump_cc(int *v)
+static void mset(uint8_t p, uint8_t v)
 {
-    if (dump_i < midi_len && midi_log[dump_i] == CC_STATUS)
-    {
-        dump_i++;
-    }
-    else if (!opt_runstat || dump_i >= midi_len)
-    {
-        return -1;
-    }
+    mset_on(midi_channel, p, v);
+}
 
-    if (dump_i + 1 >= midi_len || midi_log[dump_i] >= 0x80 || midi_log[dump_i + 1] >= 0x80)
-    {
-        return -1;
-    }
+// Ask for a dump of bank b (0 the bank in use).
+static void sx_get(uint8_t b)
+{
+    sx_send(0x7F, SX_CMD_GET, &b, 1);
+}
 
-    *v = midi_log[dump_i + 1];
-    dump_i += 2;
-    return midi_log[dump_i - 2];
+// Parse a SysEx dump in the MIDI log from index from into the parameters it stands for:
+// dump_values[p], dump_seen[p], dump_bank_of (the bank described), and dump_end (the
+// whole message, with its F7, well formed). Returns the number of parameters, or -1.
+static int dump_values[NP_COUNT], dump_seen[NP_COUNT], dump_end, dump_bank_of;
+
+static void dump_put(int p, int v)
+{
+    dump_values[p] = v;
+    dump_seen[p]   = 1;
 }
 
 static int parse_dump(int from)
 {
-    int n = 0, p, v, save;
+    const uint8_t *d = midi_log + from;
+    int n = 0, i, k, f;
 
     memset(dump_seen, 0, sizeof(dump_seen));
     dump_end = 0;
-    dump_i = from;
 
-    while (dump_i < midi_len)
+    if (midi_len - from < SX_DUMP_LEN || d[0] != 0xF0 || d[1] != 0x7D || d[2] != 0x46 || d[3] != 0x43 ||
+        d[4] != midi_channel - 1 || d[5] != SX_CMD_DUMP || d[SX_DUMP_LEN - 1] != 0xF7)
     {
-        if (dump_end)
-        {
-            return -1;           // nothing after the end marker
-        }
+        return -1;
+    }
 
-        if (dump_cc(&v) != 99 || v != NRPN_MSB || dump_cc(&p) != 98 || dump_cc(&v) != 6)
+    for (i = 1; i < SX_DUMP_LEN - 1; i++)
+    {
+        if (d[i] >= 0x80)
         {
             return -1;
         }
+    }
 
-        if (p == NP_DUMP_END)
-        {
-            dump_end = v == 0;
-            continue;
-        }
+    dump_end     = 1;
+    dump_bank_of = d[6];
+    d += 7;
+    dump_put(NP_CHANNEL, d[0]);
+    dump_put(NP_VERSION, d[1] | ((d[4] & 1) << 7));
+    dump_put(NP_VERSION + 1, d[2] | ((d[4] & 2) << 6));
+    dump_put(NP_VERSION + 2, d[3] | ((d[4] & 4) << 5));
+    dump_put(NP_BANK, d[5]);
+    dump_put(NP_BANKS, d[6]);
+    dump_put(NP_LEVEL, d[7]);
+    dump_put(NP_METRO, d[8] & 1);
+    dump_put(NP_RUNSTAT, (d[8] >> 1) & 1);
+    dump_put(NP_ASENSE, (d[8] >> 2) & 1);
+    d += 9;
 
-        dump_values[p] = v;
-        save = dump_i;
+    for (i = 0; i < STOMP_COUNT; i++, d += 4)
+    {
+        f = d[0];
+        dump_put(NP_TYPE + i, f & 3);
+        dump_put(NP_MODE + i, (f >> 2) & 3);
+        dump_put(NP_FOLLOW1 + i, (f >> 4) & 1);
+        dump_put(NP_FOLLOW2 + i, (f >> 5) & 1);
+        dump_put(NP_NUM + i, d[1]);
+        dump_put(NP_ON + i, d[2]);
+        dump_put(NP_OFF + i, d[3]);
+    }
 
-        if (dump_cc(&v) == 38)
-        {
-            dump_values[p] = dump_values[p] * 128 + v;
-        }
-        else
-        {
-            dump_i = save;
-        }
+    for (k = 0; k < 4; k++)
+    {
+        dump_put(NP_TRIGGER + k, d[k]);
+    }
 
-        dump_seen[p] = 1;
-        n++;
+    d += 4;
+    dump_put(NP_PICKUP, d[0] & 1);
+    dump_put(NP_PICKUP + 1, (d[0] >> 1) & 1);
+    dump_put(NP_BANK_PC_ON, (d[0] >> 2) & 1);
+    dump_put(NP_BANK_PC, d[1]);
+    dump_put(NP_PEDAL_CC, d[2]);
+    dump_put(NP_PEDAL_CC + 1, d[3]);
+
+    for (i = 0; i < NP_COUNT; i++)
+    {
+        n += dump_seen[i];
     }
 
     return n;
 }
 
-// Run a dump to the end (or give up after n ticks).
-static void dump_run(int n)
-{
-    nrpn(NP_COMMAND, NC_DUMP);
+// The number of parameters in a dump.
+#define DUMP_PARAMS (1 + 3 + 2 + 1 + 3 + 7 * STOMP_COUNT + 4 + 6)
 
-    while (midi_job && n-- > 0)
+// Ask for a dump of bank b (0 the bank in use) and run it (giving up after n ticks),
+// with room in MIDI OUT for it.
+static void dump_run_bank(uint8_t b, int n)
+{
+    int space = midi_space;
+
+    sx_get(b);
+    midi_space = 128;
+
+    while (sx_dump_due && n-- > 0)
     {
         ticks(1);
     }
+
+    midi_space = space;
+}
+
+static void dump_run(int n)
+{
+    dump_run_bank(0, n);
 }
 
 static void test_midi_config(void)
 {
     const uint8_t cc[10] = { STOMP_CC_LIST };
+    uint8_t d[8];
     int i, n;
 
-    printf("configuration over MIDI (NRPN)\n");
+    printf("configuration over MIDI (SysEx)\n");
 
-    // A dump: every known parameter once, in order, then the end marker; settable values
-    // in CC 6 alone, the version and calibration as CC 6 + CC 38.
+    // A dump: one SysEx message with the shared settings and the bank's (no calibration).
     reset_world();
     set_mode(3, PM_MOM_INV);
     set_msg(4, MT_NOTE, 60, 100, 30);
@@ -3981,10 +4026,10 @@ static void test_midi_config(void)
     clear_log();
     dump_run(1000);
     n = parse_dump(0);
-    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 2 + 2 + 2 + 4 + 1 && dump_end && midi_job == 0);
+    CHECK(n == DUMP_PARAMS && dump_end && midi_len == SX_DUMP_LEN && !sx_dump_due && dump_bank_of == 1);
     CHECK(dump_values[NP_BANK] == 1 && dump_values[NP_BANKS] == BANK_COUNT);
     CHECK(dump_values[NP_BANK_PC] == 127 && dump_values[NP_BANK_PC_ON] == 0);
-    CHECK(dump_values[NP_CHANNEL] == MIDI_CHANNEL);
+    CHECK(dump_values[NP_CHANNEL] == MIDI_CHANNEL && dump_values[NP_LEVEL] == led_level);
     CHECK(dump_values[NP_VERSION] == fw_version[0] && dump_values[NP_VERSION + 1] == fw_version[1] &&
           dump_values[NP_VERSION + 2] == fw_version[2]);
     CHECK(dump_values[NP_MODE + 3] == PM_MOM_INV && dump_values[NP_MODE] == pedal_mode_get(0));
@@ -3992,27 +4037,31 @@ static void test_midi_config(void)
           dump_values[NP_OFF + 4] == 30);
     CHECK(dump_values[NP_TYPE] == MT_CC && dump_values[NP_NUM] == cc[0] && dump_values[NP_ON] == 127 && dump_values[NP_OFF] == 0);
     CHECK(dump_values[NP_FOLLOW2 + 2] == 1 && dump_values[NP_FOLLOW2 + 3] == 0 && dump_values[NP_FOLLOW1 + 2] == 0);
-    // Parameters 70 and 82 (once following program mode) are gone.
-    CHECK(!dump_seen[NP_FOLLOW1 + 10] && !dump_seen[NP_FOLLOW2 + 10]);
     CHECK(dump_values[NP_TRIGGER + 1] == 77 && dump_values[NP_TRIGGER] == 0);
-    // The calibration (once 88-91) is not reported: it is set on the pedal only.
+    CHECK(dump_values[NP_PEDAL_CC] == pedal_cc[0] && dump_values[NP_PEDAL_CC + 1] == pedal_cc[1] &&
+          dump_values[NP_PICKUP] == (pk_mask & 1) && dump_values[NP_PICKUP + 1] == ((pk_mask >> 1) & 1));
+    // The calibration is not reported: it is set on the pedal only.
     CHECK(!dump_seen[88] && !dump_seen[89] && !dump_seen[90] && !dump_seen[91]);
-    CHECK(!dump_seen[NP_COMMAND] && !dump_seen[NP_MODE + 10] && !dump_seen[NP_FOLLOW1 + 11]);
-
-    // It goes one parameter per tick, waiting while MIDI OUT has less than 12 bytes free
-    // (9 for a settable parameter, 12 with CC 38: each CC with its status byte, since
-    // running status is off).
+    // A program change on: its program and the flag.
+    bank_pc = 6;
+    pk_mask = 2;
     clear_log();
-    nrpn(NP_COMMAND, NC_DUMP);
-    ticks(1);
-    CHECK(midi_len == 9 && midi_log[0] == CC_STATUS && midi_log[3] == CC_STATUS && midi_log[5] == NP_CHANNEL && midi_log[6] == CC_STATUS);
-    midi_space = 11;
-    ticks(5);
-    CHECK(midi_len == 9);
-    midi_space = 15;
-    ticks(1);
-    CHECK(midi_len == 9 + 12 && midi_log[14] == NP_VERSION && midi_log[19] == 38);
     dump_run(1000);
+    parse_dump(0);
+    CHECK(dump_values[NP_BANK_PC] == 5 && dump_values[NP_BANK_PC_ON] == 1 && dump_values[NP_PICKUP] == 0 &&
+          dump_values[NP_PICKUP + 1] == 1);
+    bank_pc = 0;
+
+    // It waits for MIDI OUT room for the whole message, then goes in one tick.
+    clear_log();
+    sx_get(0);
+    midi_space = SX_DUMP_LEN - 1;
+    ticks(5);
+    CHECK(midi_len == 0 && sx_dump_due);
+    midi_space = SX_DUMP_LEN;
+    ticks(1);
+    CHECK(midi_len == SX_DUMP_LEN && !sx_dump_due && parse_dump(0) == DUMP_PARAMS);
+    midi_space = 15;
 
     // A dump fed back in changes nothing and sends nothing.
     clear_log();
@@ -4026,29 +4075,29 @@ static void test_midi_config(void)
     }
     ticks(2);
     CHECK(midi_len == 0 && cfg_dirty == 0 && pedal_mode_get(3) == PM_MOM_INV && msg_type(4) == MT_NOTE &&
-          heel[1] == 129 && sw_thr[1] == 77 && midi_channel == MIDI_CHANNEL);
+          heel[1] == 129 && sw_thr[1] == 77 && midi_channel == MIDI_CHANNEL && !sx_dump_due);
 
     // Sets apply at once. Pedal mode: the switch goes to its new resting state on the next
     // tick (inverted momentary: on, sending its on value).
     reset_world();
     set_mode(0, PM_STOMP);
     clear_log();
-    nrpn(NP_MODE + 0, PM_MOM_INV);
+    mset(NP_MODE + 0, PM_MOM_INV);
     CHECK(pedal_mode_get(0) == PM_MOM_INV && midi_len == 0);
     ticks(2);
     CHECK(midi_len == 3 && cc_number(0) == cc[0] && cc_value(0) == 127 && leds[0] == 1);
     // Out of range: ignored.
-    nrpn(NP_MODE + 1, 4);
+    mset(NP_MODE + 1, 4);
     CHECK(pedal_mode_get(1) == DEFAULT_PEDAL_MODE);
 
     // Message: type, number, on and off; the switch then sends it.
     reset_world();
     set_mode(1, PM_STOMP);
-    nrpn(NP_TYPE + 1, MT_NOTE);
-    nrpn(NP_NUM + 1, 64);
-    nrpn(NP_ON + 1, 99);
-    nrpn(NP_OFF + 1, 11);
-    nrpn(NP_TYPE + 2, 3);                  // no type 3: ignored
+    mset(NP_TYPE + 1, MT_NOTE);
+    mset(NP_NUM + 1, 64);
+    mset(NP_ON + 1, 99);
+    mset(NP_OFF + 1, 11);
+    mset(NP_TYPE + 2, 3);                  // no type 3: ignored
     CHECK(msg_type(1) == MT_NOTE && MSG_NUM(1) == 64 && MSG_ON(1) == 99 && MSG_OFF(1) == 11 && msg_type(2) == MT_CC);
     ticks(1);
     clear_log();
@@ -4059,86 +4108,117 @@ static void test_midi_config(void)
     // A change to a switch that is on sends the old message's off and turns it off.
     tap(sw_code(2));
     clear_log();
-    nrpn(NP_NUM + 1, 65);
+    mset(NP_NUM + 1, 65);
     CHECK(midi_len == 3 && midi_log[0] == NOTE_OFF && midi_log[1] == 64 && midi_log[2] == 11 && leds[1] == 0);
     ticks(1);
     CHECK(midi_len == 3);
     // A program change switch can be set up too, and sends nothing when changed while on.
     set_mode(5, PM_STOMP);
-    nrpn(NP_TYPE + 5, MT_PROG);
-    nrpn(NP_ON + 5, 7);
-    nrpn(NP_OFF + 5, 8);
+    mset(NP_TYPE + 5, MT_PROG);
+    mset(NP_ON + 5, 7);
+    mset(NP_OFF + 5, 8);
     ticks(1);
     clear_log();
     tap(sw_code(6));
     CHECK(midi_len == 2 && midi_log[1] == 7 && leds[5] == 1);
-    nrpn(NP_ON + 5, 9);
+    mset(NP_ON + 5, 9);
     CHECK(midi_len == 2 && leds[5] == 0);
 
     // Relays: follow flags (0 / 1, flipping only on a change) and trigger values.
     reset_world();
-    nrpn(NP_FOLLOW1 + 4, 1);
-    nrpn(NP_FOLLOW1 + 4, 1);
-    nrpn(NP_FOLLOW2 + 10, 1);
-    nrpn(NP_FOLLOW1 + 5, 2);               // not 0 or 1: ignored
-    nrpn(NP_TRIGGER + 3, 90);
+    mset(NP_FOLLOW1 + 4, 1);
+    mset(NP_FOLLOW1 + 4, 1);
+    mset(NP_FOLLOW2 + 10, 1);
+    mset(NP_FOLLOW1 + 5, 2);               // not 0 or 1: ignored
+    mset(NP_TRIGGER + 3, 90);
     CHECK(sw_mask[0] == (1 << 4) && sw_mask[1] == 0 && sw_thr[3] == 90);
-    nrpn(NP_FOLLOW1 + 4, 0);
+    mset(NP_FOLLOW1 + 4, 0);
     CHECK(sw_mask[0] == 0);
 
-    // Channel: 1-16; afterwards only the new channel is heard.
+    // Channel: 1-16; afterwards a message for another device (channel) is ignored, one for
+    // the new channel or for all (7F) taken.
     reset_world();
-    nrpn(NP_CHANNEL, 0);
-    nrpn(NP_CHANNEL, 17);
+    mset(NP_CHANNEL, 0);
+    mset(NP_CHANNEL, 17);
     CHECK(midi_channel == MIDI_CHANNEL);
-    nrpn(NP_CHANNEL, (uint8_t)(MIDI_CHANNEL % 16 + 1));
+    mset(NP_CHANNEL, (uint8_t)(MIDI_CHANNEL % 16 + 1));
     CHECK(midi_channel == MIDI_CHANNEL % 16 + 1);
-    nrpn_on(MIDI_CHANNEL, NP_TRIGGER, 50);
+    mset_on(MIDI_CHANNEL, NP_TRIGGER, 50);
     CHECK(sw_thr[0] == 0);
-    nrpn(NP_TRIGGER, 50);
+    mset(NP_TRIGGER, 50);
     CHECK(sw_thr[0] == 50);
+    d[0] = NP_TRIGGER; d[1] = 51;
+    sx_send(0x7F, SX_CMD_SET, d, 2);
+    CHECK(sw_thr[0] == 51);
 
-    // Read-only parameters and the end marker cannot be set.
+    // Read-only and unknown parameters cannot be set.
     reset_world();
-    nrpn(88, 5);
-    nrpn(NP_VERSION, 5);
-    nrpn(NP_DUMP_END, 1);
-    nrpn(6, 1);
-    CHECK(heel[0] == 0 && midi_len == 0 && midi_job == 0);
+    mset(88, 5);
+    mset(NP_VERSION, 5);
+    mset(5, 1);
+    mset(NP_BANKS, 3);
+    mset(NP_COUNT, 3);
+    CHECK(heel[0] == 0 && midi_len == 0 && !sx_dump_due && hal_bank == 0);
 
-    // Selection: CC 99 with another value or an RPN select deselects; CC 98 before CC 99
-    // works; the selection stays for further CC 6 values (running status too).
+    // Several pairs in one message, applied at its F7; anything not this protocol is
+    // ignored: another header, a command not known, a message cut short by a status byte,
+    // an odd count, too many pairs, a dump request with a bank out of range.
     reset_world();
-    ctl_midi_in(CC_STATUS);
-    ctl_midi_in(98); ctl_midi_in(NP_TRIGGER);
-    ctl_midi_in(99); ctl_midi_in(NRPN_MSB);
-    ctl_midi_in(6);  ctl_midi_in(20);
+    d[0] = NP_TRIGGER; d[1] = 20; d[2] = NP_TRIGGER + 1; d[3] = 21; d[4] = NP_TRIGGER + 2; d[5] = 22;
+    sx_send(0x7F, SX_CMD_SET, d, 6);
+    CHECK(sw_thr[0] == 20 && sw_thr[1] == 21 && sw_thr[2] == 22);
+    ctl_midi_in(0xF0); ctl_midi_in(0x7D); ctl_midi_in(0x46); ctl_midi_in(0x44); ctl_midi_in(0x7F);
+    ctl_midi_in(SX_CMD_SET); ctl_midi_in(NP_TRIGGER); ctl_midi_in(30); ctl_midi_in(0xF7);
+    sx_send(0x7F, 0x09, d, 6);
     CHECK(sw_thr[0] == 20);
-    ctl_midi_in(6);  ctl_midi_in(21);
-    CHECK(sw_thr[0] == 21);
-    ctl_midi_in(99); ctl_midi_in(1);
-    ctl_midi_in(6);  ctl_midi_in(22);
-    CHECK(sw_thr[0] == 21);
-    ctl_midi_in(99); ctl_midi_in(NRPN_MSB);
-    ctl_midi_in(101); ctl_midi_in(0);
-    ctl_midi_in(6);  ctl_midi_in(23);
-    CHECK(sw_thr[0] == 21);
+    ctl_midi_in(0xF0); ctl_midi_in(0x7D); ctl_midi_in(0x46); ctl_midi_in(0x43); ctl_midi_in(0x7F);
+    ctl_midi_in(SX_CMD_SET); ctl_midi_in(NP_TRIGGER); ctl_midi_in(31); ctl_midi_in(NP_TRIGGER + 1);
+    ctl_midi_in(32);
+    CHECK(sw_thr[0] == 20 && sw_thr[1] == 21);   // nothing until the F7
+    ctl_midi_in(CC_STATUS); ctl_midi_in(33); ctl_midi_in(0);
+    CHECK(sw_thr[0] == 20 && sw_thr[1] == 21);   // cut short: nothing at all
+    d[0] = NP_TRIGGER; d[1] = 34; d[2] = NP_TRIGGER + 1;
+    sx_send(0x7F, SX_CMD_SET, d, 3);             // an odd count: nothing
+    CHECK(sw_thr[0] == 20);
+    {
+        static uint8_t big[SX_SET_MAX + 2];
 
-    // Configuration mode ignores it, and entering it drops a dump in progress.
-    reset_world();
-    nrpn(NP_COMMAND, NC_DUMP);
-    ticks(1);
-    chord_long();
-    CHECK(mode == MODE_CONFIG && midi_job == 0);
+        for (i = 0; i < SX_SET_MAX + 2; i += 2)
+        {
+            big[i]     = NP_TRIGGER;
+            big[i + 1] = 35;
+        }
+
+        sx_send(0x7F, SX_CMD_SET, big, SX_SET_MAX + 2);   // too long: nothing
+        CHECK(sw_thr[0] == 20);
+        sx_send(0x7F, SX_CMD_SET, big, SX_SET_MAX);       // the most: taken
+        CHECK(sw_thr[0] == 35);
+    }
+    d[0] = BANK_COUNT + 1;
+    sx_send(0x7F, SX_CMD_GET, d, 1);
+    d[0] = 1; d[1] = 1;
+    sx_send(0x7F, SX_CMD_GET, d, 2);
+    CHECK(!sx_dump_due);
+    // The identity request still works around them.
+    sx_reply = 0;
     clear_log();
-    nrpn(NP_TRIGGER, 33);
-    nrpn(NP_COMMAND, NC_DUMP);
+    ctl_midi_in(0xF0); ctl_midi_in(0x7E); ctl_midi_in(0x7F); ctl_midi_in(0x06); ctl_midi_in(0x01); ctl_midi_in(0xF7);
+    CHECK(sx_reply);
+    sx_reply = 0;
+
+    // Configuration mode ignores it, and entering it drops a dump asked for.
+    reset_world();
+    sx_get(0);
+    chord_long();
+    CHECK(mode == MODE_CONFIG && !sx_dump_due);
+    clear_log();
+    mset(NP_TRIGGER, 33);
+    sx_get(0);
     ticks(5);
-    CHECK(sw_thr[0] == 0 && midi_len == 0 && midi_job == 0);
+    CHECK(sw_thr[0] == 0 && midi_len == 0 && !sx_dump_due);
     cancel_exit();
 
-    // Leaving configuration mode from a later page starts no dump (midi_job shares the
-    // page number) and leaves no parameter selected (nrpn_lsb shares the selected switch).
+    // Leaving configuration mode from a later page starts no dump and sets nothing.
     reset_world();
     chord_long();
     tap(CTL_KEY_UP); tap(CTL_KEY_UP); tap(CTL_KEY_UP);
@@ -4147,45 +4227,49 @@ static void test_midi_config(void)
     cancel_exit();
     clear_log();
     ticks(20);
-    CHECK(midi_len == 0 && midi_job == 0);
-    ctl_midi_in(CC_STATUS);
-    ctl_midi_in(99); ctl_midi_in(NRPN_MSB);
-    ctl_midi_in(6);  ctl_midi_in(9);
-    ticks(2);
-    CHECK(midi_len == 0 && pedal_mode_get(3) == DEFAULT_PEDAL_MODE && sw_thr[0] == 0 && midi_channel == MIDI_CHANNEL);
+    CHECK(midi_len == 0 && !sx_dump_due && pedal_mode_get(3) == DEFAULT_PEDAL_MODE && sw_thr[0] == 0);
 
-    // Save: at once, every record, as leaving configuration mode does; a dump requested
+    // Save: at once, every record, as leaving configuration mode does; a dump asked for
     // straight after does not cancel it.
     reset_world();
-    nrpn(NP_TRIGGER, 44);
-    nrpn(NP_NUM + 9, 3);
-    nrpn(NP_COMMAND, NC_SAVE);
-    nrpn(NP_COMMAND, NC_DUMP);
-    CHECK(cfg_saved == 1 && midi_job == 1);
+    mset(NP_TRIGGER, 44);
+    mset(NP_NUM + 9, 3);
+    mset(NP_COMMAND, NC_SAVE);
+    sx_get(0);
+    CHECK(cfg_saved == 1 && sx_dump_due);
     dump_run(1000);
-    CHECK(cfg_saved == 1 && cal_saved == 1 && bank_saved == 1 && msg_saved == 10 && midi_job == 0);
+    CHECK(cfg_saved == 1 && cal_saved == 1 && bank_saved == 1 && msg_saved == 10 && !sx_dump_due);
     CHECK(saved_sw(0, 2) == 44 && saved_msg[9][1] == 3 && saved_cfg[0] == MIDI_CHANNEL);
 
     // Reload: back to what the EEPROM holds; switches to their resting states.
     reset_world();
     set_mode(0, PM_STOMP);
     tap(sw_code(1));
-    nrpn(NP_TRIGGER, 44);
-    nrpn(NP_ON + 2, 5);
+    mset(NP_TRIGGER, 44);
+    mset(NP_ON + 2, 5);
     clear_log();
-    nrpn(NP_COMMAND, NC_RELOAD);
-    CHECK(sw_thr[0] == 0 && MSG_ON(2) == 127 && midi_job == 0);
+    mset(NP_COMMAND, NC_RELOAD);
+    CHECK(sw_thr[0] == 0 && MSG_ON(2) == 127);
     ticks(2);
     CHECK(leds[0] == (DEFAULT_PEDAL_MODE == PM_MOM_INV));
 
     // Calibration cannot be set over MIDI (user's request): the old heel / toe commands
-    // (4, 5) are ignored.
+    // (4, 5) are ignored, and so is the old dump command (1).
     reset_world();
     pedal(0, 20); pedal(1, 30);
-    nrpn(NP_COMMAND, 4);
+    mset(NP_COMMAND, 4);
     pedal(0, 200); pedal(1, 220);
-    nrpn(NP_COMMAND, 5);
-    CHECK(heel[0] == 0 && heel[1] == 0 && toe[0] == 255 && toe[1] == 255);
+    mset(NP_COMMAND, 5);
+    mset(NP_COMMAND, 1);
+    CHECK(heel[0] == 0 && heel[1] == 0 && toe[0] == 255 && toe[1] == 255 && !sx_dump_due);
+
+    // The old NRPN messages do nothing now (user's request: CCs reached other software).
+    reset_world();
+    ctl_midi_in(CC_STATUS);
+    ctl_midi_in(99); ctl_midi_in(0x46);
+    ctl_midi_in(98); ctl_midi_in(NP_TRIGGER);
+    ctl_midi_in(6);  ctl_midi_in(20);
+    CHECK(sw_thr[0] == 0);
 }
 
 // Store footswitch sw's (0-9) message in bank b (0-based) of the fake EEPROM, with mode m.
@@ -4567,15 +4651,9 @@ static void test_bank_pc(void)
     tap(CTL_KEY_UP);
     CHECK(midi_len == 2 && midi_log[1] == 5);
 
-    // A bank chosen over MIDI (NRPN bank parameter) sends its program change too.
+    // A bank chosen over MIDI (the bank parameter) sends its program change too.
     clear_log();
-    ctl_midi_in((uint8_t)(0xB0 | (MIDI_CHANNEL - 1)));
-    ctl_midi_in(99);
-    ctl_midi_in(NRPN_MSB);
-    ctl_midi_in(98);
-    ctl_midi_in(NP_BANK);
-    ctl_midi_in(6);
-    ctl_midi_in(2);
+    mset(NP_BANK, 2);
     ticks(1);
     CHECK(hal_bank == 1 && midi_len == 2 && midi_log[0] == PROG_CHG && midi_log[1] == 100);
 
@@ -4584,22 +4662,22 @@ static void test_bank_pc(void)
     dump_run(1000);
     CHECK(parse_dump(0) > 0 && dump_values[NP_BANK_PC] == 100 && dump_values[NP_BANK_PC_ON] == 1);
     // Off: none, and the program then reads 127; an unchanged off does nothing.
-    nrpn(NP_BANK_PC_ON, 0);
-    CHECK(bank_pc == 0 && nrpn_get(NP_BANK_PC) == 127 && nrpn_get(NP_BANK_PC_ON) == 0);
-    nrpn(NP_BANK_PC_ON, 0);
+    mset(NP_BANK_PC_ON, 0);
+    CHECK(bank_pc == 0 && param_get(NP_BANK_PC) == 127 && param_get(NP_BANK_PC_ON) == 0);
+    mset(NP_BANK_PC_ON, 0);
     CHECK(bank_pc == 0);
     // On again: the program it reads, 127. Values over 1 are ignored.
-    nrpn(NP_BANK_PC_ON, 1);
-    CHECK(bank_pc == 128 && nrpn_get(NP_BANK_PC) == 127);
-    nrpn(NP_BANK_PC_ON, 0);
-    nrpn(NP_BANK_PC_ON, 2);
+    mset(NP_BANK_PC_ON, 1);
+    CHECK(bank_pc == 128 && param_get(NP_BANK_PC) == 127);
+    mset(NP_BANK_PC_ON, 0);
+    mset(NP_BANK_PC_ON, 2);
     CHECK(bank_pc == 0);
     // Setting the program turns it on, even to the 127 it reads while off.
-    nrpn(NP_BANK_PC, 127);
+    mset(NP_BANK_PC, 127);
     CHECK(bank_pc == 128);
-    nrpn(NP_BANK_PC, 7);
-    CHECK(bank_pc == 8 && nrpn_get(NP_BANK_PC) == 7 && nrpn_get(NP_BANK_PC_ON) == 1);
-    // A dump fed back in changes nothing, whether on or off.
+    mset(NP_BANK_PC, 7);
+    CHECK(bank_pc == 8 && param_get(NP_BANK_PC) == 7 && param_get(NP_BANK_PC_ON) == 1);
+    // A dump fed back in is not a set: it changes nothing.
     clear_log();
     dump_run(1000);
     k = midi_len;
@@ -4608,21 +4686,14 @@ static void test_bank_pc(void)
     {
         ctl_midi_in(midi_log[n]);
     }
-    CHECK(bank_pc == 8);
-    nrpn(NP_BANK_PC_ON, 0);
-    clear_log();
-    dump_run(1000);
-    k = midi_len;
-    bank_pc = 50;
-    for (n = 0; n < k; n++)
-    {
-        ctl_midi_in(midi_log[n]);
-    }
+    CHECK(bank_pc == 0);
+    bank_pc = 8;
+    mset(NP_BANK_PC_ON, 0);
     CHECK(bank_pc == 0);
     // Nothing is sent for a set, and the save command stores it with the bank.
     clear_log();
-    nrpn(NP_BANK_PC, 33);
-    nrpn(NP_COMMAND, NC_SAVE);
+    mset(NP_BANK_PC, 33);
+    mset(NP_COMMAND, NC_SAVE);
     CHECK(midi_len == 0 && hal_bank == 1 && saved_y(1, 0) == 34);
 }
 
@@ -4887,28 +4958,30 @@ static void test_banks(void)
     stomp_banks(3);
     set_mode(0, PM_STOMP);
     store_bank_msg(2, 0, MT_NOTE, 61, 101, 31, PM_STOMP);
-    nrpn(NP_BANK, 0);
-    nrpn(NP_BANK, BANK_COUNT + 1);
-    nrpn(NP_BANKS, 5);
+    mset(NP_BANK, 0);
+    mset(NP_BANK, BANK_COUNT + 1);
+    mset(NP_BANKS, 5);
     ticks(1);
     CHECK(hal_bank == 0 && !bank_busy);
     tap(sw_code(1));
     clear_log();
-    nrpn(NP_BANK, 3);
-    nrpn(NP_COMMAND, NC_DUMP);
+    mset(NP_BANK, 3);
+    sx_get(0);
     CHECK(bank_busy && display == 3);
+    midi_space = 128;
     ticks(1);
+    midi_space = 15;
     // Switch 1 was on (a CC); bank 3's switch 1 is a note, so it is off. Nothing is sent
-    // but the dump, which starts once the change is done.
+    // but the dump, which goes once the change is done, and describes the new bank.
     CHECK(hal_bank == 2 && msg_type(0) == MT_NOTE && MSG_NUM(0) == 61 && leds[0] == 0);
-    CHECK(midi_len == 0 || midi_log[1] == 99);
+    CHECK(midi_len == SX_DUMP_LEN && parse_dump(0) == DUMP_PARAMS && dump_bank_of == 3);
     clear_log();
     dump_run(1000);
     parse_dump(0);
     CHECK(dump_values[NP_BANK] == 3 && dump_values[NP_BANKS] == BANK_COUNT && dump_values[NP_TYPE] == MT_NOTE &&
           dump_values[NP_NUM] == 61);
     // Saving over MIDI writes the current bank.
-    nrpn(NP_COMMAND, NC_SAVE);
+    mset(NP_COMMAND, NC_SAVE);
     CHECK(msg_was_saved[2 * BANK_RECS] && saved_msg[2 * BANK_RECS][1] == 61 && !msg_was_saved[0]);
 }
 
@@ -5201,9 +5274,9 @@ static void test_pedal_cc_config(void)
     // Over MIDI: NRPN 96 / 97, the bank in use; the pedal sends on it from then on.
     reset_world();
     pk_mask = 0;
-    CHECK(np_kind(NP_PEDAL_CC) == NK_SET && np_kind(NP_PEDAL_CC + 1) == NK_SET && np_kind(NP_READ_BANK + 1) == NK_NONE);
-    nrpn(NP_PEDAL_CC, 20);
-    CHECK(pedal_cc[0] == 20 && nrpn_get(NP_PEDAL_CC) == 20 && nrpn_get(NP_PEDAL_CC + 1) == cc_b);
+    CHECK(np_kind(NP_PEDAL_CC) == NK_SET && np_kind(NP_PEDAL_CC + 1) == NK_SET && np_kind(NP_COUNT) == NK_NONE);
+    mset(NP_PEDAL_CC, 20);
+    CHECK(pedal_cc[0] == 20 && param_get(NP_PEDAL_CC) == 20 && param_get(NP_PEDAL_CC + 1) == cc_b);
     pedal(0, 0);
     clear_log();
     pedal(0, 255);
@@ -5490,14 +5563,14 @@ static void test_pedal_pickup(void)
     // Over MIDI: NRPN 94 / 95 (0 or 1), the bank's pedal setting.
     reset_world();
     pk_mask = 0;
-    nrpn(NP_PICKUP + 1, 1);
-    CHECK(pk_mask == 2 && nrpn_get(NP_PICKUP) == 0 && nrpn_get(NP_PICKUP + 1) == 1);
-    nrpn(NP_PICKUP, 2);
+    mset(NP_PICKUP + 1, 1);
+    CHECK(pk_mask == 2 && param_get(NP_PICKUP) == 0 && param_get(NP_PICKUP + 1) == 1);
+    mset(NP_PICKUP, 2);
     CHECK(pk_mask == 2);
-    nrpn(NP_PICKUP, 1);
-    nrpn(NP_PICKUP, 1);
+    mset(NP_PICKUP, 1);
+    mset(NP_PICKUP, 1);
     CHECK(pk_mask == 3);
-    nrpn(NP_PICKUP + 1, 0);
+    mset(NP_PICKUP + 1, 0);
     CHECK(pk_mask == 1 && midi_len == 0);
     reset_world();
 }
@@ -6003,22 +6076,18 @@ static void test_config_indicators(void)
 // NP_READ_BANK starts a dump of that bank; the bank in use gives its live settings.
 static void test_read_bank(void)
 {
-    int n, ok;
-
-    printf("NRPN: reading another bank without changing bank\n");
+    printf("SysEx: reading another bank without changing bank\n");
     reset_world();
     store_bank_msg(1, 3, MT_NOTE, 64, 90, 10, PM_MOMENTARY);
     store_relay(1, 0, 1u << 2, 33, 0);
     store_y(1, 0, 6);                       // bank 2's program change: program 5
     store_y(1, 1, (uint8_t)(0x80 | 20));    // pedal A: CC 20, pickup
-    nrpn(NP_ON + 2, 5);                     // bank 1, live and not saved
+    mset(NP_ON + 2, 5);                     // bank 1, live and not saved
     ticks(2);                               // (inverted momentary: the old off goes out)
     clear_log();
-    nrpn(NP_READ_BANK, 2);
-    for (n = 0; n < 1000 && midi_job; n++) ticks(1);
-    n = parse_dump(0);
-    CHECK(n > 0 && dump_end && hal_bank == 0 && bank_next == 0 && !bank_busy && MSG_ON(2) == 5);
-    CHECK(dump_values[NP_READ_BANK] == 2 && dump_values[NP_BANK] == 1);
+    dump_run_bank(2, 1000);
+    CHECK(parse_dump(0) == DUMP_PARAMS && hal_bank == 0 && bank_next == 0 && !bank_busy && MSG_ON(2) == 5);
+    CHECK(dump_bank_of == 2 && dump_values[NP_BANK] == 1);
     CHECK(dump_values[NP_TYPE + 3] == MT_NOTE && dump_values[NP_NUM + 3] == 64 && dump_values[NP_ON + 3] == 90 &&
           dump_values[NP_OFF + 3] == 10 && dump_values[NP_MODE + 3] == PM_MOMENTARY);
     CHECK(dump_values[NP_FOLLOW1 + 2] == 1 && dump_values[NP_FOLLOW1 + 3] == 0 && dump_values[NP_TRIGGER] == 33);
@@ -6027,27 +6096,23 @@ static void test_read_bank(void)
     CHECK(dump_values[NP_ON + 2] == 127);   // bank 2's switch 3: the default
     // A bank never saved: its defaults (the note banks' notes).
     clear_log();
-    nrpn(NP_READ_BANK, NOTE_BANK_1 ? NOTE_BANK_1 : 3);
-    for (n = 0; n < 1000 && midi_job; n++) ticks(1);
+    dump_run_bank(NOTE_BANK_1 ? NOTE_BANK_1 : 3, 1000);
     parse_dump(0);
     CHECK(dump_values[NP_TYPE] == (NOTE_BANK_1 ? MT_NOTE : MT_CC) && dump_values[NP_BANK_PC_ON] == 0 &&
           dump_values[NP_PEDAL_CC + 1] == 11);
-    // The bank in use: live.
+    // The bank in use, by number or as 0: live.
     clear_log();
-    nrpn(NP_READ_BANK, 1);
-    for (n = 0; n < 1000 && midi_job; n++) ticks(1);
+    dump_run_bank(1, 1000);
     parse_dump(0);
-    CHECK(dump_values[NP_ON + 2] == 5 && dump_values[NP_READ_BANK] == 1);
-    // A dump fed back (CC 6 = 0) and out-of-range banks do nothing; sets still go live.
+    CHECK(dump_values[NP_ON + 2] == 5 && dump_bank_of == 1);
     clear_log();
-    nrpn(NP_READ_BANK, 0);
-    nrpn(NP_READ_BANK, BANK_COUNT + 1);
-    CHECK(midi_job == 0 && midi_len == 0);
-    nrpn(NP_ON + 2, 6);
+    dump_run_bank(0, 1000);
+    parse_dump(0);
+    CHECK(dump_values[NP_ON + 2] == 5 && dump_bank_of == 1);
+    // Sets still go live.
+    mset(NP_ON + 2, 6);
     CHECK(MSG_ON(2) == 6);
-    ok = 1;
     reset_world();
-    CHECK(ok);
 }
 
 // Reset to defaults (user's request): NRPN command 6, and power-on with footswitch 9
@@ -6060,10 +6125,10 @@ static void test_factory_reset(void)
     reset_world();
     cal_stored_valid = 1;
     stored_heel[0] = 20; stored_toe[0] = 220; stored_heel[1] = 0; stored_toe[1] = 255;
-    nrpn(NP_ON + 2, 5);
-    nrpn(NP_LEVEL, 30);
-    nrpn(NP_PEDAL_CC, 40);
-    nrpn(NP_COMMAND, NC_DEFAULTS);
+    mset(NP_ON + 2, 5);
+    mset(NP_LEVEL, 30);
+    mset(NP_PEDAL_CC, 40);
+    mset(NP_COMMAND, NC_DEFAULTS);
     CHECK(msg_saved == BANK_COUNT * STOMP_COUNT && bank_saved == BANK_COUNT && cfg_saved == 1 && cal_saved == 0);
     CHECK(saved_msg[2][2] == 127 && saved_cfg[0] == MIDI_CHANNEL && saved_cfg[2] == (LEVEL_VALID | LED_BRIGHTNESS));
 #if NOTE_BANK_1 > 0
@@ -6119,19 +6184,19 @@ static void test_global_settings(void)
 
     printf("config: global settings (NRPN, saving without the bank prompt)\n");
     reset_world();
-    nrpn(NP_LEVEL, 30);
+    mset(NP_LEVEL, 30);
     CHECK(led_level == 30 && hw_level == 30);
-    nrpn(NP_METRO, 1);
-    nrpn(NP_RUNSTAT, 1);
-    nrpn(NP_ASENSE, 1);
+    mset(NP_METRO, 1);
+    mset(NP_RUNSTAT, 1);
+    mset(NP_ASENSE, 1);
     CHECK(opt_metro && opt_runstat && opt_asense && midi_len == 0);
-    nrpn(NP_ASENSE, 1);
-    nrpn(NP_METRO, 2);
+    mset(NP_ASENSE, 1);
+    mset(NP_METRO, 2);
     CHECK(opt_asense && opt_metro);
-    nrpn(NP_ASENSE, 0);
+    mset(NP_ASENSE, 0);
     CHECK(!opt_asense);
     // In a dump (running status off, so every message has its status byte here).
-    nrpn(NP_RUNSTAT, 0);
+    mset(NP_RUNSTAT, 0);
     CHECK(!opt_runstat);
     clear_log();
     dump_run(1000);
@@ -6139,7 +6204,7 @@ static void test_global_settings(void)
     CHECK(n > 0 && dump_seen[NP_LEVEL] && dump_values[NP_LEVEL] == 30 && dump_values[NP_METRO] == 1 &&
           dump_values[NP_RUNSTAT] == 0 && dump_values[NP_ASENSE] == 0);
     // Saved by the save command, in the channel record.
-    nrpn(NP_COMMAND, NC_SAVE);
+    mset(NP_COMMAND, NC_SAVE);
     CHECK(saved_cfg[2] == (LEVEL_VALID | 30) && saved_cfg[3] == (MISC_VALID | 1));
     reset_world();
 
@@ -6429,24 +6494,12 @@ static void test_running_status(void)
     CHECK(midi_len == SX_REPLY_LEN);
     tap(0);
     CHECK(midi_len == SX_REPLY_LEN + 3 && midi_log[SX_REPLY_LEN] == CC_STATUS);
-    // A dump: one status byte for all of it with running status on, one per CC with it
-    // off (some interfaces read running-status data as notes).
+    // A dump is SysEx: it ends running status, so the next CC sends its status again.
+    tap(0);
     clear_log();
     dump_run(1000);
-    {
-        int on_len = midi_len, statuses = 0, k;
-
-        for (k = 0; k < midi_len; k++)
-        {
-            statuses += midi_log[k] >= 0x80;
-        }
-
-        CHECK(parse_dump(0) > 0 && dump_end && statuses == 0);
-        opt_runstat = 0;
-        clear_log();
-        dump_run(1000);
-        CHECK(parse_dump(0) > 0 && dump_end && midi_len == on_len + on_len / 2);
-    }
+    tap(0);
+    CHECK(parse_dump(0) == DUMP_PARAMS && midi_log[SX_DUMP_LEN] == CC_STATUS);
     reset_world();
 }
 
