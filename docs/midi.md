@@ -13,14 +13,39 @@ What the pedal sends and receives, and the NRPN messages that configure it.
 | Control change, pedals | CC 7 and CC 11 (`PEDAL_CC_LIST`) by default, any controller per pedal and bank (configuration pages 3 and 4, parameters 96 and 97), 0 to 127 | Ignored, except that a pickup pedal waits for its controller's value (see [Expression pedals](using.md#expression-pedals)) |
 | Program change | 0 to 127, on release of UP / DOWN; on choosing a footswitch bank that has a program change set (configuration page 7); a program change footswitch sends its ON value as the program when it turns ON and its OFF value when it turns OFF (with both the same, that program on every press) | Ignored |
 | NRPN (CC 99, 98, 6, 38) | Every setting, when asked for a dump | Settings and commands (see [Configuration over MIDI](#configuration-over-midi)) |
+| SysEx Identity Reply / Request | The Identity Reply, when asked | The Identity Request (see [Device identity](#device-identity)) |
 
 - Everything is on one channel: `MIDI_CHANNEL` until a channel is saved in configuration mode.
 - Received messages only set the pedal's own state and LEDs; nothing is echoed to MIDI OUT. The next footswitch press toggles from the received state: if CC 21 turned switch 1 ON, pressing switch 1 sends CC 21 value 0.
 - A received CC or note sets every footswitch with it, and so does one a footswitch sends (in run mode): footswitches sharing a CC or note share its state. A bank change passes each CC's and note's state on to the new bank's footswitches by the same rule and sends nothing but the bank's program change, if set.
-- The receiver handles running status and split messages, ignores real-time bytes (clock, active sensing), SysEx, other channels and other controller numbers. Received messages are ignored in configuration mode.
+- The receiver handles running status and split messages, ignores real-time bytes (clock, active sensing), SysEx other than the Identity Request, other channels and other controller numbers. Received messages are ignored in configuration mode, except the Identity Request.
 - Pedal positions and the program number are not set by MIDI IN, and no state is remembered at power-off.
 - A pedal sends a new value only after its reading moves `PEDAL_HYST` counts, and readings near the calibrated ends snap to 0 and 127 (`PEDAL_END_SNAP`).
 - If MIDI OUT is full, a footswitch press is ignored rather than changing a state the receiver never hears about. A stomp with momentary revert that cannot be sent at release is sent as soon as there is room.
+
+## Device identity
+
+The pedal answers the standard MIDI Identity Request (Universal Non-Realtime SysEx, General Information), so MIDI software can find it and read its firmware version:
+
+```
+F0 7E <device> 06 01 F7
+```
+
+`<device>` is 7F (all devices) or the pedal's MIDI channel minus 1 (00 for channel 1); a request for any other device is ignored. It is answered in run mode and in configuration mode, as soon as MIDI OUT has room for the reply:
+
+```
+F0 7E <channel - 1> 06 02 7D 46 43 31 30 <major> <minor> <build> <high bits> F7
+```
+
+| Bytes | Meaning |
+|---|---|
+| `7D` | Manufacturer ID: 7D is the ID set aside for non-commercial use |
+| `46 43` | Device family: "FC" in ASCII |
+| `31 30` | Family member: "10" in ASCII |
+| `<major> <minor> <build>` | The firmware version (as page 8 shows it), bits 0 to 6 of each |
+| `<high bits>` | Bit 7 of the major (bit 0), minor (bit 1) and build (bit 2) numbers, for versions and builds of 128 and up |
+
+Any other SysEx message is ignored.
 
 ## Configuration over MIDI
 

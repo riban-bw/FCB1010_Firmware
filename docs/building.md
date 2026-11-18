@@ -20,7 +20,7 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser editor in `editor/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 14.9KB (15272 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
+The code is about 15.7KB (16115 bytes at the last build), so it needs a 16KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit).
 
 Each build also updates the documentation: the code size above, the firmware version on configuration page 8 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
@@ -61,14 +61,16 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `PEDAL_END_SNAP` | 2 | Readings this close (ADC counts) to the calibrated heel or toe send exactly 0 or 127 |
 | `CAL_MIN_SPAN` | 40 | Smallest heel-to-toe movement (ADC counts) accepted by calibration |
 | `CAL_ERROR_SHOW_MS` | 2000 | How long (ms) `Er` shows after a refused calibration, then the pedal's value. A multiple of `CHANNEL_DIGIT_FLASH_MS`, up to 255 of them |
-| `CHANNEL_DIGIT_FLASH_MS` | 250 | Flash half-period (ms) of the `0` after switch 10 on the channel page |
-| `CHANNEL_DIGIT_TIMEOUT_MS` | 5000 | How long (ms) the channel page waits for a second digit after switch 10 |
+| `CHANNEL_DIGIT_FLASH_MS` | 250 | Flash half-period (ms) of the right-hand dot while a typed number can take another digit (also `Lo` / `Hi` in calibration and the save prompt's bank number) |
+| `CONFIG_SHOW_MS` | 800 | How long (ms) configuration page 1 shows each of the selected footswitch's settings. A multiple of 50 |
 | `CONFIG_CHANGED_FLASH_MS` | 250 | CONFIG LED flash half-period (ms) while a change is unsaved |
 | `MIDI_RX_FLASH_MS` | 60 | How long (ms) the MIDI CHAN LED lights for each received byte |
 | `MIDI_TX_FLASH_MS` | 60 | How long (ms) the MIDI FUNCTION LED lights for each message sent |
 | `BANK_PC_LABEL_MS` | 1000 | How long (ms) configuration page 7 shows `Pr`, then the program, in turn. A multiple of 50, up to 6350 |
 | `SCROLL_FRAME_MS` | 200 | Time (ms) each frame of the "riban" scroll shows; power-on is ten frames (3 seconds at 300); smaller scrolls faster. A multiple of 50, at least 100 |
 | `BOOT_LAMP_MS` | 1000 | Time (ms) from power-on that every LED is lit, before the normal LEDs show while the scroll finishes. A multiple of 50 |
+| `LAMP_TEST_MS` | 1000 | Time (ms) every LED is lit on entering configuration page 8, before the chase. A multiple of 50 |
+| `LAMP_CHASE_MS` | 100 | Time (ms) each panel LED is lit in page 8's chase along the row and back. A multiple of 50 |
 | `VERSION_SHOW_MS` | 1000 | Time (ms) each version part shows on page 8. A multiple of 50; 10 x `SCROLL_FRAME_MS` + 4 x `VERSION_SHOW_MS` must be at most 12750 |
 | `DEBOUNCE_SAMPLES` | 3 | Consecutive key scans (12ms apart) that must agree before a press or release counts |
 | `KEY_ACTIVE_LEVEL` | 1 | Input level of a pressed key. Change it if every key reads inverted |

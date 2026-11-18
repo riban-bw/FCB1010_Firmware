@@ -383,12 +383,13 @@ check "then the first riban frame, the scroll's r (A B E F) with the dot after t
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | sed -n 2p | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$R_EXPECT"
 check "after the scroll the display shows the major version (units, tens, left: $VER_EXPECT)" \
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | tail -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$VER_EXPECT"
-# The channel page taps changed the channel, so a change is unsaved: on page 8 LED rows 3
-# and 4 (commons 0x08, 0x10) stay lit, and in row 5 (0x20) everything is lit
-# except the CONFIG bit (0x40), which flashes, so both levels are seen.
-# Rows 3 and 4 hold the footswitch LEDs, which blink one at a time (switches 4 and 5
-# are row 3's 0x80 / 0x40, the other eight all of row 4), so those rows show 0x00 or
-# one dark footswitch bit; any other aux LED dark in row 3 fails.
+# The channel page taps changed the channel, so a change is unsaved. By now (past the
+# LAMP_TEST_MS lamp test) page 8 shows the chase: one panel LED lit at a time (row 3's
+# SWITCH 1 / 2 and the MIDI / EXP bits, row 5's SWITCH, SELECT to VALUE 2 and DIRECT
+# SELECT), and a footswitch LED lit at the start of each segment (switches 4 and 5 are
+# row 3's 0x80 / 0x40, the other eight all of row 4). Lit is a low bit. So no row shows
+# more than one chase LED and one footswitch LED; row 5's CONFIG bit (0x40) flashes, so
+# both levels are seen; and the chase is seen in rows 3 and 5, a footswitch LED lit.
 # A second run to the same point, then about 1 s of latch samples (commons at 0x1FF8,
 # segments at 0x1FF9). s51 echoes queued input into its output, so the dump lines are
 # picked out by pattern, and kept apart from the checks above.
@@ -401,20 +402,29 @@ s51 -t 80C32 -X 12M -S out="$TMP/s10b.out" "$IHX" < "$TMP/s10b.txt" > "$TMP/s10b
 # s51 prints a dump either as one line (0x1ff8, both bytes) or one line per byte; both
 # are paired up here. Too few samples fails rather than passing on nothing.
 LAMP10=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s10b.console" | awk '
-    # 0xff is the ISR blanking the row before driving it (sampled mid-ISR): skipped.
-    function sample(c, v) {
+    BEGIN { for (i = 0; i < 16; i++) hexv[substr("0123456789abcdef", i + 1, 1)] = i }
+    # The lit (low) bits of v among mask m, counted.
+    function lit(v, m,   x, k, n) {
+        x = hexv[substr(v, 1, 1)] * 16 + hexv[substr(v, 2, 1)]
+        n = 0
+        for (k = 1; k < 256; k *= 2) if (int(m / k) % 2 == 1 && int(x / k) % 2 == 0) n++
+        return n
+    }
+    # 0xff is the ISR blanking the row before driving it (sampled mid-ISR), or a row with
+    # nothing lit: skipped (so about 60% of the samples count).
+    function sample(c, v,   fs, ch) {
         if (v == "ff") return
         total++
-        if (c == "08") { if (v != "00" && v != "40" && v != "80") bad = 1 }
-        if (c == "10") { if (v !~ /^(00|01|02|04|08|10|20|40|80)$/) bad = 1; else if (v != "00") blink = 1 }
-        if (c == "20") { n++; if (v == "40") off = 1; else if (v == "00") on = 1; else bad = 1 }
+        if (c == "08") { fs = lit(v, 192); ch = lit(v, 63); if (fs > 1 || ch > 1) bad = 1; if (ch) chase3 = 1; if (fs) blink = 1 }
+        if (c == "10") { fs = lit(v, 255); if (fs > 1) bad = 1; if (fs) blink = 1 }
+        if (c == "20") { n++; ch = lit(v, 191); if (ch > 1) bad = 1; if (ch) chase5 = 1; if (lit(v, 64)) on = 1; else off = 1 }
     }
     $1 == "0x1ff8" && NF == 3 { sample($2, $3); com = ""; next }
     $1 == "0x1ff8" { com = $2; next }
     $1 == "0x1ff9" && com != "" { sample(com, $2); com = "" }
-    END { print (bad ? "bad" : "ok"), (total >= 200 ? "enough" : "few:" total + 0), (n >= 20 ? "many" : n + 0), on + 0, off + 0, blink + 0 }')
-check "page 8 with an unsaved change: LEDs lit, CONFIG flashing, a footswitch LED blinking (state, samples, row-5 samples, CONFIG lit, CONFIG dark, footswitch dark)" \
-      "$LAMP10" "ok enough many 1 1 1"
+    END { print (bad ? "bad" : "ok"), (total >= 150 ? "enough" : "few:" total + 0), (n >= 20 ? "many" : n + 0), on + 0, off + 0, chase3 + 0, chase5 + 0, blink + 0 }')
+check "page 8 with an unsaved change: the chase, CONFIG flashing, a footswitch LED lit (state, samples, row-5 samples, CONFIG lit, CONFIG dark, chase row 3, chase row 5, footswitch lit)" \
+      "$LAMP10" "ok enough many 1 1 1 1 1"
 # The entry chord taps all ten stomps in run mode (their CCs); page changes send no program.
 check "no program change was sent" "$(messages "$TMP/s10.out" | tr ' ' '\n' | grep -c '^c')" "0"
 

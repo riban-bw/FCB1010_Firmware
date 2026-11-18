@@ -60,7 +60,7 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 #define CTL_INSPECT_SENT_B         11
 #define CTL_INSPECT_RELAYS         12
 #define CTL_INSPECT_CAL_MIN_SPAN   13
-// The footswitch editor: 0 closed, else 1 + its parameter (type, number, on value, off
+// The footswitch editor: 0 closed, else 1 + its parameter (pedal mode, type, number, on value, off
 // value).
 #define CTL_INSPECT_EDIT           14
 // The loaded footswitch bank, from 0.
@@ -89,6 +89,10 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 #define CTL_INSPECT_SAVE           75
 // EXP pages: 1 while a heel / toe footswitch's Lo / Hi flashes (the next press takes it).
 #define CTL_INSPECT_CAL_ARMED      76
+// Number entry: bit 0 a number is being typed (more digits can follow), bit 1 it starts
+// at 1. Page 1: the setting shown (0 pedal mode, 1 type, 2 number, 3 on, 4 off).
+#define CTL_INSPECT_NUM            77
+#define CTL_INSPECT_SHOWN          78
 
 uint8_t ctl_inspect(uint8_t what);
 #endif

@@ -38,6 +38,10 @@ volatile __xdata __at (PERIPHERAL_BASE) uint8_t PERIPHERALS[8];
 // digits; this is unverified on a real unit.
 // led_map[3..5] = discrete LEDs. A cleared bit lights the LED.
 static volatile uint8_t led_map[6];
+// Rows 3 and 4 (the footswitch LEDs): a cleared bit lights the LED dimly. The scan drives
+// these with the row's lit LEDs only at the start of its slot, for the time the key scan
+// takes (about a twentieth of the slot), then the lit LEDs alone (user's request).
+static volatile IDATA uint8_t led_dim[2];
 
 static const CODE uint8_t stomp_led_row[10]  = { 4, 4, 4, 3, 3, 4, 4, 4, 4, 4 };
 static const CODE uint8_t stomp_led_mask[10] = { 0x04, 0x02, 0x01, 0x80, 0x40,
@@ -47,10 +51,8 @@ static const CODE uint8_t stomp_led_mask[10] = { 0x04, 0x02, 0x01, 0x80, 0x40,
 #define STATUS_LED_MASK 0x40
 
 // Lamp test with every LED lit (rows 3-5): the led_map bits that still follow their
-// own state. HAL_LAMP_LEDS_ON keeps only CONFIG; HAL_LAMP_LEDS_STOMPS keeps the
-// footswitch LEDs too (row 3: switches 4 and 5; row 4: the other eight).
+// own state. HAL_LAMP_LEDS_ON keeps only CONFIG.
 static const CODE uint8_t lamp_keep_leds[3]   = { 0x00, 0x00, STATUS_LED_MASK };
-static const CODE uint8_t lamp_keep_stomps[3] = { 0xC0, 0xFF, STATUS_LED_MASK };
 
 // Segment bits: A=0x80 B=0x40 C=0x20 D=0x10 E=0x08 F=0x04 G=0x02
 // 0-9, then the hex letters A b C d E F for hal_display_hex.
@@ -59,18 +61,27 @@ static const CODE uint8_t digit_segments[16] = {
     0xEE, 0x3E, 0x9C, 0x7A, 0x9E, 0x8E
 };
 
-void hal_stomp_led(uint8_t index, uint8_t on)
+void hal_stomp_led(uint8_t index, uint8_t level)
 {
     uint8_t row  = stomp_led_row[index];
     uint8_t mask = stomp_led_mask[index];
 
-    if (on)
+    if (level == HAL_STOMP_ON)
     {
         led_map[row] &= (uint8_t)~mask;
     }
     else
     {
         led_map[row] |= mask;
+    }
+
+    if (level == HAL_STOMP_DIM)
+    {
+        led_dim[row - 3] &= (uint8_t)~mask;
+    }
+    else
+    {
+        led_dim[row - 3] |= mask;
     }
 }
 
@@ -92,10 +103,11 @@ void hal_status_led(uint8_t on)
 // SWITCH 1 and SWITCH 2 are the reference table's LED_SWITCH_1 / LED_SWITCH_2 (row 3,
 // masks 0x10 and 0x20), not its status LED_SWITCH.
 // SELECT, NUMBER, VALUE 1 and VALUE 2 are the reference table's LED_SELECT, LED_NUMBER,
-// LED_VALUE_1 and LED_VALUE_2 (row 5, masks 0x10, 0x08, 0x04, 0x02).
-static const CODE uint8_t aux_led_row[HAL_LED_COUNT]  = { 3, 3, 3, 3, 5, 3, 3, 5, 5, 5, 5 };
+// LED_VALUE_1 and LED_VALUE_2 (row 5, masks 0x10, 0x08, 0x04, 0x02), and SWITCH its
+// status LED_SWITCH (row 5, mask 0x20).
+static const CODE uint8_t aux_led_row[HAL_LED_COUNT]  = { 3, 3, 3, 3, 5, 3, 3, 5, 5, 5, 5, 5 };
 static const CODE uint8_t aux_led_mask[HAL_LED_COUNT] = { 0x02, 0x01, 0x08, 0x04, 0x01, 0x10, 0x20,
-                                                          0x10, 0x08, 0x04, 0x02 };
+                                                          0x10, 0x08, 0x04, 0x02, 0x20 };
 
 void hal_aux_led(uint8_t which, uint8_t on)
 {
@@ -176,9 +188,9 @@ void hal_display(uint8_t value)
 // b = C D E F G). The scroll has its own r, SCROLL_R (user's design), and its a is
 // SCROLL_A, lowercase or uppercase.
 // Then the footswitch message types: "CC" = C (A D E F) twice; "nt" = n, t (D E F G);
-// "Pr" = P (A B E F G), a small r (E G; user's request). Then "--" (G twice), then "PU"
-// = P, U (B C D E F). Then the pedal modes: "St" = S (A C D F G), t; "St" again (with
-// "+"); "Pu" = P, a small u (C D E); "Pu" again (with "-").
+// "Pr" = P (A B E F G), a small r (E G; user's request). Then "--" (G twice), then "Ab"
+// (A B C E F G, b). Then the pedal modes: "St" = S (A C D F G), t; "St" again (with
+// "+"); "Pu" = P, a small u (C D E); "Pu" again (with "-"). Then "PU" = P, U (B C D E F).
 // Bits: A 0x80, B 0x40, C 0x20, D 0x10, E 0x08, F 0x04, G 0x02 (0x01 is the dot).
 #define SCROLL_R 0xCC   // A B E F: the r with its top-right corner
 #define SCROLL_A 0xFA   // lowercase a, A B C D E G (uppercase A is 0xEE, A B C E F G)
@@ -186,7 +198,7 @@ static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
     0x9E, 0x8C, 0x1C, 0xFC, 0x6E, 0x0C,
     0x00, SCROLL_R, SCROLL_R, 0x0C, 0x0C, 0x3E, 0x3E, SCROLL_A, SCROLL_A, 0xEC, 0xEC, 0x00,
     0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x0A, 0x02, 0x02, 0xEE, 0x3E,
-    0xB6, 0x1E, 0xB6, 0x1E, 0xCE, 0x38, 0xCE, 0x38
+    0xB6, 0x1E, 0xB6, 0x1E, 0xCE, 0x38, 0xCE, 0x38, 0xCE, 0x7C
 };
 
 // The leftmost position's sign, lit with its "1" (B C). G drives the "-" bar (seen on a
@@ -310,7 +322,9 @@ static uint8_t scan_column;
 // Relay outputs: bits 0 and 1 of the key column latch
 static volatile uint8_t relay_bits;
 static volatile BIT_T lamp_leds_on;
-static volatile BIT_T lamp_stomps;
+static volatile BIT_T lamp_all_on;
+// The segments for this scan slot without the dim LEDs, written at the end of the ISR.
+static uint8_t scan_seg;
 
 // Scans each key has been down since its debounced press (stops counting at the threshold).
 static XDATA uint8_t hold[KEY_COUNT];
@@ -339,13 +353,14 @@ void timer0_isr(void) __interrupt(1)
     PERIPHERALS[P_LATCH_SEGMENTS] = 0xFF;
     PERIPHERALS[P_LATCH_COMMONS]  = scan_common;
     // A cleared bit lights, so 0x00 lights the whole row.
-    PERIPHERALS[P_LATCH_SEGMENTS] = (lamp_leds_on && scan_row >= 3) ?
-                                    // Every LED lit except CONFIG (it flashes for
-                                    // unsaved changes) and, in HAL_LAMP_LEDS_STOMPS,
-                                    // the footswitch LEDs, which keep their own state.
-                                    (led_map[scan_row] & (lamp_stomps ? lamp_keep_stomps[scan_row - 3] :
-                                                                        lamp_keep_leds[scan_row - 3])) :
-                                    led_map[scan_row];
+    scan_seg = lamp_all_on ? 0x00 :
+               (lamp_leds_on && scan_row >= 3) ?
+               // Every LED lit except CONFIG (it flashes for unsaved changes).
+               (uint8_t)(led_map[scan_row] & lamp_keep_leds[scan_row - 3]) :
+               led_map[scan_row];
+    // The dim footswitch LEDs too, until the end of the ISR.
+    PERIPHERALS[P_LATCH_SEGMENTS] = (scan_row == 3 || scan_row == 4) ?
+                                    (uint8_t)(scan_seg & led_dim[scan_row - 3]) : scan_seg;
     PERIPHERALS[P_DUMMY_MUX]      = 0;
 
     scan_row++;
@@ -381,13 +396,17 @@ void timer0_isr(void) __interrupt(1)
         scan_column = 4;
     }
 
+    // The rest of the slot: only the LEDs that are fully lit.
+    PERIPHERALS[P_LATCH_SEGMENTS] = scan_seg;
+    PERIPHERALS[P_DUMMY_MUX]      = 0;
+
     ticks++;
 }
 
 void hal_lamp_test(uint8_t how)
 {
-    lamp_leds_on = (how == HAL_LAMP_LEDS_ON || how == HAL_LAMP_LEDS_STOMPS);
-    lamp_stomps  = (how == HAL_LAMP_LEDS_STOMPS);
+    lamp_leds_on = (how == HAL_LAMP_LEDS_ON);
+    lamp_all_on  = (how == HAL_LAMP_ALL_ON);
 }
 
 void hal_relays(uint8_t mask)
@@ -657,6 +676,9 @@ void hw_init(void)
     {
         led_map[i] = 0xFF;
     }
+
+    led_dim[0] = 0xFF;
+    led_dim[1] = 0xFF;
 
     // The key tables are in the external SRAM, which holds random data at power-on.
     for (i = 0; i < KEY_COUNT; i++)

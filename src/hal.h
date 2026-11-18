@@ -15,8 +15,12 @@ uint8_t hal_midi_rx(IDATA uint8_t *byte);
 // Number of bytes that can still be queued for MIDI OUT.
 uint8_t hal_midi_space(void);
 
-// Light or clear the LED above footswitch index 0..9 (switch 1..10).
-void    hal_stomp_led(uint8_t index, uint8_t on);
+// Set the LED above footswitch index 0..9 (switch 1..10): HAL_STOMP_OFF, HAL_STOMP_ON, or
+// HAL_STOMP_DIM (lit faintly: an option that can be chosen, user's request).
+#define HAL_STOMP_OFF   0
+#define HAL_STOMP_ON    1
+#define HAL_STOMP_DIM   2
+void    hal_stomp_led(uint8_t index, uint8_t level);
 
 // Light or clear the CONFIG status LED.
 void    hal_status_led(uint8_t on);
@@ -35,7 +39,9 @@ void    hal_status_led(uint8_t on);
 #define HAL_LED_NUMBER     8
 #define HAL_LED_VALUE_1    9
 #define HAL_LED_VALUE_2    10
-#define HAL_LED_COUNT      11
+// The panel's SWITCH LED, between SWITCH 2 and SELECT (only lit by the lamp test).
+#define HAL_LED_SWITCH     11
+#define HAL_LED_COUNT      12
 
 void    hal_aux_led(uint8_t which, uint8_t on);
 
@@ -86,7 +92,9 @@ void    hal_display(uint8_t value);
 // momentary), "Pu" (momentary, push), "-Pu" (inverted momentary), the sign on the
 // leftmost position.
 #define HAL_TEXT_MODE           (HAL_TEXT_CC + 5)
-#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 4)
+// "PU": an expression pedal in pickup mode (the pedal page shows it with both dots, "P.U.").
+#define HAL_TEXT_PICKUP         (HAL_TEXT_MODE + 4)
+#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 5)
 
 void    hal_display_text(uint8_t text);
 
@@ -107,13 +115,15 @@ void    hal_display_hex(uint8_t value);
 void    hal_display_dots(uint8_t mask);
 
 #define HAL_LAMP_NORMAL   0
-// 1 and 2 were every LED and segment lit / dark, no longer used.
+// Every LED and every display segment and dot lit, CONFIG included.
+#define HAL_LAMP_ALL_ON   1
+// 2 was every LED and segment dark, no longer used.
 #define HAL_LAMP_LEDS_ON  3
-// As HAL_LAMP_LEDS_ON, but the footswitch LEDs also follow hal_stomp_led().
-#define HAL_LAMP_LEDS_STOMPS 4
+// 4 was HAL_LAMP_LEDS_ON with the footswitch LEDs following hal_stomp_led(), no longer used.
 
-// Lamp test: light every LED but show the display normally, or go back to showing the
-// normal LED and display state (which is kept meanwhile).
+// Lamp test: light every LED but show the display normally (HAL_LAMP_LEDS_ON), light
+// everything (HAL_LAMP_ALL_ON), or go back to showing the normal LED and display state
+// (which is kept meanwhile).
 // HAL_LAMP_LEDS_ON leaves the CONFIG LED following hal_status_led(), so it can
 // still flash for unsaved changes on the version page.
 void    hal_lamp_test(uint8_t how);

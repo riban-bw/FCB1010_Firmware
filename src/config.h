@@ -23,11 +23,14 @@
 #define CONFIG_HOLD_MS 1000
 #endif
 
-// Channel page: after switch 10 the display shows 10 and its 0 flashes at this
-// half-period while a second digit can be entered; after the timeout the channel stays
-// 10. The timeout must be a whole number of half-periods.
+// Configuration mode: while a typed number can take more digits, the right-hand dot
+// flashes at this half-period (also the flashing Lo / Hi of the calibration and the save
+// prompt's alternating bank number).
 #define CHANNEL_DIGIT_FLASH_MS    250
-#define CHANNEL_DIGIT_TIMEOUT_MS  5000
+
+// Configuration page 1 shows the selected footswitch's settings in turn (pedal mode,
+// type, number, on value, off value), each for this long. A multiple of 50.
+#define CONFIG_SHOW_MS            800
 
 // Configuration mode: once any setting has been changed, the CONFIG LED flashes
 // (this long on, then the same off) until the changes are saved or cancelled.
@@ -44,8 +47,9 @@
 // each for this long. A multiple of 50, up to 6350.
 #define BANK_PC_LABEL_MS          1000
 
-// Power-on and configuration page 8: every LED lights (once, and stays lit) while
-// ". riban ." scrolls across the display, one frame per SCROLL_FRAME_MS (ten frames, so
+// Power-on and configuration page 8: every LED lights (at power-on for BOOT_LAMP_MS, on
+// page 8 for LAMP_TEST_MS) while ". riban ." scrolls across the display, one frame per
+// SCROLL_FRAME_MS (ten frames, so
 // power-on takes 10 x SCROLL_FRAME_MS, the start-up settling included). Power-on then
 // goes to run mode. Page 8 then shows the firmware version, each part (major, minor,
 // build) for VERSION_SHOW_MS, then a blank display for the same time, and repeats.
@@ -57,10 +61,14 @@
 #endif
 #define VERSION_SHOW_MS           1000
 // At power-on every LED lights for BOOT_LAMP_MS (from power-on, a multiple of 50), then
-// shows its normal state while the scroll finishes. Page 8 keeps them lit throughout.
+// shows its normal state while the scroll finishes.
 #ifndef BOOT_LAMP_MS
 #define BOOT_LAMP_MS              1000
 #endif
+// Page 8 lights every LED for LAMP_TEST_MS from entry, then lights the panel LEDs one at
+// a time along the row and back, LAMP_CHASE_MS each. Both multiples of 50, up to 12750.
+#define LAMP_TEST_MS              1000
+#define LAMP_CHASE_MS             100
 
 // Number of footswitches acting as stomp switches (switches 1..10).
 #define STOMP_COUNT 10

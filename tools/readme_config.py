@@ -99,8 +99,8 @@ RULES = [
     (r"Hold UP and DOWN together for ([\d.]+ seconds?)", [sec_words(config_hold)]),
     (r"[Hh]old UP \(ENTER\) for ([\d.]+ seconds?)", [sec_words(hold)]),
     (r"hold DOWN \(ESCAPE\) for ([\d.]+ seconds?)", [sec_words(hold)]),
-    (r"Switch 10 flashes `0` for ([\d.]+ seconds?)", [sec_words(num("CHANNEL_DIGIT_TIMEOUT_MS"))]),
-    (r"After ([\d.]+ seconds?), or on a page change", [sec_words(num("CHANNEL_DIGIT_TIMEOUT_MS"))]),
+    (r"shows each of its settings for ([\d.]+ seconds?)", [sec_words(num("CONFIG_SHOW_MS"))]),
+    (r"every LED lights for ([\d.]+ seconds?)", [sec_words(num("LAMP_TEST_MS"))]),
     # Technical reference
     (CC_PATTERN + r" \(`STOMP_CC_LIST`\)", [cc_words(stomp_cc)]),
     (r"CC (\d+) and CC (\d+) \(`PEDAL_CC_LIST`\)", [pedal_cc[0], pedal_cc[1]]),
