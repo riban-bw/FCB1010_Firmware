@@ -14,6 +14,7 @@ What the pedal sends and receives, and the NRPN messages that configure it.
 | Program change | 0 to 127, on release of UP / DOWN; on choosing a footswitch bank that has a program change set (configuration page 7); a program change footswitch sends its ON value as the program when it turns ON and its OFF value when it turns OFF (with both the same, that program on every press) | Ignored |
 | NRPN (CC 99, 98, 6, 38) | Every setting, when asked for a dump | Settings and commands (see [Configuration over MIDI](#configuration-over-midi)) |
 | SysEx Identity Reply / Request | The Identity Reply, when asked and once at power-on | The Identity Request (see [Device identity](#device-identity)) |
+| Active sensing (FE) | Every 250ms when turned on (configuration page 8) | Ignored |
 | MIDI clock, Start, Continue, Stop, Song Position Pointer | Nothing | The visual metronome, when it is on (configuration page 8; see [Misc settings](configuration.md#misc-settings)) |
 
 - Everything is on one channel: `MIDI_CHANNEL` until a channel is saved in configuration mode.

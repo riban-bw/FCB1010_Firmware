@@ -14,7 +14,7 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 - Footswitches that send the same controller or note share its state, in every bank
 - Follows incoming MIDI, so its state stay in step with your DAW or synth
 - Visual metronome: the display flashes with the beat of incoming MIDI clock, marking beat 1
-- Answers the MIDI Identity Request (and sends its identity at power-on), so MIDI software can find it; optional running status on MIDI OUT
+- Answers the MIDI Identity Request (and sends its identity at power-on), so MIDI software can find it; optional running status and active sensing on MIDI OUT
 - Selectable (global) MIDI channel
 - Simple configuration on the pedal with ability to save to other banks, e.g. copy bank configuration
 - Configure it from a computer over MIDI, with a web page (no special software or SysEx) with a device simulator

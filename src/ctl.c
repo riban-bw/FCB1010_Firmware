@@ -67,10 +67,12 @@
 #define PED_PICKUP      7
 #define PED_CAL         8
 #define PED_MASK        ((1u << PED_CC) | (1u << PED_PICKUP) | (1u << PED_CAL))
-// Page 8, misc: footswitch 1 the visual metronome, 9 running status (user's layout).
+// Page 8, misc: footswitch 1 the visual metronome (MIDI clock display), 9 running
+// status, 10 active sensing (user's layout).
 #define MISC_METRO      0
 #define MISC_RUNSTAT    8
-#define MISC_MASK       ((1u << MISC_METRO) | (1u << MISC_RUNSTAT))
+#define MISC_ASENSE     9
+#define MISC_MASK       ((1u << MISC_METRO) | (1u << MISC_RUNSTAT) | (1u << MISC_ASENSE))
 
 // A relay's follow mask: bits 0-9 are footswitches 1-10, this bit is bank mode (the UP +
 // DOWN toggle, DIRECT SELECT lit).
@@ -383,11 +385,20 @@ static IDATA uint8_t  sx_hi;
 #define SX_SKIP       6
 #define SX_REPLY_LEN  15
 // Misc settings (shared by every bank, in the channel record's byte 3: bit 0 the
-// metronome, bit 1 running status, bit 7 set).
+// metronome, bit 1 running status, bit 2 active sensing, bit 7 set).
 #define MISC_VALID    0x80
-#define MISC_DEFAULT  (uint8_t)(MISC_VALID | (DEFAULT_METRONOME ? 1 : 0) | (DEFAULT_RUNNING_STATUS ? 2 : 0))
+#define MISC_DEFAULT  (uint8_t)(MISC_VALID | (DEFAULT_METRONOME ? 1 : 0) | (DEFAULT_RUNNING_STATUS ? 2 : 0) | \
+                              (DEFAULT_ACTIVE_SENSING ? 4 : 0))
 static BIT_T          opt_metro;
 static BIT_T          opt_runstat;
+// Active sensing (FE) on MIDI OUT every ACTIVE_SENSE_MS while on (bit 2), and the ticks
+// to the next.
+static BIT_T          opt_asense;
+static IDATA uint8_t  as_ticks;
+#define AS_TICKS      (ACTIVE_SENSE_MS / TICK_MS)
+#if AS_TICKS < 1 || AS_TICKS > 255
+#error "ACTIVE_SENSE_MS must be 2 to 510"
+#endif
 // The last status byte sent (0 none, or after a system message), for running status.
 static IDATA uint8_t  tx_last;
 // The visual metronome: MIDI clock running (after Start or Continue, until Stop), the
@@ -713,7 +724,7 @@ static void rec_pack(void)
         hal_rec[0] = midi_channel;
         hal_rec[1] = 0;
         hal_rec[2] = 0;
-        hal_rec[3] = (uint8_t)(MISC_VALID | (opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0));
+        hal_rec[3] = (uint8_t)(MISC_VALID | (opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (opt_asense ? 4 : 0));
     }
 }
 
@@ -792,7 +803,7 @@ static void rec_read(void)
         // no older record set: without it, the defaults.
         hal_rec[1] = 0;
         hal_rec[2] = 0;
-        hal_rec[3] = (hal_rec[3] & MISC_VALID) ? (uint8_t)(hal_rec[3] & (MISC_VALID | 3)) : MISC_DEFAULT;
+        hal_rec[3] = (hal_rec[3] & MISC_VALID) ? (uint8_t)(hal_rec[3] & (MISC_VALID | 7)) : MISC_DEFAULT;
     }
 }
 
@@ -848,6 +859,7 @@ static void rec_unpack(void)
         midi_channel = hal_rec[0];
         opt_metro    = (hal_rec[3] & 1) ? 1 : 0;
         opt_runstat  = (hal_rec[3] & 2) ? 1 : 0;
+        opt_asense   = (hal_rec[3] & 4) ? 1 : 0;
     }
 }
 
@@ -1930,15 +1942,16 @@ static void config_show(void)
         return;
     }
 
-    // Page 8, misc: SELECT lit, the footswitch last pressed lit and the page's other one
-    // dim, and its setting: "On" or "Of".
+    // Page 8, misc: SELECT lit, each toggle's footswitch lit while on and dim while off,
+    // and the name of the one last pressed: "CL", "rS" or "AS" (user's request).
     if (cfg_page == PAGE_MISC)
     {
         led_aux   = LED_BIT(HAL_LED_SELECT);
-        led_stomp = bit16(misc_sel);
+        led_stomp = (uint16_t)((opt_metro ? (1u << MISC_METRO) : 0) | (opt_runstat ? (1u << MISC_RUNSTAT) : 0) |
+                               (opt_asense ? (1u << MISC_ASENSE) : 0));
         led_dim   = MISC_MASK;
         show_leds();
-        hal_display_text((uint8_t)(((misc_sel == MISC_METRO) ? opt_metro : opt_runstat) ? HAL_TEXT_ON : HAL_TEXT_OFF));
+        hal_display_text((uint8_t)((misc_sel == MISC_METRO) ? HAL_TEXT_CL : (misc_sel == MISC_RUNSTAT) ? HAL_TEXT_RS : HAL_TEXT_AS));
         return;
     }
 
@@ -1979,8 +1992,7 @@ static void config_show(void)
         show_leds();
         hal_aux_led(HAL_LED_EXP_1, (uint8_t)(sw_thr[r * 2] ? 1 : HAL_LED_DIM));
         hal_aux_led(HAL_LED_EXP_2, (uint8_t)(sw_thr[r * 2 + 1] ? 1 : HAL_LED_DIM));
-        hal_display(0);
-        hal_display_blank(7);
+        hal_display_text((uint8_t)(HAL_TEXT_S1 + r));
         return;
     }
 
@@ -2051,10 +2063,10 @@ static void config_goto_page(uint8_t page)
     {
         num_begin(16, 1);
     }
-    // The pedal page starts on footswitch 8, pedal A's response (user's request).
+    // The pedal page starts on footswitch 6, the pedal's CC (user's request).
     else if (IS_EXP_PAGE(page))
     {
-        ped_sel   = PED_PICKUP;
+        ped_sel   = PED_CC;
         pcc_b     = (uint8_t)(page - PAGE_EXP_A);
         cal_step  = CAL_DONE;
         cal_armed = 0;
@@ -2350,11 +2362,24 @@ static void pcc_end(uint8_t accept)
 // yet selected only shows its setting (user's request): pickup or immediate, the CC, or
 // the pedal's value. Pressed again, 8 toggles pickup, 6 opens the CC editor and 9 starts
 // the calibration, which UP and DOWN then step through (cal_nav). While it runs, the
-// footswitches do nothing.
+// other footswitches do nothing, and 9 cancels it.
 static void ped_press(uint8_t index)
 {
-    if ((index != PED_CC && index != PED_PICKUP && index != PED_CAL) || cal_armed)
+    if (index != PED_CC && index != PED_PICKUP && index != PED_CAL)
     {
+        return;
+    }
+
+    // While calibrating only footswitch 9 does anything: it cancels (user's request).
+    if (cal_armed)
+    {
+        if (index == PED_CAL)
+        {
+            cal_step  = CAL_DONE;
+            cal_armed = 0;
+            config_show();
+        }
+
         return;
     }
 
@@ -2416,32 +2441,31 @@ static void cal_nav(uint8_t code)
     config_show();
 }
 
-// A footswitch let go on the misc page (user's layout): 1 the visual metronome, 9
-// running status. Not yet selected, it only shows its setting; pressed again, it
-// toggles it.
+// A footswitch pressed on the misc page (user's layout): 1 the visual metronome, 9
+// running status, 10 active sensing, each toggled at once (user's request) and its name
+// shown.
 static void misc_press(uint8_t index)
 {
-    if (index != MISC_METRO && index != MISC_RUNSTAT)
+    if (index == MISC_METRO)
+    {
+        opt_metro = !opt_metro;
+    }
+    else if (index == MISC_RUNSTAT)
+    {
+        opt_runstat = !opt_runstat;
+        tx_last     = 0;
+    }
+    else if (index == MISC_ASENSE)
+    {
+        opt_asense = !opt_asense;
+    }
+    else
     {
         return;
     }
 
-    if (index != misc_sel)
-    {
-        misc_sel = index;
-    }
-    else if (index == MISC_METRO)
-    {
-        opt_metro = !opt_metro;
-        config_changed();
-    }
-    else
-    {
-        opt_runstat = !opt_runstat;
-        tx_last     = 0;
-        config_changed();
-    }
-
+    misc_sel = index;
+    config_changed();
     config_show();
 }
 
@@ -2961,6 +2985,7 @@ void ctl_init(void)
     // The identity is sent at power-on too (user's request), once MIDI OUT has room.
     sx_reply      = 1;
     tx_last       = 0;
+    as_ticks      = 0;
     met_run       = 0;
     met_phase     = 0;
     met_next      = 0;
@@ -3195,22 +3220,14 @@ void ctl_key_release(uint8_t code)
             return;
         }
 
-        // EXP and misc pages: a footswitch pressed and let go with UP and DOWN up (so not
-        // the simulator's UP with switches 6-10, which only changes page).
-        if (IS_EXP_PAGE(cfg_page) || cfg_page == PAGE_MISC)
+        // EXP pages: a footswitch pressed and let go with UP and DOWN up (so not the
+        // simulator's UP with switches 6-10, which only changes page).
+        if (IS_EXP_PAGE(cfg_page))
         {
             if (mode_press_live && keys_down == 0)
             {
                 mode_press_live = 0;
-
-                if (cfg_page == PAGE_MISC)
-                {
-                    misc_press(index);
-                }
-                else
-                {
-                    ped_press(index);
-                }
+                ped_press(index);
             }
 
             mode_press_live = 0;
@@ -3339,11 +3356,14 @@ void ctl_key_press(uint8_t code)
                 mode_press_live = (keys_down == 0) ? 1 : 0;
             }
         }
-        // The misc page: the footswitch acts on its release (misc_press), as on the EXP
-        // pages.
+        // The misc page: the footswitch toggles its setting at once, if UP and DOWN are up
+        // (not the simulator's UP with switches 6-10).
         else if (cfg_page == PAGE_MISC)
         {
-            mode_press_live = (keys_down == 0) ? 1 : 0;
+            if (keys_down == 0)
+            {
+                misc_press(stomp_index(code));
+            }
         }
         // Page 9: a footswitch shows its segment and holds it until released (10 lights
         // everything).
@@ -4383,6 +4403,14 @@ void ctl_tick(void)
     flush_reverts();
     flush_program();
 
+    // Active sensing (user's request): FE every ACTIVE_SENSE_MS while it is on, in any
+    // mode; a real-time byte, so running status is untouched, and no LED flash.
+    if (opt_asense && ++as_ticks >= AS_TICKS && hal_midi_space())
+    {
+        as_ticks = 0;
+        hal_midi_tx(0xFE);
+    }
+
     // A SysEx Identity Request's reply, once MIDI OUT has room for it.
     if (sx_reply && hal_midi_space() >= SX_REPLY_LEN)
     {
@@ -4621,7 +4649,7 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_CAL_ARMED:     return cal_armed;
     case CTL_INSPECT_NUM:           return (uint8_t)(num_typing | (num_lo1 << 1));
     case CTL_INSPECT_SHOWN:         return cyc_elem;
-    case CTL_INSPECT_MISC:          return (uint8_t)((opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (met_sign << 2));
+    case CTL_INSPECT_MISC:          return (uint8_t)((opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (opt_asense ? 4 : 0) | (met_sign << 3));
     default:                        return 0;
     }
 }

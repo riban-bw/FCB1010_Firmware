@@ -5,7 +5,7 @@
 
 // Firmware version: major and minor in decimal, 0-199 (the build number is shown in hex).
 #define FW_VERSION_MAJOR 1
-#define FW_VERSION_MINOR 0
+#define FW_VERSION_MINOR 1
 
 #if FW_VERSION_MAJOR > 199 || FW_VERSION_MINOR > 199
 #error FW_VERSION_MAJOR and FW_VERSION_MINOR must be 0-199

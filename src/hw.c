@@ -203,7 +203,8 @@ void hal_display(uint8_t value)
 // Then the footswitch message types: "CC" = C (A D E F) twice; "nt" = n, t (D E F G);
 // "Pr" = P (A B E F G), a small r (E G; user's request). Then "--" (G twice), then "Ab"
 // (A B C E F G, b). Then the pedal modes: "St" = S (A C D F G), t; "St" again (with
-// "+"); "Pu" = P, a small u (C D E); "Pu" again (with "-"). Then "PU" = P, U (B C D E F). Then "On" = O (A B C D E F), n; "Of" = O, F (A E F G).
+// "+"); "Pu" = P, a small u (C D E); "Pu" again (with "-"). Then "PU" = P, U (B C D E F). Then "S1", "S2" (S, digit), "CL" = C, L; "rS" = the large r, S; "AS" =
+// A (A B C E F G), S.
 // Bits: A 0x80, B 0x40, C 0x20, D 0x10, E 0x08, F 0x04, G 0x02 (0x01 is the dot).
 #define SCROLL_R 0xCC   // A B E F: the r with its top-right corner
 #define SCROLL_A 0xFA   // lowercase a, A B C D E G (uppercase A is 0xEE, A B C E F G)
@@ -212,7 +213,7 @@ static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
     0x00, SCROLL_R, SCROLL_R, 0x0C, 0x0C, 0x3E, 0x3E, SCROLL_A, SCROLL_A, 0xEC, 0xEC, 0x00,
     0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x0A, 0x02, 0x02, 0xEE, 0x3E,
     0xB6, 0x1E, 0xB6, 0x1E, 0xCE, 0x38, 0xCE, 0x38, 0xCE, 0x7C,
-    0xFC, 0xEC, 0xFC, 0x8E
+    0xB6, 0x60, 0xB6, 0xDA, 0x9C, 0x1C, SCROLL_R, 0xB6, 0xEE, 0xB6
 };
 
 // The leftmost position's sign, lit with its "1" (B C). G drives the "-" bar (seen on a

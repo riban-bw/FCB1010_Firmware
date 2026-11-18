@@ -20,7 +20,7 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser editor in `editor/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 16.3KB (16717 bytes at the last build), so it needs a 32KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit, and prints a note once less than 2KB is left, so the code can be optimised for size in time).
+The code is about 16.4KB (16817 bytes at the last build), so it needs a 32KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit, and prints a note once less than 2KB is left, so the code can be optimised for size in time).
 
 Each build also updates the documentation: the code size above, the firmware version on configuration page 9 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
@@ -71,6 +71,8 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `BOOT_LAMP_MS` | 1000 | Time (ms) from power-on that every LED is lit, before the normal LEDs show while the scroll finishes. A multiple of 50 |
 | `DEFAULT_METRONOME` | 0 | The visual metronome (configuration page 8) until one is saved: 1 on |
 | `DEFAULT_RUNNING_STATUS` | 0 | Running status on MIDI OUT (configuration page 8) until one is saved: 1 on |
+| `DEFAULT_ACTIVE_SENSING` | 0 | Active sensing on MIDI OUT (configuration page 8) until one is saved: 1 on |
+| `ACTIVE_SENSE_MS` | 250 | The interval between active sensing bytes, 2 to 510ms (the MIDI specification asks for at most 300ms) |
 | `LAMP_TEST_MS` | 1000 | Time (ms) every LED is lit on entering configuration page 9, before the chase. A multiple of 50 |
 | `LAMP_CHASE_MS` | 100 | Time (ms) each panel LED is lit in page 9's chase along the row and back. A multiple of 50 |
 | `VERSION_SHOW_MS` | 1000 | Time (ms) each version part shows on page 9. A multiple of 50; 10 x `SCROLL_FRAME_MS` + 4 x `VERSION_SHOW_MS` must be at most 12750 |

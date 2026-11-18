@@ -93,8 +93,9 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 // at 1. Page 1: the setting shown (0 pedal mode, 1 type, 2 number, 3 on, 4 off).
 #define CTL_INSPECT_NUM            77
 #define CTL_INSPECT_SHOWN          78
-// Misc page: bit 0 the metronome on, bit 1 running status on; bits 2-3 the metronome's
-// sign shown (HAL_SIGN_*). The misc page's footswitch is CTL_INSPECT_PED_SEL.
+// Misc page: bit 0 the metronome on, bit 1 running status on, bit 2 active sensing on;
+// bits 3-4 the metronome's sign shown (HAL_SIGN_*). The misc page's footswitch last
+// pressed is CTL_INSPECT_PED_SEL.
 #define CTL_INSPECT_MISC           79
 
 uint8_t ctl_inspect(uint8_t what);

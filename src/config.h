@@ -9,9 +9,13 @@
 #endif
 
 // The misc page's settings until one is saved (shared by every bank): the visual
-// metronome (1 on) and running status on MIDI OUT (1 on).
+// metronome (1 on), running status on MIDI OUT (1 on) and active sensing (below).
 #define DEFAULT_METRONOME         0
 #define DEFAULT_RUNNING_STATUS    0
+// Active sensing (FE) on MIDI OUT until one is saved (1 on), and its interval in ms
+// (2 to 510; the MIDI specification allows at most 300).
+#define DEFAULT_ACTIVE_SENSING    0
+#define ACTIVE_SENSE_MS           250
 
 // Pedal mode every footswitch starts with until it is changed in configuration mode:
 // 0 = stomp (toggle), 1 = stomp with momentary on a long press, 2 = momentary.

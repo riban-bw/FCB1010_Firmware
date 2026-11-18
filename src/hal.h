@@ -98,10 +98,14 @@ void    hal_display(uint8_t value);
 #define HAL_TEXT_MODE           (HAL_TEXT_CC + 5)
 // "PU": an expression pedal in pickup mode (the pedal page shows it with both dots, "P.U.").
 #define HAL_TEXT_PICKUP         (HAL_TEXT_MODE + 4)
-// "On" and "Of": a setting on the misc page.
-#define HAL_TEXT_ON             (HAL_TEXT_MODE + 5)
-#define HAL_TEXT_OFF            (HAL_TEXT_MODE + 6)
-#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 7)
+// "S1" and "S2": the SWITCH 1 / SWITCH 2 relay pages. "CL" (MIDI clock display), "rS"
+// (running status) and "AS" (active sensing): the misc page's settings.
+#define HAL_TEXT_S1             (HAL_TEXT_MODE + 5)
+#define HAL_TEXT_S2             (HAL_TEXT_MODE + 6)
+#define HAL_TEXT_CL             (HAL_TEXT_MODE + 7)
+#define HAL_TEXT_RS             (HAL_TEXT_MODE + 8)
+#define HAL_TEXT_AS             (HAL_TEXT_MODE + 9)
+#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 10)
 
 void    hal_display_text(uint8_t text);
 
