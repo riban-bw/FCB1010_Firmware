@@ -20,7 +20,7 @@ Tested:
 Not tested, because it needs real hardware:
 
 - **MIDI IN on the real image.** The simulator's UART input would not deliver bytes to the firmware. The parser is tested on the host, and the simulator confirms the receive interrupt queues and drains bytes without disturbing key handling or the stack, but the step from a received byte to a lit LED has not been run end to end on the 8051 image. The FCB1010's MIDI IN feeds the same UART, per the reference code, which receives SysEx through it.
-- The dim LEDs' brightness (a short part of each 2ms LED slot), and the metronome's `-` / `+`, which uses the same unconfirmed sign segments as the pickup distance.
+- Timer 2 on the real W78C032, and how the LED brightness looks at each level: the steps are timed in the simulator only. The dim LEDs' brightness (a short part of each 2ms LED slot), and the metronome's `-` / `+`, which uses the same unconfirmed sign segments as the pickup distance.
 - The configuration panel with a real pedal and MIDI interface. Its editor target is tested, and so is its Web MIDI code against a simulated interface, but not with a real one.
 
 A wrong LED or key map does no electrical harm, but it will look wrong.

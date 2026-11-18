@@ -76,6 +76,10 @@ Settings travel as NRPN controllers on the pedal's channel, so any MIDI tool can
 | 93 | Whether the bank in use sends that program change | 0 none (`--` on the pedal), 1 on (with the program parameter 92 reads) |
 | 94, 95 | Expression pedal A, pedal B response (configuration pages 3 and 4) | 0 immediate, 1 pickup |
 | 96, 97 | Expression pedal A, pedal B controller number (configuration pages 3 and 4) | 0 to 127 |
+| 98 | LED and display brightness (configuration page 9), shared | 0 (the minimum) to 127 (full) |
+| 99 | MIDI clock display, the visual metronome (configuration page 8), shared | 0 off, 1 on |
+| 100 | Running status on MIDI OUT (configuration page 8), shared | 0 off, 1 on |
+| 101 | Active sensing on MIDI OUT (configuration page 8), shared | 0 off, 1 on |
 
 - A set takes effect at once but is not saved; command 2 saves everything, as leaving configuration mode does, and command 3 reloads what is saved. Unknown parameters, read-only ones, out-of-range values and values equal to the current one are ignored.
 - A footswitch whose mode or message changes goes to its resting state on the next 2ms tick (as on a save in configuration mode). If it was ON when its message changed, the old message's OFF is sent first (not for a program change).

@@ -417,7 +417,8 @@ check "after the scroll the display shows the major version (units, tens, left: 
 # SWITCH 1 / 2 and the MIDI / EXP bits, row 5's SWITCH, SELECT to VALUE 2 and DIRECT
 # SELECT), and a footswitch LED lit at the start of each segment (switches 4 and 5 are
 # row 3's 0x80 / 0x40, the other eight all of row 4). Lit is a low bit. So no row shows
-# more than one chase LED and one footswitch LED; row 5's CONFIG bit (0x40) flashes, so
+# more than one chase LED and one footswitch LED; exactly one of EXP 1 / EXP 2 (row 3's
+# 0x08 / 0x04) is lit, the other dark; row 5's CONFIG bit (0x40) flashes, so
 # both levels are seen; and the chase is seen in rows 3 and 5, a footswitch LED lit.
 # A second run to the same point, then about 1 s of latch samples (commons at 0x1FF8,
 # segments at 0x1FF9). s51 echoes queued input into its output, so the dump lines are
@@ -445,7 +446,7 @@ LAMP10=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s10b.console
     function sample(c, v,   fs, ch) {
         if (v == "ff") return
         total++
-        if (c == "08") { fs = lit(v, 192); ch = lit(v, 63); if (fs > 1 || ch > 1) bad = 1; if (ch) chase3 = 1; if (fs) blink = 1 }
+        if (c == "08") { fs = lit(v, 192); ch = lit(v, 51); if (fs > 1 || ch > 1 || lit(v, 12) != 1) bad = 1; if (ch) chase3 = 1; if (fs) blink = 1 }
         if (c == "10") { fs = lit(v, 255); if (fs > 1) bad = 1; if (fs) blink = 1 }
         if (c == "20") { n++; ch = lit(v, 191); if (ch > 1) bad = 1; if (ch) chase5 = 1; if (lit(v, 64)) on = 1; else off = 1 }
     }

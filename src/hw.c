@@ -1,4 +1,4 @@
-#include <8051.h>
+#include <8052.h>
 #include "platform.h"
 #include "config.h"
 #include "hal.h"
@@ -38,10 +38,50 @@ volatile __xdata __at (PERIPHERAL_BASE) uint8_t PERIPHERALS[8];
 // digits; this is unverified on a real unit.
 // led_map[3..5] = discrete LEDs. A cleared bit lights the LED.
 static volatile uint8_t led_map[6];
-// Rows 3 and 4 (the footswitch LEDs): a cleared bit lights the LED dimly. The scan drives
-// these with the row's lit LEDs only at the start of its slot, for the time the key scan
-// takes (about a twentieth of the slot), then the lit LEDs alone (user's request).
+// Rows 3 and 4 (the footswitch LEDs): a cleared bit lights the LED dimly, for the first
+// LED_DIM_US of the row's slot (user's request).
 static volatile IDATA uint8_t led_dim[2];
+#if LED_DIM_US < 0 || LED_DIM_US > 1000
+#error "LED_DIM_US must be 0 to 1000"
+#endif
+#if LED_MIN_US < 1 || LED_MIN_US > 1000
+#error "LED_MIN_US must be 1 to 1000"
+#endif
+
+// Brightness (hal_led_level): each row is lit at the start of its 2ms slot, and Timer 2
+// (one-shot, high priority, so it can cut into the scan ISR) ends the light in up to
+// two steps: the dim LEDs off (LV_DIM), then everything (LV_OFF). lv_start is how the
+// slot starts (LV_ALL with the dim LEDs, or LV_DIM when their time is 0), lv_kind /
+// lv_rel the steps and their Timer 2 counts (from the step before), lv_n how many;
+// lv_pat the segments of each kind for the row being lit (LV_OFF always 0xFF), t2_stage
+// the next step.
+#define LV_ALL  0
+#define LV_DIM  1
+#define LV_OFF  2
+// At this many us or more the LEDs stay lit for the whole slot.
+#define LV_FULL_US 1900
+#define LV_NEVER   0xFFFF
+// The time from the row lighting to the first step's write, beyond its count (measured
+// in the simulator).
+#define LV_LAT_US  19
+// XDATA, or IDATA in the probe image (NO_XDATA), whose SRAM is under test.
+#ifdef NO_XDATA
+#define LV_MEM IDATA
+#else
+#define LV_MEM XDATA
+#endif
+static volatile IDATA uint8_t  lv_start;
+static volatile IDATA uint8_t  lv_n;
+static volatile LV_MEM uint8_t  lv_kind[2];
+static volatile LV_MEM uint16_t lv_rel[2];
+static volatile IDATA uint8_t  lv_pat[3] = { 0xFF, 0xFF, 0xFF };
+static volatile IDATA uint8_t  t2_stage;
+// Direct RAM, for timer2_isr's mov a, _t2_next.
+volatile uint8_t t2_next;
+// hal_led_level's working values (main line only).
+static LV_MEM uint16_t lv_t[2];
+static LV_MEM uint16_t lv_at;
+
 
 static const CODE uint8_t stomp_led_row[10]  = { 4, 4, 4, 3, 3, 4, 4, 4, 4, 4 };
 static const CODE uint8_t stomp_led_mask[10] = { 0x04, 0x02, 0x01, 0x80, 0x40,
@@ -204,7 +244,7 @@ void hal_display(uint8_t value)
 // "Pr" = P (A B E F G), a small r (E G; user's request). Then "--" (G twice), then "Ab"
 // (A B C E F G, b). Then the pedal modes: "St" = S (A C D F G), t; "St" again (with
 // "+"); "Pu" = P, a small u (C D E); "Pu" again (with "-"). Then "PU" = P, U (B C D E F). Then "S1", "S2" (S, digit), "CL" = C, L; "rS" = the large r, S; "AS" =
-// A (A B C E F G), S.
+// A (A B C E F G), S. Then "On" = O (A B C D E F), n; "Of" = O, F (A E F G).
 // Bits: A 0x80, B 0x40, C 0x20, D 0x10, E 0x08, F 0x04, G 0x02 (0x01 is the dot).
 #define SCROLL_R 0xCC   // A B E F: the r with its top-right corner
 #define SCROLL_A 0xFA   // lowercase a, A B C D E G (uppercase A is 0xEE, A B C E F G)
@@ -213,7 +253,7 @@ static const CODE uint8_t text_segments[HAL_TEXT_COUNT * 2] = {
     0x00, SCROLL_R, SCROLL_R, 0x0C, 0x0C, 0x3E, 0x3E, SCROLL_A, SCROLL_A, 0xEC, 0xEC, 0x00,
     0x9C, 0x9C, 0xEC, 0x1E, 0xCE, 0x0A, 0x02, 0x02, 0xEE, 0x3E,
     0xB6, 0x1E, 0xB6, 0x1E, 0xCE, 0x38, 0xCE, 0x38, 0xCE, 0x7C,
-    0xB6, 0x60, 0xB6, 0xDA, 0x9C, 0x1C, SCROLL_R, 0xB6, 0xEE, 0xB6
+    0xB6, 0x60, 0xB6, 0xDA, 0x9C, 0x1C, SCROLL_R, 0xB6, 0xEE, 0xB6, 0xFC, 0xEC, 0xFC, 0x8E
 };
 
 // The leftmost position's sign, lit with its "1" (B C). G drives the "-" bar (seen on a
@@ -363,8 +403,59 @@ static XDATA uint8_t hold[KEY_COUNT];
 #define SCAN_KEY(idx, level) \
     KEY_SCAN(hist, hold, idx, ((level) == KEY_ACTIVE_LEVEL ? 1 : 0), PUSH_EVENT, KEY_EVQ_FULL(evq_head, evq_tail))
 
+// The next brightness step of the row being lit (see lv_start). High priority, so a step
+// can come during the scan ISR; it only writes the segment latch.
+// The rest of a Timer 2 step, jumped to by timer2_isr (an interrupt routine with no
+// vector of its own, so it ends with reti).
+// Timer 2 runs in auto-reload mode, so each step's count is loaded by the hardware at
+// the overflow (from RCAP2, set one step ahead) and the steps keep exact time.
+void t2_step(void) __interrupt
+{
+    TF2 = 0;
+
+    if (++t2_stage >= lv_n)
+    {
+        TR2 = 0;
+        return;
+    }
+
+    t2_next = lv_pat[lv_kind[t2_stage]];
+
+    if ((uint8_t)(t2_stage + 1) < lv_n)
+    {
+        RCAP2L = (uint8_t)(lv_rel[t2_stage + 1] & 0xFF);
+        RCAP2H = (uint8_t)(lv_rel[t2_stage + 1] >> 8);
+    }
+}
+
+// Timer 2: the segments first (t2_next, ready in direct RAM), in as few cycles as
+// possible, since every cycle here adds to the shortest time an LED can be lit; then
+// t2_step. P_LATCH_SEGMENTS and P_DUMMY_MUX are 0x1FF9 and 0x1FFA.
+void timer2_isr(void) __interrupt(5) __naked
+{
+    __asm
+        push acc
+        push dpl
+        push dph
+        mov  a, _t2_next
+        mov  dptr, #(_PERIPHERALS + 1)
+        movx @dptr, a
+        inc  dptr
+        clr  a
+        movx @dptr, a
+        pop  dph
+        pop  dpl
+        pop  acc
+        ljmp _t2_step
+    __endasm;
+}
+
 void timer0_isr(void) __interrupt(1)
 {
+    // A brightness step not yet taken belongs to the last row: drop it.
+    TR2 = 0;
+    TF2 = 0;
+
     // Reload first, so the tick is 2 ms plus only the interrupt latency
     TR0 = 0;
     TF0 = 0;
@@ -389,10 +480,30 @@ void timer0_isr(void) __interrupt(1)
         scan_seg &= (uint8_t)~disp_sign;
     }
 
-    // The dim footswitch LEDs too, until the end of the ISR.
-    PERIPHERALS[P_LATCH_SEGMENTS] = (scan_row == 3 || scan_row == 4) ?
-                                    (uint8_t)(scan_seg & led_dim[scan_row - 3]) : scan_seg;
-    PERIPHERALS[P_DUMMY_MUX]      = 0;
+    // The segments of each brightness step for this row (hal_led_level): LV_ALL with the
+    // dim LEDs, LV_DIM without them, LV_OFF none. The row starts at lv_start, and Timer 2
+    // takes it through the rest.
+    lv_pat[LV_DIM]  = scan_seg;
+    lv_pat[LV_ALL]  = (scan_row == 3 || scan_row == 4) ? (uint8_t)(scan_seg & led_dim[scan_row - 3]) : scan_seg;
+    // Timer 2 loaded first, so it starts as the row lights.
+    if (lv_n)
+    {
+        t2_stage = 0;
+        t2_next  = lv_pat[lv_kind[0]];
+        TL2 = (uint8_t)(lv_rel[0] & 0xFF);
+        TH2 = (uint8_t)(lv_rel[0] >> 8);
+        RCAP2L = (uint8_t)(lv_rel[1] & 0xFF);
+        RCAP2H = (uint8_t)(lv_rel[1] >> 8);
+    }
+
+    PERIPHERALS[P_LATCH_SEGMENTS] = lv_pat[lv_start];
+
+    if (lv_n)
+    {
+        TR2 = 1;
+    }
+
+    PERIPHERALS[P_DUMMY_MUX] = 0;
 
     scan_row++;
     scan_common <<= 1;
@@ -427,10 +538,6 @@ void timer0_isr(void) __interrupt(1)
         scan_column = 4;
     }
 
-    // The rest of the slot: only the LEDs that are fully lit.
-    PERIPHERALS[P_LATCH_SEGMENTS] = scan_seg;
-    PERIPHERALS[P_DUMMY_MUX]      = 0;
-
     ticks++;
 }
 
@@ -438,6 +545,64 @@ void hal_lamp_test(uint8_t how)
 {
     lamp_leds_on = (how == HAL_LAMP_LEDS_ON);
     lamp_all_on  = (how == HAL_LAMP_ALL_ON);
+}
+
+// Brightness 0 (the minimum) to 127 (full): the LEDs are lit for LED_MIN_US + level *
+// level / 8 us of each 2ms row slot (full from LV_FULL_US), the dim LEDs for LED_DIM_US of
+// that at most. Steps that fall together merge.
+void hal_led_level(uint8_t level)
+{
+    uint8_t n = 0;
+    uint8_t k;
+    uint8_t start = LV_ALL;
+
+    lv_t[1] = (uint16_t)(LED_MIN_US + ((uint16_t)((uint16_t)(level & 0x7F) * (uint8_t)(level & 0x7F)) >> 3));
+
+    if (lv_t[1] >= LV_FULL_US)
+    {
+        lv_t[1] = LV_NEVER;
+    }
+
+    lv_t[0] = (LED_DIM_US < lv_t[1]) ? LED_DIM_US : lv_t[1];
+    lv_at   = 0;
+    EA      = 0;
+
+    for (k = 0; k < 2; k++)
+    {
+        if (lv_t[k] == LV_NEVER)
+        {
+            break;
+        }
+
+        if (lv_t[k] == 0)
+        {
+            start = (uint8_t)(k + 1);
+        }
+        else if (lv_t[k] == lv_at)
+        {
+            lv_kind[n - 1] = (uint8_t)(k + 1);
+        }
+        else
+        {
+            lv_kind[n] = (uint8_t)(k + 1);
+            lv_rel[n]  = (uint16_t)(lv_t[k] - lv_at);
+
+            // The first step is counted from Timer 2's start, which comes LV_LAT_US after
+            // the row lights would without this (the start-up and interrupt entry).
+            if (n == 0)
+            {
+                lv_rel[0] = (lv_rel[0] > LV_LAT_US) ? (uint16_t)(lv_rel[0] - LV_LAT_US) : 1;
+            }
+
+            lv_rel[n]  = (uint16_t)(0 - lv_rel[n]);
+            lv_at      = lv_t[k];
+            n++;
+        }
+    }
+
+    lv_start = start;
+    lv_n     = n;
+    EA       = 1;
 }
 
 void hal_relays(uint8_t mask)
@@ -752,6 +917,12 @@ void hw_init(void)
     RI   = 0;
     ES   = 1;
     PS   = 1;
+
+    // Brightness: Timer 2 one-shot (16-bit, its overflow only), high priority.
+    T2CON = 0;
+    ET2   = 1;
+    PT2   = 1;
+    hal_led_level(127);
 
     // Scan timer: Timer 0 as a 16-bit timer.
     TH0 = (uint8_t)(T0_RELOAD >> 8);

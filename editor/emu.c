@@ -29,6 +29,7 @@ IMPORT("js_display_hex")  void js_display_hex(uint8_t value);
 IMPORT("js_display_signed") void js_display_signed(uint8_t value);
 IMPORT("js_display_dots") void js_display_dots(uint8_t mask);
 IMPORT("js_display_sign") void js_display_sign(uint8_t sign);
+IMPORT("js_led_level") void js_led_level(uint8_t level);
 IMPORT("js_lamp_test")    void js_lamp_test(uint8_t how);
 // Record 0 = settings, 1 = calibration, 2 / 3 = relay triggers; four bytes each. Load returns 1 if one was stored.
 IMPORT("js_store_load") uint8_t js_store_load(unsigned record, uint8_t *data);
@@ -142,6 +143,7 @@ void hal_display_hex(uint8_t value)           { js_display_hex(value); }
 void hal_display_signed(uint8_t value)        { js_display_signed(value); }
 void hal_display_dots(uint8_t mask)           { js_display_dots(mask); }
 void hal_display_sign(uint8_t sign)           { js_display_sign(sign); }
+void hal_led_level(uint8_t level)             { js_led_level(level); }
 void hal_lamp_test(uint8_t how)               { js_lamp_test(how); }
 
 void    hal_relays(uint8_t mask)          { js_relays(mask); }
@@ -352,6 +354,7 @@ uint16_t emu_const(uint8_t what)
     case 20: return fw_version[2];
     case 21: return BANK_COUNT;
     case 22: return ACTIVE_SENSE_MS;
+    case 23: return LED_MIN_US;
     default: return 0;
     }
 }

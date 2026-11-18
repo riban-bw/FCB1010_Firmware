@@ -97,6 +97,8 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 // bits 3-4 the metronome's sign shown (HAL_SIGN_*). The misc page's footswitch last
 // pressed is CTL_INSPECT_PED_SEL.
 #define CTL_INSPECT_MISC           79
+// The saved LED brightness, 0-127.
+#define CTL_INSPECT_LEVEL          80
 
 uint8_t ctl_inspect(uint8_t what);
 #endif

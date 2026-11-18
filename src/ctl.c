@@ -291,6 +291,13 @@ static const CODE uint8_t chase_led[CHASE_PERIOD] = {
 #error CONFIG_SHOW_MS must be a multiple of 50, from 50 to 12750
 #endif
 
+// Before them, the footswitch's number (user's request), CYC_SW_STEPS.
+#define CYC_SW_STEPS         (CONFIG_SWITCH_SHOW_MS / VER_STEP_MS)
+
+#if CONFIG_SWITCH_SHOW_MS % VER_STEP_MS != 0 || CYC_SW_STEPS < 1 || CYC_SW_STEPS > 255
+#error CONFIG_SWITCH_SHOW_MS must be a multiple of 50, from 50 to 12750
+#endif
+
 #if REPEAT_DELAY_TICKS < 1 || REPEAT_PERIOD_TICKS < 1 || CHORD_TICKS < 1
 #error The repeat and configuration times must each be at least one tick
 #endif
@@ -394,6 +401,21 @@ static BIT_T          opt_runstat;
 // Active sensing (FE) on MIDI OUT every ACTIVE_SENSE_MS while on (bit 2), and the ticks
 // to the next.
 static BIT_T          opt_asense;
+// LED brightness, 0 (the minimum) to 127 (page 9, pedal B, and NRPN; saved in the channel
+// record's byte 2 with bit 7 set). Run mode and page 9 use it, the other pages full
+// brightness (led_apply).
+static IDATA uint8_t  led_level;
+#define LEVEL_VALID   0x80
+// The SWITCH pages show "S.1" / "S.2" until a pedal is moved; the misc page shows the
+// setting's name (sw_named, misc_named, for the dots) and its value in turn.
+static BIT_T          sw_named;
+static BIT_T          misc_named;
+// A long UP with only shared settings changed: ctl_tick saves and leaves.
+static BIT_T          save_due;
+// The editor: the edited setting's panel LED flickers (user's request).
+static BIT_T          par_on;
+static IDATA uint8_t  par_ticks;
+#define PAR_TICKS     (PARAM_FLASH_MS / TICK_MS)
 static IDATA uint8_t  as_ticks;
 #define AS_TICKS      (ACTIVE_SENSE_MS / TICK_MS)
 #if AS_TICKS < 1 || AS_TICKS > 255
@@ -436,7 +458,11 @@ static IDATA uint8_t  met_sign;
 #define NP_BANK_PC_ON   93      // 1 if the bank sends its program change, 0 none ("--")
 #define NP_PICKUP       94      // + pedal 0-1: 1 pickup mode, 0 sends at once
 #define NP_PEDAL_CC     96      // + pedal 0-1: the pedal's CC 0-127
-#define NP_COUNT        98
+#define NP_LEVEL        98      // LED brightness 0 (the minimum) to 127 (full)
+#define NP_METRO        99      // MIDI clock display (visual metronome) 0 / 1
+#define NP_RUNSTAT      100     // running status on MIDI OUT 0 / 1
+#define NP_ASENSE       101     // active sensing on MIDI OUT 0 / 1
+#define NP_COUNT        102
 
 // Commands (values of NP_COMMAND).
 #define NC_DUMP         1       // send every parameter, then NP_DUMP_END
@@ -723,7 +749,7 @@ static void rec_pack(void)
     {
         hal_rec[0] = midi_channel;
         hal_rec[1] = 0;
-        hal_rec[2] = 0;
+        hal_rec[2] = (uint8_t)(LEVEL_VALID | led_level);
         hal_rec[3] = (uint8_t)(MISC_VALID | (opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (opt_asense ? 4 : 0));
     }
 }
@@ -799,10 +825,11 @@ static void rec_read(void)
         }
 
         // Byte 1 held the pickup bits before they moved to the banks, and bytes 1-3 the
-        // pedal modes before that. Byte 3 holds the misc settings, marked by bit 7, which
-        // no older record set: without it, the defaults.
+        // pedal modes before that. Byte 2 holds the LED brightness and byte 3 the misc
+        // settings, each marked by bit 7, which no older record set: without it, the
+        // defaults.
         hal_rec[1] = 0;
-        hal_rec[2] = 0;
+        hal_rec[2] = (hal_rec[2] & LEVEL_VALID) ? hal_rec[2] : (uint8_t)(LEVEL_VALID | LED_BRIGHTNESS);
         hal_rec[3] = (hal_rec[3] & MISC_VALID) ? (uint8_t)(hal_rec[3] & (MISC_VALID | 7)) : MISC_DEFAULT;
     }
 }
@@ -857,6 +884,7 @@ static void rec_unpack(void)
     else
     {
         midi_channel = hal_rec[0];
+        led_level    = (uint8_t)(hal_rec[2] & 0x7F);
         opt_metro    = (hal_rec[3] & 1) ? 1 : 0;
         opt_runstat  = (hal_rec[3] & 2) ? 1 : 0;
         opt_asense   = (hal_rec[3] & 4) ? 1 : 0;
@@ -881,6 +909,8 @@ static void load_settings(void)
     load_records(HAL_RECORDS);
 }
 
+static uint8_t records_match(uint8_t last);
+
 // Store every setting and the calibration, the footswitches as bank hal_bank's. If a
 // write fails the new settings still apply until power-off.
 static void save_settings(void)
@@ -897,7 +927,14 @@ static void save_settings(void)
 // restore what the EEPROM says.
 static uint8_t settings_match_saved(void)
 {
-    for (rec_n = 0; rec_n < HAL_RECORDS; rec_n++)
+    rec_n = 0;
+    return records_match(HAL_RECORDS);
+}
+
+// 1 if records rec_n up to (not including) last match the EEPROM, as above.
+static uint8_t records_match(uint8_t last)
+{
+    for (; rec_n < last; rec_n++)
     {
         rec_pack();
         rec_cmp[0] = hal_rec[0];
@@ -1421,6 +1458,10 @@ static void version_show(void)
                 }
 
                 hal_aux_led(chase_led[chase_pos], 1);
+                // EXP 1 lit on the way along, EXP 2 on the way back (user's request: one
+                // on while the other is off).
+                hal_aux_led(HAL_LED_EXP_1, (uint8_t)(chase_pos < CHASE_LEDS - 1));
+                hal_aux_led(HAL_LED_EXP_2, (uint8_t)(chase_pos >= CHASE_LEDS - 1));
             }
         }
     }
@@ -1612,6 +1653,8 @@ static void version_tick(void)
 #define PARAM_LED(p)  ((uint8_t)(((p) == EP_FUNC) ? HAL_LED_SWITCH : HAL_LED_SELECT + (p) - 1))
 // The setting on the display: the editor's parameter, or the one page 1 is showing.
 #define SHOWN_PARAM   (edit_open ? edit_param : cyc_elem)
+// Page 1's cycle shows the footswitch's number first (no panel LED).
+#define CYC_SWITCH    5
 
 // The footswitch of each message type (MT_*) in the editor.
 static const CODE uint8_t type_sw[4] = { TYPE_SW_CC, TYPE_SW_NOTE, TYPE_SW_PROG, TYPE_SW_CC };
@@ -1785,6 +1828,17 @@ static uint8_t cfg_dots(void)
         return 3;
     }
 
+    // "S.1" / "S.2", "r.S." and "A.S." (user's request; "CL" has none).
+    if (IS_SW_PAGE(cfg_page) && sw_named)
+    {
+        return 2;
+    }
+
+    if (cfg_page == PAGE_MISC && misc_named && misc_sel != MISC_METRO)
+    {
+        return 3;
+    }
+
     return 0;
 }
 
@@ -1796,7 +1850,11 @@ static uint8_t cfg_dots(void)
 // "Pu", "-Pu"), message type ("CC", "nt", "Pr") or a value.
 static void param_show(void)
 {
-    if (SHOWN_PARAM == EP_FUNC)
+    if (SHOWN_PARAM == CYC_SWITCH)
+    {
+        hal_display((uint8_t)(cfg_sel + 1));
+    }
+    else if (SHOWN_PARAM == EP_FUNC)
     {
         hal_display_text((uint8_t)(HAL_TEXT_MODE + pedal_mode_get(cfg_sel)));
     }
@@ -1810,10 +1868,10 @@ static void param_show(void)
     }
 }
 
-// Page 1 shows the selected footswitch's settings from the first.
+// Page 1 shows the selected footswitch's number, then its settings.
 static void cyc_restart(void)
 {
-    cyc_elem  = EP_FUNC;
+    cyc_elem  = CYC_SWITCH;
     cyc_ticks = 0;
     cyc_steps = 0;
 }
@@ -1824,6 +1882,9 @@ static void cyc_restart(void)
 // (user's request), or the digits that can come next, dim; the setting on the display.
 static void edit_show(void)
 {
+    // The parameter's LED flickers (ctl_tick), starting lit at each redraw.
+    par_on    = 1;
+    par_ticks = 0;
     led_aux = (uint16_t)(bit16(PARAM_LED(edit_param)) | LED_BIT(HAL_LED_MIDI_FUNC));
 
     if (edit_param == EP_FUNC)
@@ -1943,7 +2004,8 @@ static void config_show(void)
     }
 
     // Page 8, misc: SELECT lit, each toggle's footswitch lit while on and dim while off,
-    // and the name of the one last pressed: "CL", "rS" or "AS" (user's request).
+    // and the one last pressed: its name, "CL", "r.S." or "A.S.", and "On" or "Of", in
+    // turn, CONFIG_SHOW_MS each (user's request).
     if (cfg_page == PAGE_MISC)
     {
         led_aux   = LED_BIT(HAL_LED_SELECT);
@@ -1951,7 +2013,18 @@ static void config_show(void)
                                (opt_asense ? (1u << MISC_ASENSE) : 0));
         led_dim   = MISC_MASK;
         show_leds();
-        hal_display_text((uint8_t)((misc_sel == MISC_METRO) ? HAL_TEXT_CL : (misc_sel == MISC_RUNSTAT) ? HAL_TEXT_RS : HAL_TEXT_AS));
+        hal_display_dots(cfg_dots());
+
+        if (misc_named)
+        {
+            hal_display_text((uint8_t)((misc_sel == MISC_METRO) ? HAL_TEXT_CL : (misc_sel == MISC_RUNSTAT) ? HAL_TEXT_RS : HAL_TEXT_AS));
+        }
+        else
+        {
+            hal_display_text((uint8_t)(((misc_sel == MISC_METRO) ? opt_metro : (misc_sel == MISC_RUNSTAT) ? opt_runstat : opt_asense) ?
+                                       HAL_TEXT_ON : HAL_TEXT_OFF));
+        }
+
         return;
     }
 
@@ -1992,6 +2065,8 @@ static void config_show(void)
         show_leds();
         hal_aux_led(HAL_LED_EXP_1, (uint8_t)(sw_thr[r * 2] ? 1 : HAL_LED_DIM));
         hal_aux_led(HAL_LED_EXP_2, (uint8_t)(sw_thr[r * 2 + 1] ? 1 : HAL_LED_DIM));
+        sw_named = 1;
+        hal_display_dots(2);
         hal_display_text((uint8_t)(HAL_TEXT_S1 + r));
         return;
     }
@@ -2001,7 +2076,8 @@ static void config_show(void)
     // MIDI CHANNEL, the channel, the digits that can come next dim.
     if (cfg_page == PAGE_MODES)
     {
-        led_aux   = (uint16_t)(bit16(PARAM_LED(cyc_elem)) | LED_BIT(HAL_LED_MIDI_FUNC));
+        // Steady (only the editor's flickers, user's request); none with the number.
+        led_aux   = (uint16_t)(((cyc_elem == CYC_SWITCH) ? 0 : bit16(PARAM_LED(cyc_elem))) | LED_BIT(HAL_LED_MIDI_FUNC));
         led_stomp = bit16(cfg_sel);
         show_leds();
         param_show();
@@ -2026,19 +2102,53 @@ static void cyc_tick(void)
 
     cyc_ticks = 0;
 
-    if (++cyc_steps < CYC_STEPS)
+    if (++cyc_steps < ((cyc_elem == CYC_SWITCH) ? CYC_SW_STEPS : CYC_STEPS))
     {
         return;
     }
 
     cyc_steps = 0;
-    cyc_elem  = (uint8_t)((cyc_elem == EP_OFF) ? EP_FUNC : cyc_elem + 1);
+    cyc_elem  = (uint8_t)((cyc_elem == EP_OFF) ? CYC_SWITCH : (cyc_elem == CYC_SWITCH) ? EP_FUNC : cyc_elem + 1);
 
     if (cyc_elem == EP_NUM && msg_type(cfg_sel) == MT_PROG)
     {
         cyc_elem = EP_ON;
     }
 
+    config_show();
+}
+
+// The LED brightness: led_level in run mode and on page 9, full on the other pages.
+static void led_apply(void)
+{
+    hal_led_level((uint8_t)((mode == MODE_CONFIG && cfg_page != PAGE_VERSION) ? 127 : led_level));
+}
+
+// The misc page: show the selected setting's name, then (misc_tick) its value.
+static void misc_name(void)
+{
+    misc_named = 1;
+    cyc_ticks  = 0;
+    cyc_steps  = 0;
+}
+
+// The misc page, each tick: the name and the value in turn, CONFIG_SHOW_MS each.
+static void misc_tick(void)
+{
+    if (++cyc_ticks < VER_STEP_TICKS)
+    {
+        return;
+    }
+
+    cyc_ticks = 0;
+
+    if (++cyc_steps < CYC_STEPS)
+    {
+        return;
+    }
+
+    cyc_steps  = 0;
+    misc_named = !misc_named;
     config_show();
 }
 
@@ -2050,9 +2160,11 @@ static void config_goto_page(uint8_t page)
     edit_pending = 0;
     num_typing = 0;
     cal_armed = 0;
-    // Leaving page 9 (or restarting it): normal LEDs again and no dots.
+    // Leaving page 9 (or restarting it): normal LEDs again and no dots; page 9 shows the
+    // saved brightness, the others full brightness.
     hal_lamp_test(HAL_LAMP_NORMAL);
     hal_display_dots(0);
+    led_apply();
 
     // Page 1 starts on the selected footswitch's pedal mode; page 2 takes channels 1-16.
     if (page == PAGE_MODES)
@@ -2082,14 +2194,17 @@ static void config_goto_page(uint8_t page)
         chan_flash_ticks = 0;
         num_begin(127, 0);
     }
-    // The misc page starts on footswitch 1, the metronome.
+    // The misc page starts on footswitch 1, the metronome: its name, then its value.
     else if (page == PAGE_MISC)
     {
         misc_sel = MISC_METRO;
+        misc_name();
     }
-    // Page 9 starts with the "riban" scroll's lead-in, every LED lit, then the chase.
+    // Page 9 starts with the "riban" scroll's lead-in, every LED lit, then the chase;
+    // pedal B sets the brightness once it is moved.
     else if (page == PAGE_VERSION)
     {
+        resync_pedals();
         ver_step    = VER_START_STEP;
         ver_ticks   = VER_STEP_TICKS;
         ver_lamp    = VER_LAMP_STEPS;
@@ -2159,6 +2274,8 @@ static void sw_pedal(uint8_t ch)
 
     sw_thr[(uint8_t)((cfg_page - PAGE_SW1) * 2 + ch)] = sent[ch];
     config_changed();
+    sw_named = 0;
+    hal_display_dots(0);
     hal_display(sent[ch]);
     hal_aux_led((uint8_t)(HAL_LED_EXP_1 + ch), (uint8_t)(sent[ch] ? 1 : HAL_LED_DIM));
 }
@@ -2465,6 +2582,7 @@ static void misc_press(uint8_t index)
     }
 
     misc_sel = index;
+    misc_name();
     config_changed();
     config_show();
 }
@@ -2577,6 +2695,7 @@ static void exit_config(uint8_t save)
     settle_dirty();
 
     mode = MODE_RUN;
+    led_apply();
     // Stop the CONFIG LED flash; its timer goes back to the MIDI IN flash.
     cfg_changed  = 0;
     cfg_led_dark = 0;
@@ -2939,6 +3058,7 @@ void ctl_init(void)
     hal_bank  = 0;
     bank_next = 0;
     load_settings();
+    hal_led_level(led_level);
 
     i = 0;
     do
@@ -3120,7 +3240,19 @@ void ctl_key_hold(uint8_t code)
 
             if (code == CTL_KEY_UP)
             {
-                save_begin();
+                // Only shared settings changed (the bank's records, 0 to HAL_REC_BANK, as
+                // saved): nothing to offer a bank for (user's request), so it saves and
+                // leaves at once, on the next tick (save_due; off this handler's stack). Nothing changed at all: the prompt, to copy the bank.
+                rec_n = 0;
+
+                if (cfg_changed && records_match(HAL_REC_CAL))
+                {
+                    save_due = 1;
+                }
+                else
+                {
+                    save_begin();
+                }
             }
             else
             {
@@ -3587,7 +3719,7 @@ static uint8_t np_kind(uint8_t p)
     if (p == NP_CHANNEL || p == NP_BANK || (p >= NP_MODE && p < NP_MODE + STOMP_COUNT) ||
         (p >= NP_TYPE && p < NP_OFF + STOMP_COUNT) || (p >= NP_FOLLOW1 && p < NP_FOLLOW1 + STOMP_COUNT) ||
         (p >= NP_FOLLOW2 && p < NP_FOLLOW2 + STOMP_COUNT) || (p >= NP_TRIGGER && p < NP_TRIGGER + 4) ||
-        p == NP_BANK_PC || p == NP_BANK_PC_ON || (p >= NP_PICKUP && p < NP_PEDAL_CC + 2))
+        p == NP_BANK_PC || p == NP_BANK_PC_ON || (p >= NP_PICKUP && p < NP_ASENSE + 1))
     {
         return NK_SET;
     }
@@ -3628,6 +3760,27 @@ static uint8_t nrpn_get(uint8_t p)
     if (p == NP_BANK_PC_ON)
     {
         return (uint8_t)(bank_pc != 0);
+    }
+
+    // The shared settings.
+    if (p == NP_LEVEL)
+    {
+        return led_level;
+    }
+
+    if (p == NP_METRO)
+    {
+        return opt_metro;
+    }
+
+    if (p == NP_RUNSTAT)
+    {
+        return opt_runstat;
+    }
+
+    if (p == NP_ASENSE)
+    {
+        return opt_asense;
     }
 
     if (p >= NP_PEDAL_CC)
@@ -3813,6 +3966,7 @@ static void nrpn_command(void)
     else if (rx_data1 == NC_RELOAD)
     {
         load_settings();
+        hal_led_level(led_level);
         // Every switch goes to its resting state under the reloaded settings (next tick).
         cfg_dirty = ALL_SWITCHES;
         resync_pedals();
@@ -3902,6 +4056,38 @@ static void nrpn_set(void)
         if (rx_data1 <= 1)
         {
             bank_pc = rx_data1 ? (uint8_t)(BANK_PC_PROGRAM + 1) : 0;
+        }
+
+        return;
+    }
+
+    // The brightness (a data byte, so always 0-127), used at once.
+    if (nrpn_lsb == NP_LEVEL)
+    {
+        led_level = rx_data1;
+        led_apply();
+        return;
+    }
+
+    // An option on / off: the value differs, so a 0 or 1 flips it.
+    if (nrpn_lsb >= NP_METRO)
+    {
+        if (rx_data1 <= 1)
+        {
+            if (nrpn_lsb == NP_METRO)
+            {
+                opt_metro = !opt_metro;
+                met_show();
+            }
+            else if (nrpn_lsb == NP_RUNSTAT)
+            {
+                opt_runstat = !opt_runstat;
+                tx_last     = 0;
+            }
+            else
+            {
+                opt_asense = !opt_asense;
+            }
         }
 
         return;
@@ -4210,6 +4396,16 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
         {
             sw_pedal(channel);
         }
+        // Page 9: pedal B sets the LED brightness, shown at once (user's request).
+        else if (cfg_page == PAGE_VERSION && channel == 1)
+        {
+            if (pedal_moved(1))
+            {
+                led_level = sent[1];
+                led_apply();
+                config_changed();
+            }
+        }
         else if (IS_EXP_PAGE(cfg_page) && channel == pcc_b && ped_sel == PED_CAL &&
                  cal_step == CAL_DONE && !pcc_open)
         {
@@ -4499,6 +4695,18 @@ void ctl_tick(void)
         {
             cyc_tick();
         }
+        else if (cfg_page == PAGE_MISC)
+        {
+            misc_tick();
+        }
+
+        // The editor: the edited setting's panel LED flickers (not page 1's cycle).
+        if (edit_open && !save_prompt && ++par_ticks >= PAR_TICKS)
+        {
+            par_ticks = 0;
+            par_on    = !par_on;
+            hal_aux_led(PARAM_LED(edit_param), par_on);
+        }
     }
 
     // Config mode: the blink. A number being entered flashes the right-hand dot (set
@@ -4533,6 +4741,12 @@ void ctl_tick(void)
     if (boot_anim || (mode == MODE_CONFIG && cfg_page == PAGE_VERSION && !save_prompt))
     {
         version_tick();
+    }
+
+    if (save_due)
+    {
+        save_due = 0;
+        exit_config(1);
     }
 
     // UP and DOWN held together: After the hold time, open or close configuration mode.
@@ -4649,6 +4863,7 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_CAL_ARMED:     return cal_armed;
     case CTL_INSPECT_NUM:           return (uint8_t)(num_typing | (num_lo1 << 1));
     case CTL_INSPECT_SHOWN:         return cyc_elem;
+    case CTL_INSPECT_LEVEL:         return led_level;
     case CTL_INSPECT_MISC:          return (uint8_t)((opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (opt_asense ? 4 : 0) | (met_sign << 3));
     default:                        return 0;
     }

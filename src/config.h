@@ -37,13 +37,29 @@
 // prompt's alternating bank number).
 #define CHANNEL_DIGIT_FLASH_MS    250
 
-// Configuration page 1 shows the selected footswitch's settings in turn (pedal mode,
-// type, number, on value, off value), each for this long. A multiple of 50.
+// Configuration page 1 shows the selected footswitch's number for CONFIG_SWITCH_SHOW_MS,
+// then its settings in turn (pedal mode, type, number, on value, off value), each for
+// CONFIG_SHOW_MS. The misc page shows each setting's name and value in turn, CONFIG_SHOW_MS
+// each. Multiples of 50.
 #define CONFIG_SHOW_MS            800
+#define CONFIG_SWITCH_SHOW_MS     1600
 
 // Configuration mode: once any setting has been changed, the CONFIG LED flashes
 // (this long on, then the same off) until the changes are saved or cancelled.
 #define CONFIG_CHANGED_FLASH_MS   250
+
+// Dim LEDs (configuration mode): how long in us they are lit in each 2ms LED slot, so
+// their brightness (0 to 1000). Before this setting they were lit for about 190us (10%).
+#ifndef LED_DIM_US
+#define LED_DIM_US                20
+#endif
+// LED brightness (configuration page 9, pedal B) until one is saved: 0 (the minimum) to
+// 127 (full). At 0 every LED is lit for LED_MIN_US in each 2ms slot (1 to 1000).
+#define LED_BRIGHTNESS            127
+#define LED_MIN_US                40
+// The footswitch editor: the panel LED of the setting being edited flickers, on and off
+// for this long each (user's request).
+#define PARAM_FLASH_MS            100
 
 // Run mode: the MIDI CHAN LED lights for this long after each received MIDI byte.
 // Real-time bytes (clock, active sensing...) do not light it.

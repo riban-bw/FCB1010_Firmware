@@ -105,7 +105,10 @@ void    hal_display(uint8_t value);
 #define HAL_TEXT_CL             (HAL_TEXT_MODE + 7)
 #define HAL_TEXT_RS             (HAL_TEXT_MODE + 8)
 #define HAL_TEXT_AS             (HAL_TEXT_MODE + 9)
-#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 10)
+// "On" and "Of": a misc setting's value.
+#define HAL_TEXT_ON             (HAL_TEXT_MODE + 10)
+#define HAL_TEXT_OFF            (HAL_TEXT_MODE + 11)
+#define HAL_TEXT_COUNT          (HAL_TEXT_MODE + 12)
 
 void    hal_display_text(uint8_t text);
 
@@ -145,6 +148,9 @@ void    hal_display_dots(uint8_t mask);
 // HAL_LAMP_LEDS_ON leaves the CONFIG LED following hal_status_led(), so it can
 // still flash for unsaved changes on the version page.
 void    hal_lamp_test(uint8_t how);
+// LED brightness, 0 (the minimum, LED_MIN_US) to 127 (full), for every LED and the
+// display.
+void    hal_led_level(uint8_t level);
 
 // Relay outputs (the SWITCH 1 / SWITCH 2 jacks): bit 0 = SWITCH 1, bit 1 = SWITCH 2,
 // a set bit closes the relay.

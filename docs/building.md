@@ -20,7 +20,7 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser editor in `editor/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 16.4KB (16817 bytes at the last build), so it needs a 32KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit, and prints a note once less than 2KB is left, so the code can be optimised for size in time).
+The code is about 17.8KB (18207 bytes at the last build), so it needs a 32KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit, and prints a note once less than 2KB is left, so the code can be optimised for size in time).
 
 Each build also updates the documentation: the code size above, the firmware version on configuration page 9 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
@@ -62,7 +62,8 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `CAL_MIN_SPAN` | 40 | Smallest heel-to-toe movement (ADC counts) accepted by calibration |
 | `CAL_ERROR_SHOW_MS` | 2000 | How long (ms) `Er` shows after a refused calibration, then the pedal's value. A multiple of `CHANNEL_DIGIT_FLASH_MS`, up to 255 of them |
 | `CHANNEL_DIGIT_FLASH_MS` | 250 | Flash half-period (ms) of the right-hand dot while a typed number can take another digit (also `Lo` / `Hi` in calibration and the save prompt's bank number) |
-| `CONFIG_SHOW_MS` | 800 | How long (ms) configuration page 1 shows each of the selected footswitch's settings. A multiple of 50 |
+| `CONFIG_SHOW_MS` | 800 | How long (ms) configuration page 1 shows each of the selected footswitch's settings, and the misc page each name and value. A multiple of 50 |
+| `CONFIG_SWITCH_SHOW_MS` | 1600 | How long (ms) configuration page 1 shows the selected footswitch's number before its settings. A multiple of 50 |
 | `CONFIG_CHANGED_FLASH_MS` | 250 | CONFIG LED flash half-period (ms) while a change is unsaved |
 | `MIDI_RX_FLASH_MS` | 60 | How long (ms) the MIDI CHAN LED lights for each received byte |
 | `MIDI_TX_FLASH_MS` | 60 | How long (ms) the MIDI FUNCTION LED lights for each message sent |
@@ -71,6 +72,10 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `BOOT_LAMP_MS` | 1000 | Time (ms) from power-on that every LED is lit, before the normal LEDs show while the scroll finishes. A multiple of 50 |
 | `DEFAULT_METRONOME` | 0 | The visual metronome (configuration page 8) until one is saved: 1 on |
 | `DEFAULT_RUNNING_STATUS` | 0 | Running status on MIDI OUT (configuration page 8) until one is saved: 1 on |
+| `LED_DIM_US` | 20 | How long the dim LEDs (configuration mode) are lit in each 2ms LED slot, in µs (0 to 1000): smaller is dimmer; 20 is 1% of the time |
+| `LED_BRIGHTNESS` | 127 | The LED brightness (configuration page 9, pedal B) until one is saved: 0 to 127 (full) |
+| `LED_MIN_US` | 40 | How long every LED is lit in each 2ms slot at the lowest brightness (0), in µs (1 to 1000) |
+| `PARAM_FLASH_MS` | 100 | The footswitch editor: the setting's panel LED flickers, on and off this long each |
 | `DEFAULT_ACTIVE_SENSING` | 0 | Active sensing on MIDI OUT (configuration page 8) until one is saved: 1 on |
 | `ACTIVE_SENSE_MS` | 250 | The interval between active sensing bytes, 2 to 510ms (the MIDI specification asks for at most 300ms) |
 | `LAMP_TEST_MS` | 1000 | Time (ms) every LED is lit on entering configuration page 9, before the chase. A multiple of 50 |

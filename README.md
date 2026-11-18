@@ -13,6 +13,7 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 - 2 relay outputs (the SWITCH 1 and SWITCH 2 jacks), triggered by any footswitch or pedal value, e.g. to switch amp channels or other gear
 - Footswitches that send the same controller or note share its state, in every bank
 - Follows incoming MIDI, so its state stay in step with your DAW or synth
+- Adjustable LED and display brightness, for dark stages
 - Visual metronome: the display flashes with the beat of incoming MIDI clock, marking beat 1
 - Answers the MIDI Identity Request (and sends its identity at power-on), so MIDI software can find it; optional running status and active sensing on MIDI OUT
 - Selectable (global) MIDI channel

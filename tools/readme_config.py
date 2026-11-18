@@ -102,6 +102,8 @@ RULES = [
     (r"shows each of its settings for ([\d.]+ seconds?)", [sec_words(num("CONFIG_SHOW_MS"))]),
     (r"every LED lights for ([\d.]+ seconds?)", [sec_words(num("LAMP_TEST_MS"))]),
     (r"active sensing \(FE\) every (\d+)ms", [num("ACTIVE_SENSE_MS")]),
+    (r"`On` or `Of`,? in turn, ([\d.]+ seconds?) each", [sec_words(num("CONFIG_SHOW_MS"))]),
+    (r"shows its number for ([\d.]+ seconds?)", [sec_words(num("CONFIG_SWITCH_SHOW_MS"))]),
     (r"\| Every (\d+)ms when turned on", [num("ACTIVE_SENSE_MS")]),
     # Technical reference
     (CC_PATTERN + r" \(`STOMP_CC_LIST`\)", [cc_words(stomp_cc)]),

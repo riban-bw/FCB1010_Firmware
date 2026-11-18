@@ -131,6 +131,14 @@ void hal_display_dots(uint8_t mask)
     dots = mask;
 }
 
+// The LED brightness last set (hal_led_level).
+static uint8_t hw_level = 127;
+
+void hal_led_level(uint8_t level)
+{
+    hw_level = level;
+}
+
 // The metronome's sign (HAL_SIGN_*), and how many times it changed.
 static uint8_t disp_sign;
 static int     sign_changes;
@@ -607,12 +615,22 @@ static void long_nav(uint8_t code)
     ctl_key_release(code);
 }
 
-// A long UP asks which bank to save to (the bank in use first); a short UP saves there.
+// A long UP asks which bank to save to (the bank in use first), and a short UP saves
+// there; with only shared settings changed it saves and leaves on the next tick.
 static void save_exit(void)
 {
     long_nav(CTL_KEY_UP);
-    CHECK(save_prompt && save_bank == hal_bank + 1 && mode == MODE_CONFIG);
-    tap(CTL_KEY_UP);
+
+    if (save_prompt)
+    {
+        CHECK(save_bank == hal_bank + 1 && mode == MODE_CONFIG);
+        tap(CTL_KEY_UP);
+    }
+    else
+    {
+        CHECK(mode == MODE_CONFIG && save_due);
+        ticks(1);
+    }
 }
 static void cancel_exit(void) { long_nav(CTL_KEY_DOWN); }
 
@@ -656,14 +674,16 @@ static void mode_tap(uint8_t code)
     if (i != cfg_sel)
     {
         tap(code);
+        ticks(CONFIG_SWITCH_SHOW_MS / TICK_MS + 1);
         return;
     }
 
     tap(code);
     tap(sw_code(((pedal_mode_get(i) + 1) & 3) + 1));
     edit_close();
-    // The change is compared with the EEPROM on the next tick.
-    ticks(1);
+    // The change is compared with the EEPROM on the next tick; page 1 then shows the
+    // switch's number, then its mode.
+    ticks(CONFIG_SWITCH_SHOW_MS / TICK_MS + 1);
 }
 
 // On pedal ch's EXP page: footswitch 9 (selected first if need be) until "Lo" flashes,
@@ -1227,8 +1247,8 @@ static void test_chord_and_config_entry(void)
     CHECK(status_led == 0 && mode == MODE_RUN);
     ticks(1);
     CHECK(status_led == 1 && mode == MODE_CONFIG);
-    // Config mode opens on page 1, pedal modes.
-    CHECK(cfg_page == PAGE_MODES && display == SHOWN_MODE(pedal_mode_get(0)));
+    // Config mode opens on page 1, footswitch 1's number first.
+    CHECK(cfg_page == PAGE_MODES && display == 1);
     CHECK(aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_MIDI_CHAN] == 0);
     chord_up();
     CHECK(mode == MODE_CONFIG && status_led == 1);
@@ -1495,8 +1515,8 @@ static void test_config_modes(void)
     printf("config: pedal modes\n");
     reset_world();
     chord_long();
-    // Footswitch 1 starts selected: its mode shows and its LED is lit.
-    CHECK(display == SHOWN_MODE(DEFAULT_PEDAL_MODE) && aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_MIDI_CHAN] == 0);
+    // Footswitch 1 starts selected: its number shows and its LED is lit.
+    CHECK(display == 1 && aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_MIDI_CHAN] == 0);
     CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0);
     CHECK(leds[0] == 1 && cfg_sel == 0);
     CHECK(pedal_mode_get(0) == DEFAULT_PEDAL_MODE);
@@ -1540,7 +1560,7 @@ static void test_config_modes(void)
     // settings record, which holds the channel, then three 0s.
     CHECK(msg_was_saved[9] && ((saved_msg[9][0] >> 2) & 3) == PM_MOMENTARY && (saved_msg[9][0] & 3) == MT_CC);
     CHECK(((saved_msg[2][0] >> 2) & 3) == PM_STOMP && saved_cfg[1] == 0 &&
-          saved_cfg[2] == 0 && saved_cfg[3] == MISC_DEFAULT);
+          saved_cfg[2] == (LEVEL_VALID | LED_BRIGHTNESS) && saved_cfg[3] == MISC_DEFAULT);
     memcpy(stored_cfg, saved_cfg, 4);
     cfg_stored_valid = 1;
     keep_saved_msgs();
@@ -1854,7 +1874,7 @@ static void test_config_page_leds(void)
     // Page 1 pedal modes.
     CHECK(cfg_page == PAGE_MODES && aux[HAL_LED_MIDI_CHAN] == 0 && aux[HAL_LED_MIDI_FUNC] == 1);
     CHECK(aux[HAL_LED_EXP_1] == 0 && aux[HAL_LED_EXP_2] == 0);
-    CHECK(display == SHOWN_MODE(pedal_mode_get(0)) && leds[0] == 1);
+    CHECK(display == 1 && leds[0] == 1);
     // Page 2 the MIDI channel (user's order).
     tap(CTL_KEY_UP);
     CHECK(cfg_page == PAGE_CHANNEL && aux[HAL_LED_MIDI_CHAN] == 1 && aux[HAL_LED_MIDI_FUNC] == 0);
@@ -1913,7 +1933,7 @@ static void test_config_page_leds(void)
     tap(sw_code(10));
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_MODES && !num_typing && midi_channel == 10 && aux[HAL_LED_MIDI_CHAN] == 0);
-    CHECK(aux[HAL_LED_MIDI_FUNC] == 1 && display == SHOWN_MODE(pedal_mode_get(0)));
+    CHECK(aux[HAL_LED_MIDI_FUNC] == 1 && display == 1);
     // DOWN on page 1 stays on page 1 (no wrap).
     tap(CTL_KEY_DOWN);
     CHECK(cfg_page == PAGE_MODES && aux[HAL_LED_MIDI_FUNC] == 1 && aux[HAL_LED_EXP_1] == 0);
@@ -2086,7 +2106,8 @@ static void test_config_version(void)
     // Page 8 again: every LED lit for exactly LAMP_TEST_MS, then the panel LEDs one at a
     // time along the row (SWITCH 1, SWITCH 2, SWITCH, SELECT, NUMBER, VALUE 1, VALUE 2,
     // DIRECT SELECT, MIDI FUNCTION, MIDI CHAN) and back, LAMP_CHASE_MS each (user's
-    // request). CONFIG and the EXP LEDs are not in it.
+    // request). CONFIG and the EXP LEDs are not in it: EXP 1 is lit on the way along and
+    // EXP 2 on the way back (user's request).
     tap(CTL_KEY_UP);
     CHECK(lamp == HAL_LAMP_LEDS_ON && aux[HAL_LED_DIRECT_SELECT] == 0);
     {
@@ -2112,10 +2133,11 @@ static void test_config_version(void)
 
                 for (n = 0; n < HAL_LED_COUNT; n++)
                 {
-                    lit += aux[n] ? 1 : 0;
+                    lit += (aux[n] && n != HAL_LED_EXP_1 && n != HAL_LED_EXP_2) ? 1 : 0;
                 }
 
                 bad += !(lit == 1 && aux[want] == 1 && lamp == HAL_LAMP_NORMAL);
+                bad += !(aux[HAL_LED_EXP_1] == (pos < 9) && aux[HAL_LED_EXP_2] == (pos >= 9));
                 ticks(1);
             }
         }
@@ -3079,7 +3101,8 @@ static void test_config_led_flash(void)
     mode_tap(1);
     CHECK(status_led == 0);
     CHECK(status_toggles(CFG_FLASH_TICKS * 4) == 4);
-    // Exact timing: the half-period is CFG_FLASH_TICKS ticks.
+    // Exact timing: the half-period is CFG_FLASH_TICKS ticks (from an edge).
+    while (status_led == 0) ctl_tick();
     while (status_led != 0) ctl_tick();
     CHECK(status_toggles(CFG_FLASH_TICKS - 1) == 0);
     CHECK(status_toggles(1) == 1 && status_led == 1);
@@ -3481,6 +3504,7 @@ static void test_config_editor(void)
 {
     const uint8_t cc[10] = { STOMP_CC_LIST };
     const int show = CONFIG_SHOW_MS / TICK_MS;
+    const int swshow = CONFIG_SWITCH_SHOW_MS / TICK_MS;
 
     printf("config: footswitch editor\n");
     reset_world();
@@ -3488,10 +3512,15 @@ static void test_config_editor(void)
     chord_long();
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_MODES && cfg_sel == 0);
 
-    // Page 1 shows switch 1's settings in turn, CONFIG_SHOW_MS each, each with its LED:
-    // the pedal mode (MIDI FUNCTION), type (SELECT), number, on value, off value.
-    CHECK(display == SHOWN_MODE(pedal_mode_get(0)) && param_leds(EP_FUNC));
+    // Page 1 shows switch 1's number for CONFIG_SWITCH_SHOW_MS (no setting LED), then its
+    // settings in turn, CONFIG_SHOW_MS each, each with its LED, steady (user's request):
+    // the pedal mode (SWITCH), type (SELECT), number, on value, off value.
+    CHECK(display == 1 && param_leds(-1));
     CHECK(stomp_leds_are(1, 0));
+    ticks(swshow - 1);
+    CHECK(display == 1);
+    ticks(1);
+    CHECK(display == SHOWN_MODE(pedal_mode_get(0)) && param_leds(EP_FUNC));
     ticks(show - 1);
     CHECK(display == SHOWN_MODE(pedal_mode_get(0)) && aux[HAL_LED_MIDI_FUNC] == 1);
     ticks(1);
@@ -3503,13 +3532,15 @@ static void test_config_editor(void)
     ticks(show);
     CHECK(display == 0 && param_leds(EP_OFF));
     ticks(show);
+    CHECK(display == 1 && param_leds(-1));
+    ticks(swshow);
     CHECK(display == SHOWN_MODE(pedal_mode_get(0)) && param_leds(EP_FUNC));
     CHECK(midi_len == 0 && !edit_open && cfg_changed == (DEFAULT_PEDAL_MODE != PM_STOMP));
 
     // A program change has no number: it is skipped.
     set_msg(1, MT_PROG, 99, 3, 4);
     tap(sw_code(2));
-    ticks(show);
+    ticks(swshow + show);
     CHECK(display == SHOWN_TEXT(HAL_TEXT_PROG));
     ticks(show);
     CHECK(display == 3 && param_leds(EP_ON));
@@ -3517,7 +3548,9 @@ static void test_config_editor(void)
 
     // Selecting switch 3 starts again there; nothing changes.
     tap(sw_code(3));
-    CHECK(cfg_sel == 2 && display == SHOWN_MODE(PM_STOMP) && !edit_open && stomp_leds_are(1u << 2, 0));
+    CHECK(cfg_sel == 2 && display == 3 && !edit_open && stomp_leds_are(1u << 2, 0));
+    ticks(swshow);
+    CHECK(display == SHOWN_MODE(PM_STOMP));
     ticks(show);
     CHECK(display == SHOWN_TEXT(HAL_TEXT_CC));
 
@@ -3611,8 +3644,8 @@ static void test_config_editor(void)
     tap(CTL_KEY_UP); tap(CTL_KEY_UP); tap(CTL_KEY_UP); tap(CTL_KEY_UP);
     CHECK(edit_param == EP_OFF && edit_open);
     tap(CTL_KEY_UP);
-    CHECK(!edit_open && mode == MODE_CONFIG && cfg_page == PAGE_MODES && param_leds(EP_FUNC));
-    CHECK(aux[HAL_LED_MIDI_FUNC] == 1 && display == SHOWN_MODE(PM_STOMP_MOM) && stomp_leds_are(1u << 2, 0));
+    CHECK(!edit_open && mode == MODE_CONFIG && cfg_page == PAGE_MODES && param_leds(-1));
+    CHECK(aux[HAL_LED_MIDI_FUNC] == 1 && display == 3 && stomp_leds_are(1u << 2, 0));
     CHECK(msg_type(2) == MT_NOTE && MSG_NUM(2) == 100 && MSG_ON(2) == 90 && MSG_OFF(2) == 35);
     CHECK(pedal_mode_get(2) == PM_STOMP_MOM && midi_len == 0);
     // With no editor, UP / DOWN change the page.
@@ -3646,7 +3679,7 @@ static void test_config_editor(void)
     CHECK(edit_param == EP_FUNC);
     tap(CTL_KEY_DOWN);
     CHECK(!edit_open && pedal_mode_get(2) == PM_STOMP_MOM && msg_type(2) == MT_NOTE && MSG_NUM(2) == 100 &&
-          MSG_ON(2) == 90 && MSG_OFF(2) == 35 && display == SHOWN_MODE(PM_STOMP_MOM));
+          MSG_ON(2) == 90 && MSG_OFF(2) == 35 && display == 3);
 
     // A long UP is a short one in the editor (it does not save and leave), and so is a
     // long DOWN.
@@ -3923,7 +3956,7 @@ static void test_midi_config(void)
     clear_log();
     dump_run(1000);
     n = parse_dump(0);
-    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 4 + 2 + 2 + 2 && dump_end && midi_job == 0);
+    CHECK(n == 1 + 3 + 2 + 10 + 40 + 10 + 10 + 4 + 4 + 2 + 2 + 2 + 4 && dump_end && midi_job == 0);
     CHECK(dump_values[NP_BANK] == 1 && dump_values[NP_BANKS] == BANK_COUNT);
     CHECK(dump_values[NP_BANK_PC] == 127 && dump_values[NP_BANK_PC_ON] == 0);
     CHECK(dump_values[NP_CHANNEL] == MIDI_CHANNEL);
@@ -5150,7 +5183,7 @@ static void test_pedal_cc_config(void)
     // Over MIDI: NRPN 96 / 97, the bank in use; the pedal sends on it from then on.
     reset_world();
     pk_mask = 0;
-    CHECK(np_kind(NP_PEDAL_CC) == NK_SET && np_kind(NP_PEDAL_CC + 1) == NK_SET && np_kind(NP_PEDAL_CC + 2) == NK_NONE);
+    CHECK(np_kind(NP_PEDAL_CC) == NK_SET && np_kind(NP_PEDAL_CC + 1) == NK_SET && np_kind(NP_ASENSE + 1) == NK_NONE);
     nrpn(NP_PEDAL_CC, 20);
     CHECK(pedal_cc[0] == 20 && nrpn_get(NP_PEDAL_CC) == 20 && nrpn_get(NP_PEDAL_CC + 1) == cc_b);
     pedal(0, 0);
@@ -5413,7 +5446,7 @@ static void test_pedal_pickup(void)
     CHECK(pk_mask == 2 && midi_len == 0 && stomp_leds_are(1u << PED_PICKUP, PED_MASK));
     save_exit();
     CHECK(mode == MODE_RUN && cfg_saved == 1 && saved_cfg[0] == MIDI_CHANNEL && saved_cfg[1] == 0);
-    CHECK(saved_cfg[2] == 0 && saved_cfg[3] == MISC_DEFAULT);
+    CHECK(saved_cfg[2] == (LEVEL_VALID | LED_BRIGHTNESS) && saved_cfg[3] == MISC_DEFAULT);
     // Saved with the bank: bit 7 of the pedals' packed bytes.
     CHECK((saved_y(0, 1) >> 7) == 0 && (saved_y(0, 2) >> 7) == 1);
     CHECK((saved_y(0, 1) & 0x7F) == pedal_cc[0] && (saved_y(0, 2) & 0x7F) == pedal_cc[1]);
@@ -5540,7 +5573,7 @@ static void test_save_bank(void)
     tap(CTL_KEY_DOWN);
     CHECK(mode == MODE_CONFIG && !save_prompt && cfg_page == PAGE_MODES && pedal_mode_get(0) == ((m + 1) & 3));
     ticks(1);
-    CHECK(dots == 0 && display == SHOWN_MODE((m + 1) & 3) && aux[HAL_LED_MIDI_FUNC] == 1 && msg_saved == 0);
+    CHECK(dots == 0 && display == 1 && aux[HAL_LED_MIDI_FUNC] == 1 && msg_saved == 0);
     long_nav(CTL_KEY_UP);
     CHECK(save_prompt && display == 1);
     long_nav(CTL_KEY_DOWN);
@@ -5844,7 +5877,7 @@ static void test_misc_page(void)
     CHECK(cfg_page == PAGE_VERSION && opt_metro && opt_runstat && !opt_asense && midi_len == 0);
     // Saved in the channel record's byte 3; bytes 1 and 2 stay 0.
     save_exit();
-    CHECK(cfg_saved == 1 && saved_cfg[1] == 0 && saved_cfg[2] == 0 && saved_cfg[3] == (MISC_VALID | 3));
+    CHECK(cfg_saved == 1 && saved_cfg[1] == 0 && saved_cfg[2] == (LEVEL_VALID | LED_BRIGHTNESS) && saved_cfg[3] == (MISC_VALID | 3));
     // Loaded at power-on (bits 0-2, with bit 7).
     reset_world();
     cfg_stored_valid = 1;
@@ -5862,6 +5895,208 @@ static void test_misc_page(void)
     CHECK(opt_asense && cfg_changed == 1);
     cancel_exit();
     CHECK(mode == MODE_RUN && !opt_asense && cfg_saved == 0);
+}
+
+// Config indicators (user's request): "S.1" / "S.2" on the SWITCH pages (the dot after
+// the S) until a pedal is moved; the misc page shows a setting's name ("CL", "r.S.",
+// "A.S.") for CONFIG_SHOW_MS, then its value; page 1's and the editor's setting LED
+// flickers, PARAM_FLASH_MS on and off.
+static void test_config_indicators(void)
+{
+    int k, flips = 0, last;
+
+    printf("config: S.1 / S.2, misc names then values, flickering setting LEDs\n");
+    reset_world();
+    chord_long();
+    to_page(PAGE_SW1);
+    ticks(1);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_S1) && dots == 2);
+    pedal(0, 100);
+    pedal(0, 200);
+    ticks(1);
+    CHECK(display == ctl_scale(200, 0, 255) && dots == 0);
+    tap(CTL_KEY_UP);
+    ticks(1);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_S2) && dots == 2);
+
+    // Misc: the name first (CL has no dots), then the value.
+    to_page(PAGE_MISC);
+    ticks(1);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_CL) && dots == 0);
+    ticks(CONFIG_SHOW_MS / TICK_MS - 2);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_CL));
+    ticks(2);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_OFF) && dots == 0);
+    tap(sw_code(MISC_RUNSTAT + 1));
+    ticks(1);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_RS) && dots == 3 && opt_runstat);
+    ticks(CONFIG_SHOW_MS / TICK_MS);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_ON) && dots == 0);
+    tap(sw_code(MISC_ASENSE + 1));
+    ticks(1);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_AS) && dots == 3);
+    ticks(CONFIG_SHOW_MS / TICK_MS);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_ON));
+    tap(sw_code(MISC_ASENSE + 1));
+    ticks(CONFIG_SHOW_MS / TICK_MS + 1);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_OFF) && !opt_asense);
+    // And so on, name and value in turn (user's request).
+    ticks(CONFIG_SHOW_MS / TICK_MS);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_AS) && dots == 3);
+    ticks(CONFIG_SHOW_MS / TICK_MS);
+    CHECK(display == SHOWN_TEXT(HAL_TEXT_OFF) && dots == 0);
+    tap(sw_code(MISC_RUNSTAT + 1));
+
+    // Page 1's cycle: the setting's LED (SWITCH, for the pedal mode) steady (user's
+    // request: only the editor's flickers).
+    to_page(PAGE_MODES);
+    ticks(CONFIG_SWITCH_SHOW_MS / TICK_MS);
+    CHECK(aux[HAL_LED_SWITCH] == 1);
+    last = aux[HAL_LED_SWITCH];
+
+    for (k = 0; k < (PARAM_FLASH_MS / TICK_MS) * 4; k++)
+    {
+        ticks(1);
+        flips += aux[HAL_LED_SWITCH] != last;
+        last = aux[HAL_LED_SWITCH];
+    }
+
+    CHECK(flips == 0 && aux[HAL_LED_SWITCH] == 1 && aux[HAL_LED_MIDI_FUNC] == 1);
+    // The editor's flickers, PARAM_FLASH_MS on and off.
+    tap(sw_code(1));
+    tap(CTL_KEY_UP);
+    CHECK(edit_open && edit_param == EP_TYPE);
+    flips = 0;
+    last = aux[HAL_LED_SELECT];
+
+    for (k = 0; k < (PARAM_FLASH_MS / TICK_MS) * 4; k++)
+    {
+        ticks(1);
+        flips += aux[HAL_LED_SELECT] != last;
+        last = aux[HAL_LED_SELECT];
+    }
+
+    CHECK(flips >= 3 && aux[HAL_LED_SWITCH] == 0);
+    cancel_exit();
+    reset_world();
+}
+
+// Shared (global) settings (user's request): brightness, channel, clock display, running
+// status and active sensing. Over NRPN (98-101, 0 the channel); and a long UP with only
+// these changed saves and leaves without the bank prompt.
+static void test_global_settings(void)
+{
+    int n;
+
+    printf("config: global settings (NRPN, saving without the bank prompt)\n");
+    reset_world();
+    nrpn(NP_LEVEL, 30);
+    CHECK(led_level == 30 && hw_level == 30);
+    nrpn(NP_METRO, 1);
+    nrpn(NP_RUNSTAT, 1);
+    nrpn(NP_ASENSE, 1);
+    CHECK(opt_metro && opt_runstat && opt_asense && midi_len == 0);
+    nrpn(NP_ASENSE, 1);
+    nrpn(NP_METRO, 2);
+    CHECK(opt_asense && opt_metro);
+    nrpn(NP_ASENSE, 0);
+    CHECK(!opt_asense);
+    // In a dump (running status off, so every message has its status byte here).
+    nrpn(NP_RUNSTAT, 0);
+    CHECK(!opt_runstat);
+    clear_log();
+    dump_run(1000);
+    n = parse_dump(0);
+    CHECK(n > 0 && dump_seen[NP_LEVEL] && dump_values[NP_LEVEL] == 30 && dump_values[NP_METRO] == 1 &&
+          dump_values[NP_RUNSTAT] == 0 && dump_values[NP_ASENSE] == 0);
+    // Saved by the save command, in the channel record.
+    nrpn(NP_COMMAND, NC_SAVE);
+    CHECK(saved_cfg[2] == (LEVEL_VALID | 30) && saved_cfg[3] == (MISC_VALID | 1));
+    reset_world();
+
+    // A long UP with only a shared setting changed (the channel) saves and leaves.
+    chord_long();
+    to_page(PAGE_CHANNEL);
+    tap(sw_code(5));
+    CHECK(midi_channel == 5);
+    long_nav(CTL_KEY_UP);
+    CHECK(!save_prompt && mode == MODE_CONFIG);
+    ticks(1);
+    CHECK(mode == MODE_RUN && cfg_saved == 1 && saved_cfg[0] == 5);
+    // Nothing changed: the prompt (to copy the bank).
+    reset_world();
+    chord_long();
+    long_nav(CTL_KEY_UP);
+    CHECK(save_prompt);
+    tap(CTL_KEY_DOWN);
+    // A bank setting changed too: the prompt.
+    to_page(PAGE_MISC);
+    tap(sw_code(MISC_METRO + 1));
+    to_page(PAGE_BANK_PC);
+    tap(sw_code(3));
+    long_nav(CTL_KEY_UP);
+    CHECK(save_prompt && mode == MODE_CONFIG);
+    tap(CTL_KEY_DOWN);
+    cancel_exit();
+    reset_world();
+}
+
+// LED brightness (user's request): pedal B on page 9 sets it, live there and in run
+// mode; the other config pages are at full brightness. Saved in the channel record's
+// byte 2 (bit 7 set; without it, LED_BRIGHTNESS).
+static void test_led_brightness(void)
+{
+    printf("LEDs: brightness\n");
+    reset_world();
+    CHECK(led_level == LED_BRIGHTNESS && hw_level == LED_BRIGHTNESS);
+    chord_long();
+    CHECK(hw_level == 127);
+    to_page(PAGE_VERSION);
+    CHECK(hw_level == LED_BRIGHTNESS);
+    // The first reading is only a reference; a move sets it.
+    pedal(1, 128);
+    CHECK(led_level == LED_BRIGHTNESS);
+    pedal(1, 0);
+    CHECK(led_level == 0 && hw_level == 0);
+    pedal(1, 100);
+    CHECK(led_level == ctl_scale(100, 0, 255) && hw_level == led_level);
+    // Pedal A does nothing here.
+    pedal(0, 0);
+    pedal(0, 255);
+    CHECK(led_level == ctl_scale(100, 0, 255) && midi_len == 0);
+    pedal(1, 0);
+    ticks(1);
+    CHECK(cfg_changed == (LED_BRIGHTNESS != 0));
+    // Other pages: full brightness; back on page 9, the setting again.
+    tap(CTL_KEY_DOWN);
+    CHECK(hw_level == 127 && led_level == 0);
+    tap(CTL_KEY_UP);
+    CHECK(hw_level == 0);
+    // Saved, and used in run mode.
+    save_exit();
+    CHECK(mode == MODE_RUN && hw_level == 0 && saved_cfg[2] == LEVEL_VALID);
+    // Loaded at power-on.
+    reset_world();
+    cfg_stored_valid = 1;
+    stored_cfg[0] = MIDI_CHANNEL;
+    stored_cfg[2] = LEVEL_VALID | 10;
+    power_on();
+    CHECK(led_level == 10 && hw_level == 10);
+    // A record without bit 7 (older firmware saved 0): the default.
+    stored_cfg[2] = 10;
+    power_on();
+    CHECK(led_level == LED_BRIGHTNESS && hw_level == LED_BRIGHTNESS);
+    // A cancel puts it back.
+    stored_cfg[2] = LEVEL_VALID | 50;
+    power_on();
+    chord_long();
+    to_page(PAGE_VERSION);
+    pedal(1, 255);
+    pedal(1, 0);
+    CHECK(led_level == 0);
+    cancel_exit();
+    CHECK(mode == MODE_RUN && led_level == 50 && hw_level == 50);
+    reset_world();
 }
 
 // Active sensing (user's request): with it on, FE every ACTIVE_SENSE_MS, in run and
@@ -6105,6 +6340,9 @@ int main(void)
     test_metronome();
     test_running_status();
     test_active_sensing();
+    test_config_indicators();
+    test_led_brightness();
+    test_global_settings();
     test_pc_mode();
     test_shared_state();
     test_cc_memory();

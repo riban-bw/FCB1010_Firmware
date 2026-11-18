@@ -10,6 +10,7 @@
 // vector table entries.
 void timer0_isr(void) __interrupt(1);
 void serial_isr(void) __interrupt(4);
+void timer2_isr(void) __interrupt(5);
 
 // Set up ports, latches, MIDI UART, scan timer and enable interrupts.
 void    hw_init(void);
