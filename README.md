@@ -8,16 +8,17 @@ It suits anyone who wants to switch effects in a DAW, a plugin host or a MIDI-ca
 
 - 10 footswitches, each sending its own MIDI controller (CC), note or program change, with a choice of four switch behaviours
 - 30 banks, chosen with UP and DOWN, each with its own footswitch, expression pedal and relay settings
-- Program mode (UP + DOWN tapped): program change from UP and DOWN, with fast scrolling when held, or typed on the footswitches
-- 2 expression pedals, each sending its own CC (set per bank), every move or picking up the current value first, so a value set elsewhere does not jump
-- 2 relay outputs (the SWITCH 1 and SWITCH 2 jacks), triggered by any footswitch or pedal, to switch amp channels or other gear
+- Program mode, program change up and down with fast scrolling when held, or typed on the footswitches
+- 2 expression pedals, each sending its own CC (set per bank). Immediate (absolute) value or picking up the current value first, so a value does not jump
+- 2 relay outputs (the SWITCH 1 and SWITCH 2 jacks), triggered by any footswitch or pedal value, e.g. to switch amp channels or other gear
 - Footswitches that send the same controller or note share its state, in every bank
-- Follows incoming MIDI, so its LEDs stay in step with your DAW or synth
-- Selectable MIDI channel
-- Simple configuration on the pedal, saved in its memory, into the bank in use or another one (to copy a bank, or start from one as a template)
-- Or configure it from a computer over MIDI, with a web page (no special software or SysEx), which can also copy a bank's settings to another bank
+- Follows incoming MIDI, so its state stay in step with your DAW or synth
+- Selectable (global) MIDI channel
+- Simple configuration on the pedal with ability to save to other banks, e.g. copy bank configuration
+- Configure it from a computer over MIDI, with a web page (no special software or SysEx) with a device simulator
 
-[Open the editor in your browser](https://riban-bw.github.io/FCB1010_Firmware/editor/). It runs this firmware's own control code, so you can try the footswitches, pedals and configuration pages before flashing a chip, and its "Configure over MIDI" panel sets up a real pedal too. Its on-screen hints explain each control as you use it.
+[Open the editor in your browser](https://riban-bw.github.io/FCB1010_Firmware/editor/). It has a simulator that runs this firmware's own control code, so you can try the footswitches, pedals and configuration pages before flashing a chip. Its "Configure over MIDI" panel acts as an editor, setting up a real pedal too with save to and load from file. Its on-screen hints explain each control as you use it.
+
 ## Documentation
 
 For players:
@@ -39,4 +40,4 @@ Technical reference:
 
 1. Read the warning in [Installing](docs/installing.md), back up the original chip, and program a new one with the image for your chip size (`build/fcb1010_27c512.bin` for a 27C512).
 2. Power on: "riban" scrolls, then the display shows `1` (footswitch bank 1).
-3. Press a footswitch to turn its effect on and off, UP or DOWN to change footswitch bank, and UP + DOWN tapped together to switch UP, DOWN and the footswitches to changing program; [Using the pedal](docs/using.md) lists the messages each control sends out of the box. Hold UP and DOWN together to configure it (see [Configuration](docs/configuration.md)).
+3. Press a footswitch to turn its effect on and off, UP or DOWN to change footswitch bank, and UP + DOWN tapped together to toggle to Program mode where UP and DOWN send MIDI program change. [Using the pedal](docs/using.md) lists the messages each control sends, out of the box. Hold UP and DOWN together to configure it (see [Configuration](docs/configuration.md)).
