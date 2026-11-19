@@ -353,10 +353,10 @@ check "ten stomp taps and nothing else, no program change" \
       "$(messages "$TMP/s9.out")" \
       "$(SWITCHES="$CC1 $CC2 $CC3 $CC4 $CC5 $CC6 $CC7 $CC8 $CC9 $CC10" expect "$V1")"
 
-echo "scenario 10: config page 9 lights every LED, scrolls riban, then shows the major version"
-# Into config mode, then eight taps of row 2 (UP, plus switches 6-10, which only edit
-# settings on the way; on pages 3, 4 and 8, EXP A, EXP B and misc, they do nothing, as
-# UP is down when they are let go) reach page 9.
+echo "scenario 10: config page 8 lights every LED, scrolls riban, then shows the major version"
+# Into config mode, then seven taps of row 2 (UP, plus switches 6-10, which only edit
+# settings on the way; on pages 3 and 7, EXP and misc, they do nothing, as UP is down
+# when they are let go) reach page 8.
 # About 0.1 s in, led_map (units, tens, left) holds the scroll's lead-in: digits blank,
 # the units' dot lit; about 3.5 s in (after the ten scroll frames, 3 s with the default
 # SCROLL_FRAME_MS) the major version with the dot after the units.
@@ -386,7 +386,7 @@ print((36 + f // 2) * 595, 2 * f * 595, (15 * f // 2 + v // 2) * 595)')
     echo "set hardware port[1] 0x9f"; echo "step 800000"
     echo "set hardware port[1] 0xff"; echo "step 900000"
     echo "set hardware port[1] 0x9f"; echo "step 300000"
-    for i in 1 2 3 4 5 6 7 8; do
+    for i in 1 2 3 4 5 6 7; do
         echo "set hardware port[1] 0xbf"; echo "step 60000"
         echo "set hardware port[1] 0x9f"; echo "step 60000"
     done
@@ -413,7 +413,7 @@ check "then the first riban frame, the scroll's r (A B E F) with the dot after t
 check "after the scroll the display shows the major version (units, tens, left: $VER_EXPECT)" \
       "$(for a in 0 1 2; do grep -E "^0x$(printf '%02x' $((LED_MAP + a))) " "$TMP/s10.console" | tail -1 | awk '{printf "%s ", $2}'; done | sed 's/ $//')" "$VER_EXPECT"
 # The channel page taps changed the channel, so a change is unsaved. By now (past the
-# LAMP_TEST_MS lamp test) page 9 shows the chase: one panel LED lit at a time (row 3's
+# LAMP_TEST_MS lamp test) page 8 shows the chase: one panel LED lit at a time (row 3's
 # SWITCH 1 / 2 and the MIDI / EXP bits, row 5's SWITCH, SELECT to VALUE 2 and DIRECT
 # SELECT), and a footswitch LED lit at the start of each segment (switches 4 and 5 are
 # row 3's 0x80 / 0x40, the other eight all of row 4). Lit is a low bit. So no row shows
@@ -454,7 +454,7 @@ LAMP10=$(grep -aoE '0x1ff[89] {4,}[0-9a-f]{2}( [0-9a-f]{2})?' "$TMP/s10b.console
     $1 == "0x1ff8" { com = $2; next }
     $1 == "0x1ff9" && com != "" { sample(com, $2); com = "" }
     END { print (bad ? "bad" : "ok"), (total >= 150 ? "enough" : "few:" total + 0), (n >= 20 ? "many" : n + 0), on + 0, off + 0, chase3 + 0, chase5 + 0, blink + 0 }')
-check "page 9 with an unsaved change: the chase, CONFIG flashing, a footswitch LED lit (state, samples, row-5 samples, CONFIG lit, CONFIG dark, chase row 3, chase row 5, footswitch lit)" \
+check "page 8 with an unsaved change: the chase, CONFIG flashing, a footswitch LED lit (state, samples, row-5 samples, CONFIG lit, CONFIG dark, chase row 3, chase row 5, footswitch lit)" \
       "$LAMP10" "ok enough many 1 1 1 1 1"
 # The entry chord taps all ten stomps in run mode (their CCs); page changes send no program.
 check "no program change was sent" "$(messages "$TMP/s10.out" | tr ' ' '\n' | grep -c '^c')" "0"

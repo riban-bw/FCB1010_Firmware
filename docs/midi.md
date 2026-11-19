@@ -10,15 +10,15 @@ What the pedal sends and receives, and the SysEx messages that configure it.
 |---|---|---|
 | Control change, footswitches | CC 21 to 30 (`STOMP_CC_LIST`), 127 ON, 0 OFF by default; any controller number, ON value and OFF value per switch | A CC on channel 1 with a CC switch's controller number sets that switch: its ON value is ON, its OFF value OFF, and any other value 64 to 127 ON, 0 to 63 OFF |
 | Note on / off, footswitches | Note switches: note on (0x9n) with the ON value as velocity when ON, note off (0x8n) with the OFF value as velocity when OFF | A note on with velocity 1 to 127 sets a note switch with that note ON; a note off, or a note on with velocity 0, sets it OFF |
-| Control change, pedals | CC 7 and CC 11 (`PEDAL_CC_LIST`) by default, any controller per pedal and bank (configuration pages 3 and 4, parameters 96 and 97), 0 to 127 | Ignored, except that a pickup pedal waits for its controller's value (see [Expression pedals](using.md#expression-pedals)) |
-| Program change | 0 to 127, on release of UP / DOWN; on choosing a footswitch bank that has a program change set (configuration page 7); a program change footswitch sends its ON value as the program when it turns ON and its OFF value when it turns OFF (with both the same, that program on every press) | Ignored |
+| Control change, pedals | CC 7 and CC 11 (`PEDAL_CC_LIST`) by default, any controller per pedal and bank (configuration page 3, parameters 96 and 97), 0 to 127 | Ignored, except that a pickup pedal waits for its controller's value (see [Expression pedals](using.md#expression-pedals)) |
+| Program change | 0 to 127, on release of UP / DOWN; on choosing a footswitch bank that has a program change set (configuration page 6); a program change footswitch sends its ON value as the program when it turns ON and its OFF value when it turns OFF (with both the same, that program on every press) | Ignored |
 | SysEx settings (`F0 7D 46 43 ...`) | A settings dump, when asked | Settings, commands and dump requests (see [Configuration over MIDI](#configuration-over-midi)) |
 | SysEx Identity Reply / Request | The Identity Reply, when asked and once at power-on | The Identity Request (see [Device identity](#device-identity)) |
-| Active sensing (FE) | Every 250ms when turned on (configuration page 8) | Ignored |
-| MIDI clock, Start, Continue, Stop, Song Position Pointer | Nothing | The visual metronome, when it is on (configuration page 8; see [Misc settings](configuration.md#misc-settings)) |
+| Active sensing (FE) | Every 250ms when turned on (configuration page 7) | Ignored |
+| MIDI clock, Start, Continue, Stop, Song Position Pointer | Nothing | The visual metronome, when it is on (configuration page 7; see [Misc settings](configuration.md#misc-settings)) |
 
 - Everything is on one channel: `MIDI_CHANNEL` until a channel is saved in configuration mode.
-- MIDI OUT sends every status byte unless running status is turned on (configuration page 8): then a channel message whose status byte is the same as the last one sent leaves it out. A SysEx message (the identity or a settings dump) clears it, so the next message has its status byte.
+- MIDI OUT sends every status byte unless running status is turned on (configuration page 7): then a channel message whose status byte is the same as the last one sent leaves it out. A SysEx message (the identity or a settings dump) clears it, so the next message has its status byte.
 - Received messages only set the pedal's own state and LEDs; nothing is echoed to MIDI OUT. The next footswitch press toggles from the received state: if CC 21 turned switch 1 ON, pressing switch 1 sends CC 21 value 0.
 - A received CC or note sets every footswitch with it, and so does one a footswitch sends (in run mode): footswitches sharing a CC or note share its state. A bank change passes each CC's and note's state on to the new bank's footswitches by the same rule and sends nothing but the bank's program change, if set.
 - The receiver handles running status and split messages, takes real-time bytes anywhere (clock, Start, Continue and Stop drive the visual metronome; active sensing is ignored), ignores SysEx other than the Identity Request and its own settings messages, other channels and other controller numbers. Received messages are ignored in configuration mode, except the Identity Request.
@@ -45,7 +45,7 @@ F0 7E <channel - 1> 06 02 7D 46 43 31 30 <major> <minor> <build> <high bits> F7
 | `7D` | Manufacturer ID (`SYSEX_ID` in `config.h`): 7D is the ID set aside for non-commercial use; see [The SysEx ID](#the-sysex-id) |
 | `46 43` | Device family: "FC" in ASCII |
 | `31 30` | Family member: "10" in ASCII |
-| `<major> <minor> <build>` | The firmware version (as page 9 shows it), bits 0 to 6 of each |
+| `<major> <minor> <build>` | The firmware version (as page 8 shows it), bits 0 to 6 of each |
 | `<high bits>` | Bit 7 of the major (bit 0), minor (bit 1) and build (bit 2) numbers, for versions and builds of 128 and up |
 
 Any other SysEx message, except the pedal's own settings messages (below), is ignored.
@@ -103,22 +103,22 @@ Parameters for a set, with the values each takes (the dump holds the same settin
 | 72 to 81 | SWITCH 2, the same | 0 / 1 |
 | 84, 85 | SWITCH 1 trigger, pedal A, pedal B | 1 to 127, 0 off |
 | 86, 87 | SWITCH 2 trigger, pedal A, pedal B | 1 to 127, 0 off |
-| 92 | The program change the bank in use sends when it is chosen (configuration page 7) | 0 to 127; setting it also turns it on. Reads 127 while it is off |
+| 92 | The program change the bank in use sends when it is chosen (configuration page 6) | 0 to 127; setting it also turns it on. Reads 127 while it is off |
 | 93 | Whether the bank in use sends that program change | 0 none (`--` on the pedal), 1 on (with the program parameter 92 reads) |
-| 94, 95 | Expression pedal A, pedal B response (configuration pages 3 and 4) | 0 immediate, 1 pickup |
-| 96, 97 | Expression pedal A, pedal B controller number (configuration pages 3 and 4) | 0 to 127 |
-| 98 | LED and display brightness (configuration page 9), shared | 0 (the minimum) to 127 (full) |
-| 99 | MIDI clock display, the visual metronome (configuration page 8), shared | 0 off, 1 on |
-| 100 | Running status on MIDI OUT (configuration page 8), shared | 0 off, 1 on |
-| 101 | Active sensing on MIDI OUT (configuration page 8), shared | 0 off, 1 on |
-| 102, 103 | The value expression pedal A, pedal B sends at the heel (VALUE 1 in the CC editor, configuration pages 3 and 4) | 0 to 127; 0 by default |
+| 94, 95 | Expression pedal A, pedal B response (configuration page 3, the pedal editor's SELECT step) | 0 immediate, 1 pickup |
+| 96, 97 | Expression pedal A, pedal B controller number (configuration page 3) | 0 to 127 |
+| 98 | LED and display brightness (configuration page 8), shared | 0 (the minimum) to 127 (full) |
+| 99 | MIDI clock display, the visual metronome (configuration page 7), shared | 0 off, 1 on |
+| 100 | Running status on MIDI OUT (configuration page 7), shared | 0 off, 1 on |
+| 101 | Active sensing on MIDI OUT (configuration page 7), shared | 0 off, 1 on |
+| 102, 103 | The value expression pedal A, pedal B sends at the heel (VALUE 1 in the pedal editor, configuration page 3) | 0 to 127; 0 by default |
 | 104, 105 | The value pedal A, pedal B sends at the toe (VALUE 2) | 0 to 127; 127 by default. The pedal's travel is spread evenly from the heel value to the toe value, either way round |
 
 - A set takes effect at once but is not saved; command 2 saves everything, as leaving configuration mode does, and command 3 reloads what is saved. Unknown parameters, read-only ones, out-of-range values and values equal to the current one are ignored.
 - A footswitch whose mode or message changes goes to its resting state on the next 2ms tick (as on a save in configuration mode). If it was ON when its message changed, the old message's OFF is sent first (not for a program change).
-- The pedal calibration is not available over MIDI: it belongs to the unit's own pedals and is set only on configuration pages 3 and 4, so settings sent from another unit cannot spoil it. Commands 1 (the old NRPN dump), 4 and 5 and parameters 88 to 91 (calibration, in earlier firmware) are ignored.
+- The pedal calibration is not available over MIDI: it belongs to the unit's own pedals and is set only on configuration page 3, so settings sent from another unit cannot spoil it. Commands 1 (the old NRPN dump), 4 and 5 and parameters 88 to 91 (calibration, in earlier firmware) are ignored.
 - A dump goes out as soon as MIDI OUT has room for all of it (it is sent whole, in one message). Another bank's settings are read from the EEPROM first (about 10ms). The pedal never answers a set or a write, so a MIDI loop cannot make it talk to itself, and a dump fed back to it changes nothing.
-- A bank change (parameter 6) happens on the next tick, once any pending stomp with momentary revert has gone out, and sends only the new bank's program change, if it has one (configuration page 7, or parameters 92 and 93); the new bank's pedal controllers, pedal responses and relay settings apply from then on. A dump asked for meanwhile waits for it and describes the new bank, but sets sent before it finishes apply to the old bank and are lost, so read back (or wait about 50ms) before setting the new bank's footswitches. Unsaved changes to the old bank's settings are dropped; save (command 2) first to keep them. The states passed on to the new bank are worked out from the old bank's saved records, so with unsaved message changes they follow the saved messages.
+- A bank change (parameter 6) happens on the next tick, once any pending stomp with momentary revert has gone out, and sends only the new bank's program change, if it has one (configuration page 6, or parameters 92 and 93); the new bank's pedal controllers, pedal responses and relay settings apply from then on. A dump asked for meanwhile waits for it and describes the new bank, but sets sent before it finishes apply to the old bank and are lost, so read back (or wait about 50ms) before setting the new bank's footswitches. Unsaved changes to the old bank's settings are dropped; save (command 2) first to keep them. The states passed on to the new bank are worked out from the old bank's saved records, so with unsaved message changes they follow the saved messages.
 - A pedal in pickup mode sends nothing after its controller's value has changed elsewhere (a footswitch sending it, or a CC received on MIDI IN; at power-on it counts as 0) until the pedal reaches that value or passes it. Then it sends as usual. Turning pickup on while the pedal is the last thing that set its controller changes nothing until the value changes elsewhere. After a change of controller (parameters 96 and 97, or a bank whose pedal sends another one) a pickup pedal waits for the new controller's value.
 - A bank write stores the bank's EEPROM records (twelve 5-byte records, 15 or so EEPROM write cycles: about 70ms with a 5ms EEPROM, and up to about 150ms with a slow one), and the pedal does nothing else meanwhile. Its MIDI IN queue holds 128 bytes, so it can take one more write while it stores one, but not more. To restore every bank, either ask for a dump of each bank after writing it (the dump goes out only once the write is done, and shows what was stored), or leave about 200ms between writes. The editor page does the first when it has a MIDI input, the second when it has only an output. Restoring all 30 banks then takes about 5 to 6 seconds.
 - A single message with every bank in it would not be much quicker: the bytes take about 0.6 seconds on the cable for 30 banks, and the EEPROM writes take the rest either way. It would also need the pedal to hold 1.5KB before writing anything, and one error would lose the lot, so the protocol writes one bank at a time.

@@ -20,13 +20,13 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser editor in `editor/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 16.3KB (16741 bytes at the last build), so it needs a 32KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit, and prints a note once less than 2KB is left, so the code can be optimised for size in time).
+The code is about 16.4KB (16805 bytes at the last build), so it needs a 32KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit, and prints a note once less than 2KB is left, so the code can be optimised for size in time).
 
-Each build also updates the documentation: the code size above, the firmware version on configuration page 9 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
+Each build also updates the documentation: the code size above, the firmware version on configuration page 8 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
 ## Firmware version
 
-The version shows on configuration page 9 as major, minor and build. Major and minor are set by hand in `src/version.h`, in decimal (0 to 199), and shown in decimal (from 100 with the display's leftmost "1"); the build number is shown in hex. The build number in `src/version_build.inc` goes up by one each time `make` rebuilds the firmware image; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone.
+The version shows on configuration page 8 as major, minor and build. Major and minor are set by hand in `src/version.h`, in decimal (0 to 199), and shown in decimal (from 100 with the display's leftmost "1"); the build number is shown in hex. The build number in `src/version_build.inc` goes up by one each time `make` rebuilds the firmware image; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone.
 
 ## Compile-time configuration
 
@@ -36,7 +36,7 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 |---|---|---|
 | `MIDI_CHANNEL` | 1 | MIDI channel (1 to 16) used until a channel is saved in configuration mode |
 | `STOMP_CC_LIST` | 21, 22, 23, 24, 25, 26, 27, 28, 29, 30 | Controller number of each footswitch, 1 to 10 |
-| `PEDAL_CC_LIST` | 7, 11 | Controller numbers of expression pedals A and B until changed on configuration pages 3 and 4 (each bank has its own) |
+| `PEDAL_CC_LIST` | 7, 11 | Controller numbers of expression pedals A and B until changed on configuration page 3 (each bank has its own) |
 | `PEDAL_PICKUP_A` | 0 | Expression pedal A's response until changed on configuration page 3 (each bank has its own): 0 immediate, 1 pickup |
 | `PEDAL_PICKUP_B` | 0 | The same for pedal B |
 | `PEDAL_PICKUP_WINDOW` | 2 | A pickup pedal picks up within this many CC steps of its controller's value (or on passing it) |
@@ -67,21 +67,21 @@ These options are in `src/config.h`. Change them and rebuild. The current values
 | `CONFIG_CHANGED_FLASH_MS` | 250 | CONFIG LED flash half-period (ms) while a change is unsaved |
 | `MIDI_RX_FLASH_MS` | 60 | How long (ms) the MIDI CHAN LED lights for each received byte |
 | `MIDI_TX_FLASH_MS` | 60 | How long (ms) the MIDI FUNCTION LED lights for each message sent |
-| `BANK_PC_LABEL_MS` | 1000 | How long (ms) configuration page 7 shows `Pr`, then the program, in turn. A multiple of 50, up to 6350 |
+| `BANK_PC_LABEL_MS` | 1000 | How long (ms) configuration page 6 shows `Pr`, then the program, in turn. A multiple of 50, up to 6350 |
 | `SCROLL_FRAME_MS` | 200 | Time (ms) each frame of the "riban" scroll shows; power-on is ten frames (3 seconds at 300); smaller scrolls faster. A multiple of 50, at least 100 |
 | `BOOT_LAMP_MS` | 1000 | Time (ms) from power-on that every LED is lit, before the normal LEDs show while the scroll finishes. A multiple of 50 |
-| `DEFAULT_METRONOME` | 0 | The visual metronome (configuration page 8) until one is saved: 1 on |
-| `DEFAULT_RUNNING_STATUS` | 0 | Running status on MIDI OUT (configuration page 8) until one is saved: 1 on |
+| `DEFAULT_METRONOME` | 0 | The visual metronome (configuration page 7) until one is saved: 1 on |
+| `DEFAULT_RUNNING_STATUS` | 0 | Running status on MIDI OUT (configuration page 7) until one is saved: 1 on |
 | `LED_DIM_US` | 20 | How long the dim LEDs (configuration mode) are lit in each 2ms LED slot, in µs (0 to 1000): smaller is dimmer; 20 is 1% of the time |
-| `LED_BRIGHTNESS` | 127 | The LED brightness (configuration page 9, pedal B) until one is saved: 0 to 127 (full) |
+| `LED_BRIGHTNESS` | 127 | The LED brightness (configuration page 8, pedal B) until one is saved: 0 to 127 (full) |
 | `LED_MIN_US` | 40 | How long every LED is lit in each 2ms slot at the lowest brightness (0), in µs (1 to 1000) |
 | `PARAM_FLASH_MS` | 100 | The footswitch editor: the setting's panel LED flickers, on and off this long each |
-| `DEFAULT_ACTIVE_SENSING` | 0 | Active sensing on MIDI OUT (configuration page 8) until one is saved: 1 on |
+| `DEFAULT_ACTIVE_SENSING` | 0 | Active sensing on MIDI OUT (configuration page 7) until one is saved: 1 on |
 | `SYSEX_ID` | 0x7D | The SysEx manufacturer ID of the identity reply and the settings messages, one byte (0x01 to 0x7D). 0x7D is the MIDI ID for non-commercial use: the project has no ID of its own, and 0x7C is only for MIDI 2.0 endpoint discovery (see [The SysEx ID](midi.md#the-sysex-id)) |
 | `ACTIVE_SENSE_MS` | 250 | The interval between active sensing bytes, 2 to 510ms (the MIDI specification asks for at most 300ms) |
-| `LAMP_TEST_MS` | 1000 | Time (ms) every LED is lit on entering configuration page 9, before the chase. A multiple of 50 |
-| `LAMP_CHASE_MS` | 100 | Time (ms) each panel LED is lit in page 9's chase along the row and back. A multiple of 50 |
-| `VERSION_SHOW_MS` | 1000 | Time (ms) each version part shows on page 9. A multiple of 50; 10 x `SCROLL_FRAME_MS` + 4 x `VERSION_SHOW_MS` must be at most 12750 |
+| `LAMP_TEST_MS` | 1000 | Time (ms) every LED is lit on entering configuration page 8, before the chase. A multiple of 50 |
+| `LAMP_CHASE_MS` | 100 | Time (ms) each panel LED is lit in page 7's chase along the row and back. A multiple of 50 |
+| `VERSION_SHOW_MS` | 1000 | Time (ms) each version part shows on page 8. A multiple of 50; 10 x `SCROLL_FRAME_MS` + 4 x `VERSION_SHOW_MS` must be at most 12750 |
 | `DEBOUNCE_SAMPLES` | 3 | Consecutive key scans (12ms apart) that must agree before a press or release counts |
 | `KEY_ACTIVE_LEVEL` | 1 | Input level of a pressed key. Change it if every key reads inverted |
 | `STARTUP_TICKS` | 100 | 2ms ticks to settle at power-on; key events in this time are discarded |
