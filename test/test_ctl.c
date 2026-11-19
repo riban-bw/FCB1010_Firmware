@@ -16,6 +16,16 @@
 // fw_version[] (the firmware links it from its own object).
 #include "../src/version.c"
 
+// The misc toggles, one byte in ctl.c (opt_misc), as flags for the checks.
+#define opt_metro   ((opt_misc & OPT_METRO) != 0)
+#define opt_runstat ((opt_misc & OPT_RUNSTAT) != 0)
+#define opt_asense  ((opt_misc & OPT_ASENSE) != 0)
+
+static void set_opt(uint8_t bit, int on)
+{
+    opt_misc = (uint8_t)(on ? (opt_misc | bit) : (opt_misc & ~bit));
+}
+
 // ---------------------------------------------------------------
 // Fake hardware
 // ---------------------------------------------------------------
@@ -37,6 +47,8 @@ static int      msg_saved;
 #define MSG_RECS (BANK_COUNT * BANK_RECS)
 #define MSG_REC(rec) (hal_bank * BANK_RECS + (rec))
 static int      msg_stored_valid[MSG_RECS], msg_was_saved[MSG_RECS];
+// Set: a footswitch or bank record saved is also what loads (otherwise saves are kept apart).
+static int      eeprom_keeps;
 static uint8_t  stored_msg[MSG_RECS][4], saved_msg[MSG_RECS][4];
 // Relay outputs, and how many bank records were saved.
 static uint8_t  relays;
@@ -222,6 +234,13 @@ uint8_t hal_rec_save(uint8_t rec)
 
         msg_was_saved[MSG_REC(rec)] = 1;
         memcpy(saved_msg[MSG_REC(rec)], hal_rec, 4);
+
+        // As a real EEPROM: what is saved is what loads.
+        if (eeprom_keeps)
+        {
+            memcpy(stored_msg[MSG_REC(rec)], hal_rec, 4);
+            msg_stored_valid[MSG_REC(rec)] = 1;
+        }
     }
     else if (rec == HAL_REC_CAL)
     {
@@ -6085,6 +6104,90 @@ static void test_config_indicators(void)
 
 // Reading another bank's saved settings over NRPN without changing bank (user's request):
 // NP_READ_BANK starts a dump of that bank; the bank in use gives its live settings.
+// What the fake EEPROM was sent becomes what it holds, as on the real pedal.
+static void saves_to_stored(void)
+{
+    int r;
+
+    for (r = 0; r < MSG_RECS; r++)
+    {
+        if (msg_was_saved[r])
+        {
+            memcpy(stored_msg[r], saved_msg[r], 4);
+            msg_stored_valid[r] = 1;
+        }
+    }
+}
+
+// SX_CMD_WRITE: a bank's 48 bytes, as a dump gives them, stored into any bank without
+// changing bank (user's request: a restore from a file must not step through the banks).
+static void test_bank_write(void)
+{
+    uint8_t d[SX_WRITE_LEN + 1];
+    int saves;
+
+    printf("SysEx: writing any bank without changing bank\n");
+    // Bank 1's settings, as a dump gives them.
+    reset_world();
+    set_mode(3, PM_MOM_INV);
+    set_msg(4, MT_NOTE, 60, 100, 30);
+    sw_mask[1] = (uint16_t)(1 << 2);
+    sw_thr[1]  = 77;
+    bank_pc    = 6;
+    pk_mask    = 2;
+    pedal_cc[0] = 20;
+    clear_log();
+    dump_run(1000);
+    CHECK(parse_dump(0) == DUMP_PARAMS);
+    memcpy(d + 1, midi_log + 16, SX_WRITE_LEN - 1);
+
+    // Into bank 2, from bank 1: stored, nothing else changes, nothing is sent.
+    reset_world();
+    d[0] = 2;
+    clear_log();
+    saves = msg_saved;
+    sx_send(0x7F, SX_CMD_WRITE, d, SX_WRITE_LEN);
+    ticks(2);
+    CHECK(msg_saved == saves + STOMP_COUNT && bank_saved == 1 && cfg_saved == 0 && midi_len == 0);
+    CHECK(hal_bank == 0 && bank_next == 0 && !bank_busy && msg_type(4) == MT_CC && bank_pc == 0 &&
+          pedal_cc[0] == 7 && pk_mask == ((PEDAL_PICKUP_A ? 1 : 0) | (PEDAL_PICKUP_B ? 2 : 0)));
+    // Read back, bank 2 gives the same bytes.
+    saves_to_stored();
+    clear_log();
+    dump_run_bank(2, 1000);
+    CHECK(parse_dump(0) == DUMP_PARAMS && dump_bank_of == 2 && memcmp(midi_log + 16, d + 1, SX_WRITE_LEN - 1) == 0);
+    CHECK(dump_values[NP_MODE + 3] == PM_MOM_INV && dump_values[NP_TYPE + 4] == MT_NOTE && dump_values[NP_FOLLOW2 + 2] == 1 &&
+          dump_values[NP_TRIGGER + 1] == 77 && dump_values[NP_BANK_PC] == 5 && dump_values[NP_BANK_PC_ON] == 1 &&
+          dump_values[NP_PICKUP + 1] == 1 && dump_values[NP_PEDAL_CC] == 20);
+    // And choosing bank 2 loads it.
+    mset(NP_BANK, 2);
+    ticks(5);
+    CHECK(hal_bank == 1 && msg_type(4) == MT_NOTE && sw_thr[1] == 77 && pedal_cc[0] == 20 && bank_pc == 6);
+
+    // Into the bank in use: stored and loaded at once, each switch to its resting state.
+    reset_world();
+    d[0] = 1;
+    eeprom_keeps = 1;
+    sx_send(0x7F, SX_CMD_WRITE, d, SX_WRITE_LEN);
+    eeprom_keeps = 0;
+    CHECK(hal_bank == 0 && msg_type(4) == MT_NOTE && MSG_NUM(4) == 60 && pedal_mode_get(3) == PM_MOM_INV &&
+          sw_mask[1] == (1 << 2) && bank_pc == 6 && pk_mask == 2 && pedal_cc[0] == 20 && cfg_dirty == ALL_SWITCHES);
+    ticks(2);
+    CHECK(cfg_dirty == 0 && leds[3] == 1);
+
+    // Not whole, or no such bank: ignored.
+    reset_world();
+    saves = msg_saved;
+    d[0] = 2;
+    sx_send(0x7F, SX_CMD_WRITE, d, SX_WRITE_LEN - 1);
+    d[0] = 0;
+    sx_send(0x7F, SX_CMD_WRITE, d, SX_WRITE_LEN);
+    d[0] = BANK_COUNT + 1;
+    sx_send(0x7F, SX_CMD_WRITE, d, SX_WRITE_LEN);
+    CHECK(msg_saved == saves && bank_saved == 0);
+    reset_world();
+}
+
 static void test_read_bank(void)
 {
     printf("SysEx: reading another bank without changing bank\n");
@@ -6314,7 +6417,7 @@ static void test_active_sensing(void)
     reset_world();
     ticks(AS_TICKS * 3);
     CHECK(midi_len == 0);
-    opt_asense = 1;
+    set_opt(OPT_ASENSE, 1);
     as_ticks = 0;
 
     for (k = 1; k <= AS_TICKS * 3; k++)
@@ -6333,7 +6436,7 @@ static void test_active_sensing(void)
     ticks(1);
     CHECK(midi_len == 1 && midi_log[0] == 0xFE);
     // Running status is untouched: a CC after it can still leave out its status.
-    opt_runstat = 1;
+    set_opt(OPT_RUNSTAT, 1);
     set_mode(0, PM_STOMP);
     tap(0);
     as_ticks = 0;
@@ -6359,7 +6462,7 @@ static void test_metronome(void)
 
     printf("MIDI IN: visual metronome\n");
     reset_world();
-    opt_metro = 1;
+    set_opt(OPT_METRO, 1);
     // Clocks alone do nothing.
     for (k = 0; k < 48; k++)
     {
@@ -6435,16 +6538,16 @@ static void test_metronome(void)
     midi_clocks(24);
     CHECK(disp_sign == HAL_SIGN_NONE);
     cancel_exit();
-    opt_metro = 1;
+    set_opt(OPT_METRO, 1);
     ctl_midi_in(0xF8);
     CHECK(disp_sign != HAL_SIGN_NONE);
 
     // Off: nothing shows. Continue without a known phase (after power-on): only "-".
-    opt_metro = 0;
+    set_opt(OPT_METRO, 0);
     ctl_midi_in(0xF8);
     CHECK(disp_sign == HAL_SIGN_NONE);
     reset_world();
-    opt_metro = 1;
+    set_opt(OPT_METRO, 1);
     ctl_midi_in(0xFB);
     ok = 1;
 
@@ -6472,19 +6575,19 @@ static void test_running_status(void)
     tap(1);
     CHECK(midi_len == 6 && midi_log[0] == CC_STATUS && midi_log[3] == CC_STATUS);
     // On: neither CC has a status byte (the last one sent was the same).
-    opt_runstat = 1;
+    set_opt(OPT_RUNSTAT, 1);
     clear_log();
     tap(0);
     tap(1);
     CHECK(midi_len == 4 && midi_log[0] == stomp_cc[0] && midi_log[2] == stomp_cc[1]);
     // Turned on from the misc page, the first message sends it once.
-    opt_runstat = 0;
+    set_opt(OPT_RUNSTAT, 0);
     chord_long();
     to_page(PAGE_MISC);
     tap(sw_code(MISC_RUNSTAT + 1));
     CHECK(opt_runstat == !DEFAULT_RUNNING_STATUS);
     save_exit();
-    opt_runstat = 1;
+    set_opt(OPT_RUNSTAT, 1);
     clear_log();
     tap(0);
     tap(1);
@@ -6555,6 +6658,7 @@ int main(void)
     test_led_brightness();
     test_global_settings();
     test_read_bank();
+    test_bank_write();
     test_factory_reset();
     test_pc_mode();
     test_shared_state();

@@ -860,7 +860,7 @@ console.log("editor: settings files (save to file, load from file)");
 const el2 = el0;
 wait(200);
 fcb.confRead(false, []); idle(3000);
-const file = JSON.parse(JSON.stringify(fcb.confToFile()));
+const file = JSON.parse(JSON.stringify(fcb.confBankFile(true)));
 check("a saved file has the pedal's settings in readable form",
       [file.format, file.version, file.global.channel, file.footswitches[2], file.footswitches[3].type, file.relays.length],
       ["fcb1010-settings", 2, fcb.state().midiChannel, { mode: ["stomp", "stomp + momentary", "momentary", "inverted momentary"][DEF_MODE], type: "note", number: 60, on: 100, off: 20 }, "program", 2]);
@@ -876,7 +876,7 @@ const st = fcb.state();
 check("the pedal took the file's settings, the channel last",
       [st.msgs[1], st.pedalModes[1], st.swMask[0], st.swThr[1], st.midiChannel, conf.ch, conf.unsaved],
       [{ type: 1, num: 77, on: 90, off: 10 }, 2, (1 << 2) | (1 << 6), 64, file.global.channel, file.global.channel, true]);
-check("and reading it back gives the same file", fcb.confToFile(), file);
+check("and reading it back gives the same file", fcb.confBankFile(true), file);
 check("an invalid file is refused and changes nothing",
       [fcb.confLoad({ format: "fcb1010-settings", version: 1, channel: 1, footswitches: [], relays: [] }),
        fcb.confLoad({ format: "other" }), fcb.state().midiChannel], [false, false, file.global.channel]);
@@ -888,7 +888,7 @@ check("loading a file with only the channel different sends just that", [fcb.sta
 file.global.brightness = 40; file.global.runningStatus = true; file.global.activeSensing = true;
 fcb.confLoad(file); wait(600);
 check("a file's brightness, running status and active sensing reach the pedal", [fcb.state().level, fcb.state().misc & 7, fcb.hw.level], [40, 6, 40]);
-check("and read back the same", fcb.confToFile().global, file.global);
+check("and read back the same", fcb.confBankFile(true).global, file.global);
 check("the Global controls show them", [el2("cfLevel").value, el2("cfRunstat").value, el2("cfAsense").value, el2("cfMetro").value], [40, "1", "1", "0"]);
 el2("cfLevel").value = "127"; fire("cfLevel", "change");
 el2("cfRunstat").value = "0"; fire("cfRunstat", "change");
@@ -903,9 +903,9 @@ wait(600);
 // The bank's program change (configuration page 7; NRPN 92 / 93): null for none.
 check("a file holds the bank's program change (none: null)", [file.bankProgram, fcb.state().bankPc], [null, 0]);
 file.bankProgram = 42; fcb.confLoad(file); wait(600);
-check("loading a program sets it, and reading back gives the same file", [fcb.state().bankPc, fcb.confToFile().bankProgram, el2("cfBankPc").value], [43, 42, "42"]);
+check("loading a program sets it, and reading back gives the same file", [fcb.state().bankPc, fcb.confBankFile(true).bankProgram, el2("cfBankPc").value], [43, 42, "42"]);
 file.bankProgram = null; fcb.confLoad(file); wait(600);
-check("null sets none", [fcb.state().bankPc, fcb.confToFile().bankProgram, el2("cfBankPc").value], [0, null, "-1"]);
+check("null sets none", [fcb.state().bankPc, fcb.confBankFile(true).bankProgram, el2("cfBankPc").value], [0, null, "-1"]);
 const noPc = JSON.parse(JSON.stringify(file)); delete noPc.bankProgram;
 fcb.confChanged(NP.BANK_PC, 9); wait(100);
 check("the panel sets it over MIDI", fcb.state().bankPc, 10);
@@ -986,7 +986,7 @@ fcb.confCommand(NC.SAVE, "stored"); idle(3000, waitMidi);
 check("a change and Store reach the pedal", [fcb.state().msgs[1].on, rec().fs1, conf.v[NP.ON + 1]],
       [55, [1 | (fcb.state().pedalModes[1] << 2), 77, 55, 10], 55]);
 {
-  const f = fcb.confToFile();
+  const f = fcb.confBankFile(true);
   f.footswitches[1].on = 56; f.footswitches[2].off = 7; f.relays[0].pedalA = 9;
   outSent.length = 0;
   fcb.confLoad(f); idle(3000, waitMidi);
@@ -994,6 +994,23 @@ check("a change and Store reach the pedal", [fcb.state().msgs[1].on, rec().fs1, 
   check("a file load is one SysEx set with only what differs, applied whole",
         [sets.length, sets[0] && sets[0].length, fcb.state().msgs[1].on, fcb.state().msgs[2].off, fcb.state().swThr[0]], [1, 7 + 2 * 3, 56, 7, 9]);
   fcb.confCommand(NC.RELOAD, "dropped"); idle(3000, waitMidi);
+  // A version 3 file with another bank: written straight into that bank (one WRITE), then read back to
+  // check it; the bank in use, unchanged, is not sent, and the pedal stays on its bank.
+  const here = fcb.state().bank + 1, there = here === 2 ? 1 : 2;
+  const two = { format: "fcb1010-settings", version: 3, bank: here, banks: [Object.assign({ bank: there }, fcb.confBankFile(false))] };
+  delete two.banks[0].format; delete two.banks[0].version;
+  two.banks.push(Object.assign({ bank: here }, fcb.confBankFile(false)));
+  delete two.banks[1].format; delete two.banks[1].version;
+  delete conf.banks[there];
+  outSent.length = 0;
+  fcb.confLoad(two);
+  for (let t = 0; t < 30000 && (conf.job || conf.after || conf.waiting); t += 50) waitMidi(50);
+  const cfgOut = outSent.filter((m) => m[1] === 0x7D);
+  check("a whole-pedal load through the interface: one write of that bank, a read of it, then of the bank in use; no bank change",
+        [cfgOut.length, cfgOut[0].slice(0, 7), cfgOut[0].length, cfgOut[0][55], cfgOut[1], cfgOut[2], fcb.state().bank, outSent.some((m) => m[5] === 3)],
+        [3, [0xF0, 0x7D, 0x46, 0x43, 0x7F, 4, there], 56, 0xF7, [0xF0, 0x7D, 0x46, 0x43, 0x7F, 1, there, 0xF7], [0xF0, 0x7D, 0x46, 0x43, 0x7F, 1, 0, 0xF7], here - 1, false]);
+  check("and the read back confirms it", [conf.banks[there][NP.NUM + 1], /^Stored bank \d+ from the file; the pedal stayed on bank \d+\./.test(el("confStatus").textContent)],
+        [conf.v[NP.NUM + 1], true]);
 }
 fakeIn.onmidimessage = null;
 const heardBefore = conf.heard;
@@ -1004,7 +1021,11 @@ conf.inp = null; conf.known = false;
 const st0 = JSON.stringify(fcb.state().msgs);
 fcb.confRead(false, []);
 check("Read says it needs an input", [conf.waiting, /needs a MIDI input/.test(el("confStatus").textContent)], ["", true]);
-const oneWay = fcb.confToFile();
+const keptBanks = conf.banks; conf.banks = {};
+fcb.confDownload();
+conf.banks = keptBanks;
+check("saving with only some banks read says the others are missing", /only \d+ of the pedal's \d+ banks/.test(el("confStatus").textContent), true);
+const oneWay = fcb.confBankFile(true);
 oneWay.footswitches[5] = { mode: "stomp", type: "cc", number: 33, on: 100, off: 1 };
 oneWay.relays[1] = { follows: [10], pedalA: 12, pedalB: 0 };
 check("a file loads with no read first", fcb.confLoad(oneWay), true);
@@ -1016,7 +1037,20 @@ check("the status says it cannot read back", /cannot read it back/.test(el("conf
 fcb.confChanged(NP.OFF + 5, 2); waitMidi(50);
 fcb.confCommand(NC.SAVE, "Stored."); idle(3000, waitMidi);
 check("a change and Store work without an input", [[rec().fs5[0] & 0x3F, ...rec().fs5.slice(1)], rec().bank[2] & 0x7F], [[fcb.state().pedalModes[5] << 2, 33, 100, 2], 12]);
-check("saving a file without a read leaves out the firmware version", [fcb.confToFile().firmware, fcb.confToFile().footswitches[5].off], [undefined, 2]);
+check("saving a file without a read leaves out the firmware version", [fcb.confToFile().firmware, fcb.confBankFile(true).footswitches[5].off], [undefined, 2]);
+{
+  // A whole-pedal file with no input: every bank in it written (nothing is known), at a fixed pace.
+  const b1 = Object.assign({ bank: 1 }, fcb.confBankFile(false)), b4 = Object.assign({ bank: 4 }, fcb.confBankFile(false));
+  [b1, b4].forEach((e) => { delete e.format; delete e.version; });
+  b4.footswitches[0] = { mode: "stomp", type: "cc", number: 45, on: 101, off: 2 };
+  outSent.length = 0;
+  check("with no input, a whole-pedal file loads", fcb.confLoad({ format: "fcb1010-settings", version: 3, bank: 1, banks: [b1, b4] }), true);
+  for (let t = 0; t < 5000 && conf.job; t += 50) waitMidi(50);
+  const w = outSent.filter((m) => m[5] === 4);
+  check("each bank is one write, nothing is read, and the pedal stays on its bank",
+        [w.map((m) => m[6]), outSent.filter((m) => m[5] === 1).length, rec().b4fs0.slice(1), fcb.state().bank, /cannot read it back/.test(el("confStatus").textContent)],
+        [[1, 4], 0, [45, 101, 2], 0, true]);
+}
 conf.out = null;
 check("with no output either, a load is refused", fcb.confLoad(oneWay), false);
 fcb.confTarget("emu");
@@ -1055,8 +1089,8 @@ fcb.setRaw(200, 128); wait(100);
 check("then every move is sent", since(m0).slice(-1), [ccA(fcb.state().sent[0])]);
 fcb.confChanged(NP.PICKUP, 0); waitMidi(100);
 check("back to immediate", fcb.state().pickup & 1, 0);
-check("the settings file keeps the pedals' response and CC", fcb.confToFile().pedals, [{ response: "immediate", cc: PCC[0] }, { response: "immediate", cc: PCC[1] }]);
-const pkFile = fcb.confToFile(); pkFile.pedals[1] = { response: "pickup" };
+check("the settings file keeps the pedals' response and CC", fcb.confBankFile(true).pedals, [{ response: "immediate", cc: PCC[0] }, { response: "immediate", cc: PCC[1] }]);
+const pkFile = fcb.confBankFile(true); pkFile.pedals[1] = { response: "pickup" };
 fcb.confLoad(pkFile); waitMidi(600);
 check("and loading it sets it", fcb.state().pickup & 2, 2);
 pkFile.pedals[1] = { response: "slow" };
@@ -1087,21 +1121,34 @@ console.log("editor: reading every bank without changing bank, and reset to defa
   fcb.confShowBank(other);
   check("the bank box shows another bank at once, without switching", [conf.view, fcb.state().bank, el("cfBank").value, conf.v[NP.BANK]],
         [other, bank0, String(other), bank0 + 1]);
-  const on0 = fcb.state().msgs[0].on;
-  fcb.confChanged(NP.ON, on0 === 5 ? 6 : 5); waitMidi(100);
-  check("a bank not in use is not changed (the panel says to switch first)", [fcb.state().msgs[0].on, /not in use/.test(el("confStatus").textContent)], [on0, true]);
+  const fsKey = (b, n) => (b === 1 ? "" : "b" + b) + "fs" + n, bankKey = (b) => (b === 1 ? "" : "b" + b) + "bank";
+  const on0 = fcb.state().msgs[0].on, onNew = conf.banks[other][NP.ON] === 5 ? 6 : 5;
+  fcb.confChanged(NP.ON, onNew); waitMidi(100);
+  check("a change to a bank not in use is stored into it, and the pedal stays on its bank",
+        [rec()[fsKey(other, 0)][2], fcb.state().msgs[0].on, fcb.state().bank, conf.view, /^Stored in bank \d+ \(the pedal stays on bank \d+\)/.test(el("confStatus").textContent)],
+        [onNew, on0, bank0, other, true]);
   fire("cfUseBank", "click"); until(() => !conf.waiting && !conf.after, 3000);
   check("Use on pedal switches the pedal to it", [fcb.state().bank, conf.v[NP.BANK], conf.view], [other - 1, other, other]);
   fcb.confBank(bank0 + 1); until(() => !conf.waiting && !conf.after, 3000);
   check("and back", fcb.state().bank, bank0);
   fcb.confShowBank(other);
   fcb.confCopy();
+  fcb.confShowBank(bank0 + 1);
   fcb.confPaste(); waitMidi(600);
   check("Copy from a bank shown (not in use), Paste into the bank in use", [conf.view, fcb.state().msgs[0].type], [bank0 + 1, NOTE1 === other ? 1 : 0]);
   fcb.confCommand(NC.RELOAD, "dropped"); idle(3000, waitMidi);
+  // And the other way: Paste into a bank not in use stores it there.
+  fcb.confShowBank(bank0 + 1);
+  fcb.confCopy();
+  fcb.confShowBank(other);
+  fcb.confPaste(); waitMidi(300);
+  check("Paste into a bank shown, not in use, stores it there; the pedal stays on its bank",
+        [rec()[fsKey(other, 0)][0] & 3, rec()[fsKey(other, 0)][1], fcb.state().bank, conf.banks[other][NP.TYPE], /^Pasted bank \d+'s settings into bank \d+ and stored it/.test(el("confStatus").textContent)],
+        [fcb.state().msgs[0].type, fcb.state().msgs[0].num, bank0, fcb.state().msgs[0].type, true]);
 
   // Reset to defaults from the panel: every bank and the shared settings stored as defaults.
   const DEF_CH = Number(cfgText.match(/#define MIDI_CHANNEL\s+(\d+)/)[1]);
+  fcb.confShowBank(bank0 + 1);
   fcb.confChanged(NP.ON + 2, 33); waitMidi(100);
   fcb.confCommand(NC.SAVE, "stored"); idle(3000, waitMidi);
   check("a stored change before the reset", rec().fs2[2], 33);
@@ -1110,6 +1157,35 @@ console.log("editor: reading every bank without changing bank, and reset to defa
   check("Reset to defaults stores the defaults, and the panel finds the pedal and reads every bank again",
         [rec().fs2[2], fcb.state().msgs[2].on, fcb.state().midiChannel, conf.ch, Object.keys(conf.banks).length, conf.known],
         [127, 127, DEF_CH, DEF_CH, BANKS, true]);
+
+  // A whole-pedal file (version 3): every bank; loading it writes and stores only the banks that differ.
+  const whole = fcb.confToFile();
+  const inUse = whole.bank, far = inUse === BANKS ? 1 : BANKS;
+  fcb.confDownload();
+  check("Save to file says it has every bank", /: all \d+ banks\.$/.test(el("confStatus").textContent), true);
+  check("Save to file keeps every bank, which one is in use, and the shared settings",
+        [whole.version, whole.banks.map((b) => b.bank).join(), inUse, whole.global.channel, whole.banks[far - 1].footswitches[0].number],
+        [3, [...Array(BANKS)].map((_, i) => i + 1).join(), fcb.state().bank + 1, DEF_CH, conf.banks[far][NP.NUM]]);
+  whole.banks[far - 1].footswitches[3] = { mode: "momentary", type: "cc", number: 88, on: 99, off: 3 };
+  whole.banks[inUse - 1].relays[1].pedalB = 21;
+  check("loading it is accepted, with the progress bar shown", [fcb.confLoad(whole), el("confProgress").hidden], [true, false]);
+  m0 = mark();
+  until(() => !conf.job && !conf.after && !conf.waiting, 60000);
+  check("only the two changed banks are written and stored, the bar hidden again, and it says so",
+        [el("confStatus").textContent, el("confProgress").hidden],
+        ["Stored 2 banks (" + [far, inUse].sort((a, b) => a - b).join(", ") + ") from the file; the pedal stayed on bank " + inUse + ". (Read back from the pedal.)", true]);
+  check("no bank change, so no program change was sent", since(m0).filter((l) => /^C/.test(l)).length, 0);
+  check("both banks are stored, the pedal is on its bank, and the read back shows them",
+        [[rec()[fsKey(far, 3)][0] & 0x3F, ...rec()[fsKey(far, 3)].slice(1)], rec()[bankKey(inUse)][3] & 0x7F, fcb.state().bank, fcb.state().swThr[3], conf.banks[far][NP.NUM + 3], conf.known],
+        [[2 << 2, 88, 99, 3], 21, inUse - 1, 21, 88, true]);
+  fcb.confLoad(whole);
+  check("loading the same file again sends nothing", [conf.job, /matches the pedal/.test(el("confStatus").textContent)], [null, true]);
+  const beyond = JSON.parse(JSON.stringify(whole)); beyond.banks[0].bank = BANKS + 1;
+  const twice = JSON.parse(JSON.stringify(whole)); twice.banks[1].bank = twice.banks[0].bank;
+  check("a bank beyond the pedal's, or one listed twice, is refused",
+        [fcb.confLoad(beyond), /beyond the pedal's/.test(el("confStatus").textContent), fcb.confLoad(twice), /in the file twice/.test(el("confStatus").textContent)], [false, true, false, true]);
+  const badBank = JSON.parse(JSON.stringify(whole)); badBank.banks[far - 1].footswitches[0].on = 300;
+  check("a bad value names its bank", [fcb.confLoad(badBank), new RegExp("bank " + far + ", footswitch 1 on value").test(el("confStatus").textContent)], [false, true]);
 
   // Power-on with footswitch 9 held: "Ini" flashes; DOWN cancels, UP resets.
   fcb.confChanged(NP.ON + 2, 44); waitMidi(100);

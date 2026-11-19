@@ -2,31 +2,41 @@
 
 [Back to the README](../README.md)
 
-**Save to file** in the "Configure over MIDI" panel of the [editor page](https://riban-bw.github.io/FCB1010_Firmware/editor/) writes the pedal's settings to a file. Type the file name in the **File** box (default `fcb1010-settings.json`; `.json` is added if the name has no extension). In Chrome, Edge and Opera a save dialog opens, starting with that name, so you can choose the folder and change the name there. Other browsers (Firefox, Safari) download the file under that name, into the downloads folder, or ask where if the browser is set to ask where to save downloads. **Load from file** opens the browser's file chooser and **Load from file** sends a file's settings to the pedal (see [Configuring from a computer](configuration.md#configuring-from-a-computer)). The file is plain JSON, so it can be written or edited by hand or by another program.
+**Save to file** in the "Configure over MIDI" panel of the [editor page](https://riban-bw.github.io/FCB1010_Firmware/editor/) writes the pedal's settings to a file. Type the file name in the **File** box (default `fcb1010-settings.json`; `.json` is added if the name has no extension). In Chrome, Edge and Opera a save dialog opens, starting with that name, so you can choose the folder and change the name there. Other browsers (Firefox, Safari) download the file under that name, into the downloads folder, or ask where if the browser is set to ask where to save downloads. **Load from file** opens the browser's file chooser and sends the chosen file's settings to the pedal (see [Configuring from a computer](configuration.md#configuring-from-a-computer)). The file is plain JSON, so it can be written or edited by hand or by another program.
 
-A file holds the global settings, shared by every bank (MIDI channel, brightness, clock display, running status, active sensing), and the settings of one bank (its footswitches, relays, expression pedals and program change): the bank that was in use when it was saved. The editor page's **Copy bank** and **Paste bank** copy a bank's settings from one bank to another without a file, leaving the global settings alone. Loading it fills the bank in use now, so the same file can set up any bank. The pedal calibration is not in the file: it belongs to the expression pedals of one unit, and is only set on the pedal itself (configuration pages 3 and 4), so loading a file from another unit cannot spoil it.
+A file holds the whole pedal: the global settings, shared by every bank (MIDI channel, brightness, clock display, running status, active sensing), and the settings of each bank (its footswitches, relays, expression pedals and program change), with the bank that was in use when it was saved. It holds every bank the panel has read: press **Read** first (it reads every bank), or, with no MIDI input from the pedal, the file has only the bank in use. Loading it puts each bank back into the bank of the same number. The pedal calibration is not in the file: it belongs to the expression pedals of one unit, and is only set on the pedal itself (configuration pages 3 and 4), so loading a file from another unit cannot spoil it.
+
+The editor page's **Copy bank** and **Paste bank** copy one bank's settings to another bank without a file, leaving the global settings alone.
 
 ## Example
 
-The settings out of the box (footswitches 3 to 9 left out here; a real file always has all ten):
+The settings out of the box (footswitches 3 to 9 and banks 2 to 29 left out here; a real file always has all ten footswitches in each bank):
 
 ```json
 {
   "format": "fcb1010-settings",
-  "version": 2,
+  "version": 3,
   "global": { "channel": 1, "brightness": 127, "clockDisplay": false, "runningStatus": false, "activeSensing": false },
-  "footswitches": [
-    { "mode": "stomp", "type": "cc", "number": 21, "on": 127, "off": 0 },
-    { "mode": "stomp", "type": "cc", "number": 22, "on": 127, "off": 0 },
+  "bank": 1,
+  "banks": [
+    {
+      "bank": 1,
+      "footswitches": [
+        { "mode": "stomp", "type": "cc", "number": 21, "on": 127, "off": 0 },
+        { "mode": "stomp", "type": "cc", "number": 22, "on": 127, "off": 0 },
+        ...
+        { "mode": "stomp", "type": "cc", "number": 30, "on": 127, "off": 0 }
+      ],
+      "relays": [
+        { "follows": [], "pedalA": 0, "pedalB": 0 },
+        { "follows": [], "pedalA": 0, "pedalB": 0 }
+      ],
+      "bankProgram": null,
+      "pedals": [ { "response": "immediate", "cc": 7 }, { "response": "immediate", "cc": 11 } ]
+    },
     ...
-    { "mode": "stomp", "type": "cc", "number": 30, "on": 127, "off": 0 }
+    { "bank": 30, ... }
   ],
-  "relays": [
-    { "follows": [], "pedalA": 0, "pedalB": 0 },
-    { "follows": [], "pedalA": 0, "pedalB": 0 }
-  ],
-  "bankProgram": null,
-  "pedals": [ { "response": "immediate", "cc": 7 }, { "response": "immediate", "cc": 11 } ],
   "firmware": "00.03.00"
 }
 ```
@@ -36,13 +46,21 @@ The settings out of the box (footswitches 3 to 9 left out here; a real file alwa
 | Field | Value |
 |---|---|
 | `format` | Always `"fcb1010-settings"` |
-| `version` | `2`, the version of this format (not of the firmware). Version 1 files, with `channel` at the top instead of `global`, still load |
+| `version` | `3`, the version of this format (not of the firmware). Older files still load (see [Older files](#older-files)) |
 | `global` | The settings shared by every bank (see below). Optional: a file without it leaves them as they are |
+| `bank` | The bank in use when the file was saved. Ignored when loading: the pedal stays on the bank it is on |
+| `banks` | One entry per bank, in any order, each bank at most once (see below). A bank not in the file is left as it is |
+| `firmware` | The firmware version the settings were read from, as major.minor.build, major and minor in decimal and the build in hex, as the pedal shows it (`"00.03.00"`). Only written when the settings came from a Read of the pedal; ignored when loading |
+
+Each bank:
+
+| Field | Value |
+|---|---|
+| `bank` | The bank's number, from 1 to the pedal's number of banks |
 | `footswitches` | Exactly 10 entries, footswitch 1 first (see below) |
 | `relays` | Exactly 2 entries, SWITCH 1 then SWITCH 2 (see below) |
 | `bankProgram` | The program change (0 to 127) the bank sends when it is chosen with UP / DOWN (configuration page 7), or `null` for none. Optional: a file without it leaves the bank's setting as it is (files saved before it existed, or from firmware without it) |
 | `pedals` | Exactly 2 entries, expression pedal A then pedal B, each with `"response"`, `"immediate"` or `"pickup"` (see [Expression pedals](using.md#expression-pedals)), and `"cc"`, the controller number 0 to 127. Optional: a file without it leaves the pedals as they are; it is left out when the pedal did not report it (older firmware). An entry without `"cc"` leaves that pedal's controller as it is; `"cc"` is left out when the pedal did not report it |
-| `firmware` | The firmware version the settings were read from, as major.minor.build, major and minor in decimal and the build in hex, as the pedal shows it (`"00.03.00"`). Only written when the settings came from a Read of the pedal; ignored when loading |
 
 The global settings, each optional (left out when the pedal did not report it, from older firmware; a missing one is left as it is):
 
@@ -77,6 +95,10 @@ Numbers must be whole numbers. Other fields are ignored.
 
 ## Loading
 
-The whole file is checked before anything is sent. A file with the wrong `format` or `version`, the wrong number of footswitches or relays, an unknown mode, type or pedal response, a global setting of the wrong kind, or a value out of range (a pedal `cc` over 127, for example) is refused with the reason, and the pedal is left as it was.
+**Load from file** asks before it goes ahead, since it stores what it loads. The whole file is checked before anything is sent. A file with the wrong `format` or `version`, a bank number out of range or listed twice, the wrong number of footswitches or relays, an unknown mode, type or pedal response, a global setting of the wrong kind, or a value out of range (a pedal `cc` over 127, for example) is refused with the reason, naming the bank, and the pedal is left as it was.
 
-The settings are then sent as one SysEx set message (see [Configuration over MIDI](midi.md#configuration-over-midi)), with the new channel last; the pedal applies the message only once it has all of it. If the panel has read the pedal first, only the settings that differ are sent; otherwise all of them. Like any change over MIDI they apply at once but are not stored: press **Store** to keep them after power-off. With a MIDI input connected, the panel then reads the pedal back.
+Each bank in the file that differs from the pedal's is then stored straight into its bank with one SysEx write message (see [Configuration over MIDI](midi.md#configuration-over-midi)): the pedal stays on the bank it is on and sends no program changes. If the panel has read the pedal first, only the banks that differ are written, and a file that matches the pedal sends nothing; otherwise every bank in the file is written. With a MIDI input connected, the panel reads each bank back after writing it, which also tells it when the write is done, and stops with a message if a bank does not read back as written or the pedal stops answering. With only an output, it waits 0.2 seconds after each bank. Then, if the global settings differ, it sends them (the new channel last) with a store, which also stores the bank in use: when the global settings change, the bank in use is written first, so that store does not keep any unstored changes to it. A file of 30 banks that all differ takes about 5 seconds with a MIDI input and about 6 seconds without; the panel says how long when it will take more than 2 seconds, and shows a progress bar.
+
+## Older files
+
+Files of versions 1 and 2 hold one bank, with its `footswitches`, `relays`, `bankProgram` and `pedals` at the top level and no `banks` (version 1 also has `channel` at the top instead of `global`). They still load: the bank goes into the bank in use, and the settings are sent as one SysEx set message, the channel last, but not stored, so press **Store** to keep them after power-off.

@@ -14,7 +14,7 @@
 // The build number is in src/version_build.inc, which `make` increments each time it
 // links the firmware image. It is compiled only into version.c (built at link time),
 // so bumping it does not make the other objects out of date.
-// fw_version[] = { major, minor, build }.
-extern const CODE uint8_t fw_version[3];
+// fw_version[] = { major, minor, build, their bit 7s in bits 0-2 }.
+extern const CODE uint8_t fw_version[4];
 
 #endif

@@ -417,21 +417,30 @@ static BIT_T          sx_reply;
 #define SX_GET_BANK   (SX_CFG + 4)
 #define SX_GET_END    (SX_CFG + 5)
 #define SX_SET_DATA   (SX_CFG + 6)
+#define SX_WRITE_DATA (SX_CFG + 7)
 // Configuration commands (after F0 7D 46 43 <device>).
 #define SX_CMD_GET    0x01      // <bank: 0 the bank in use, or 1 to BANK_COUNT>: a dump
 #define SX_CMD_DUMP   0x02      // the dump (sent only)
 #define SX_CMD_SET    0x03      // <parameter> <value> pairs
+#define SX_CMD_WRITE  0x04      // <bank 1 to BANK_COUNT> and its 48 bytes as in a dump: stored
+#define SX_WRITE_LEN  49        // the bank and its bytes
 #define SX_DUMP_LEN   65
 // Misc settings (shared by every bank, in the channel record's byte 3: bit 0 the
 // metronome, bit 1 running status, bit 2 active sensing, bit 7 set).
 #define MISC_VALID    0x80
 #define MISC_DEFAULT  (uint8_t)(MISC_VALID | (DEFAULT_METRONOME ? 1 : 0) | (DEFAULT_RUNNING_STATUS ? 2 : 0) | \
                               (DEFAULT_ACTIVE_SENSING ? 4 : 0))
-static BIT_T          opt_metro;
-static BIT_T          opt_runstat;
-// Active sensing (FE) on MIDI OUT every ACTIVE_SENSE_MS while on (bit 2), and the ticks
-// to the next.
-static BIT_T          opt_asense;
+// The misc toggles, as saved (bits 0-2): the visual metronome, running status on MIDI OUT,
+// active sensing (FE) on MIDI OUT every ACTIVE_SENSE_MS. One byte, not three bits: it is
+// saved, sent and shown as one (size review).
+#define OPT_METRO     1
+#define OPT_RUNSTAT   2
+#define OPT_ASENSE    4
+static uint8_t        opt_misc;
+// A misc page footswitch's bit: switch 1 (MISC_METRO) bit 0, 9 bit 1, 10 bit 2. A leaf.
+static const CODE uint8_t misc_bits[STOMP_COUNT] = { OPT_METRO, 0, 0, 0, 0, 0, 0, 0, OPT_RUNSTAT, OPT_ASENSE };
+#define misc_bit(index) misc_bits[index]
+// The ticks to the next active sensing byte.
 // LED brightness, 0 (the minimum) to 127 (page 9, pedal B, and over MIDI; saved in the channel
 // record's byte 2 with bit 7 set). Run mode and page 9 use it, the other pages full
 // brightness (led_apply).
@@ -812,7 +821,7 @@ static void rec_pack(void)
         hal_rec[0] = midi_channel;
         hal_rec[1] = 0;
         hal_rec[2] = (uint8_t)(LEVEL_VALID | led_level);
-        hal_rec[3] = (uint8_t)(MISC_VALID | (opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (opt_asense ? 4 : 0));
+        hal_rec[3] = (uint8_t)(MISC_VALID | opt_misc);
     }
 }
 
@@ -958,9 +967,7 @@ static void rec_unpack(void)
     {
         midi_channel = hal_rec[0];
         led_level    = (uint8_t)(hal_rec[2] & 0x7F);
-        opt_metro    = (hal_rec[3] & 1) ? 1 : 0;
-        opt_runstat  = (hal_rec[3] & 2) ? 1 : 0;
-        opt_asense   = (hal_rec[3] & 4) ? 1 : 0;
+        opt_misc     = (uint8_t)(hal_rec[3] & 7);
     }
 }
 
@@ -1098,7 +1105,7 @@ static void config_changed(void)
 // same as the last one sent (user's request).
 static void tx_status(uint8_t status)
 {
-    if (opt_runstat && status == tx_last)
+    if ((opt_misc & OPT_RUNSTAT) && status == tx_last)
     {
         return;
     }
@@ -2128,8 +2135,8 @@ static void config_show(void)
     if (cfg_page == PAGE_MISC)
     {
         led_aux   = LED_BIT(HAL_LED_SELECT);
-        led_stomp = (uint16_t)((opt_metro ? (1u << MISC_METRO) : 0) | (opt_runstat ? (1u << MISC_RUNSTAT) : 0) |
-                               (opt_asense ? (1u << MISC_ASENSE) : 0));
+        // Bits 1-2 to switches 9-10 (MISC_RUNSTAT, MISC_ASENSE), bit 0 to switch 1.
+        led_stomp = (uint16_t)(((uint16_t)(opt_misc & 6) << 7) | (opt_misc & OPT_METRO));
         led_dim   = MISC_MASK;
         show_leds();
         hal_display_dots(cfg_dots());
@@ -2140,8 +2147,7 @@ static void config_show(void)
         }
         else
         {
-            hal_display_text((uint8_t)(((misc_sel == MISC_METRO) ? opt_metro : (misc_sel == MISC_RUNSTAT) ? opt_runstat : opt_asense) ?
-                                       HAL_TEXT_ON : HAL_TEXT_OFF));
+            hal_display_text((uint8_t)((opt_misc & misc_bit(misc_sel)) ? HAL_TEXT_ON : HAL_TEXT_OFF));
         }
 
         return;
@@ -2682,23 +2688,14 @@ static void cal_nav(uint8_t code)
 // shown.
 static void misc_press(uint8_t index)
 {
-    if (index == MISC_METRO)
-    {
-        opt_metro = !opt_metro;
-    }
-    else if (index == MISC_RUNSTAT)
-    {
-        opt_runstat = !opt_runstat;
-        tx_last     = 0;
-    }
-    else if (index == MISC_ASENSE)
-    {
-        opt_asense = !opt_asense;
-    }
-    else
+    if (!misc_bit(index))
     {
         return;
     }
+
+    opt_misc ^= misc_bit(index);
+    // Running status starts again from a status byte.
+    tx_last = 0;
 
     misc_sel = index;
     misc_name();
@@ -3836,7 +3833,8 @@ static void remote_cc(uint8_t cc, uint8_t value)
 // another as stored, without changing bank), SX_CMD_SET <parameter> <value>... sets
 // parameters once the whole message is in (up to NP_COUNT pairs; param_set in order: at
 // once, unsaved, as in configuration mode; NP_COMMAND for save, reload and reset). Run mode only, like the other received
-// messages. The pedal never answers a set, so a MIDI loop cannot make it talk to itself.
+// messages. SX_CMD_WRITE <bank> <the bank's 48 bytes as in a dump> stores a whole bank,
+// any bank, without changing bank (sx_write). The pedal never answers a set, so a MIDI loop cannot make it talk to itself.
 // The parameter numbers and commands (NP_*, NC_*) are defined near the top.
 
 // A bank change (bank_busy, run mode), once any undo waiting in the revert queue has gone
@@ -3946,6 +3944,54 @@ static void param_command(void)
     }
 }
 
+// A bank write (SX_CMD_WRITE, user's request: write any bank without changing bank): sx_buf
+// holds the bank (1-based), then its eleven records as a dump sends them (each footswitch's
+// type byte without the packed bits, its number, on and off; the four triggers), then the
+// packed pedal settings as the dump's last four bytes. Each record is stored straight into
+// that bank's EEPROM records (rec_read will check them as ever on loading); if it is the
+// bank in use, its settings are loaded from them, and each switch goes to its resting state.
+static void sx_write(void)
+{
+    uint8_t k;
+    uint8_t v;
+
+    sv_bank  = hal_bank;
+    hal_bank = (uint8_t)(sx_buf[0] - 1);
+    // The packed bytes (y_get's form): the program change (0 none, else program + 1), each
+    // pedal's CC with its pickup bit in bit 7.
+    v = sx_buf[45];
+    rec_y[0] = (uint8_t)((v & 4) ? sx_buf[46] + 1 : 0);
+    rec_y[1] = (uint8_t)(sx_buf[47] | (uint8_t)(v << 7));
+    rec_y[2] = (uint8_t)(sx_buf[48] | (uint8_t)((uint8_t)(v << 6) & 0x80));
+
+    for (rec_n = 0; rec_n <= HAL_REC_BANK; rec_n++)
+    {
+        // rec_pack puts the record's piece of the packed bytes (from rec_y, set above) in
+        // bit 7 of each byte and bit 6 of a footswitch's type byte; the rest is the bank's
+        // own, from the message (whatever the bank in use has there is overwritten).
+        rec_pack();
+
+        for (k = 0; k < 4; k++)
+        {
+            v = (uint8_t)((k == 0 && rec_n < STOMP_COUNT) ? 0xC0 : 0x80);
+            hal_rec[k] = (uint8_t)((hal_rec[k] & v) | (sx_buf[(uint8_t)((rec_n << 2) + k + 1)] & (uint8_t)~v));
+        }
+
+        hal_rec_save(rec_n);
+    }
+
+    v        = (uint8_t)(hal_bank == sv_bank);
+    hal_bank = sv_bank;
+
+    if (v)
+    {
+        rec_n = 0;
+        load_records(HAL_REC_CAL);
+        cfg_dirty = ALL_SWITCHES;
+        resync_pedals();
+    }
+}
+
 // The footswitch parameters, each a field of the footswitch's record in its saved form
 // (rec_pack): per group, its first parameter, the record byte (bits 4-5) and the field's
 // lowest bit (bits 0-2), and its largest value (also its width: max | max >> 1).
@@ -4049,22 +4095,14 @@ static void param_set(void)
     {
         if (rx_data1 <= 1)
         {
-            if (sx_param == NP_METRO)
+            // Bit 0, 1 or 2 (parameters 99-101, the saved order).
+            g = (uint8_t)(1 << (sx_param - NP_METRO));
+
+            if (((opt_misc & g) ? 1 : 0) != rx_data1)
             {
-                opt_metro = rx_data1;
+                opt_misc ^= g;
+                tx_last = 0;
                 met_show();
-            }
-            else if (sx_param == NP_RUNSTAT)
-            {
-                if (opt_runstat != rx_data1)
-                {
-                    opt_runstat = rx_data1;
-                    tx_last     = 0;
-                }
-            }
-            else
-            {
-                opt_asense = rx_data1;
             }
         }
 
@@ -4180,7 +4218,7 @@ static void met_show(void)
 {
     uint8_t sign = HAL_SIGN_NONE;
 
-    if (opt_metro && met_run && mode == MODE_RUN && !boot_anim && met_next < 12)
+    if ((opt_misc & OPT_METRO) && met_run && mode == MODE_RUN && !boot_anim && met_next < 12)
     {
         sign = (uint8_t)((met_phase && met_beat == 0) ? HAL_SIGN_PLUS : HAL_SIGN_MINUS);
     }
@@ -4262,6 +4300,13 @@ void ctl_midi_in(uint8_t byte)
             sx_dump_due = 1;
         }
 
+        // A whole bank write, for a bank there is.
+        if (byte == 0xF7 && sx_pos == SX_WRITE_DATA && sx_n == SX_WRITE_LEN && (uint8_t)(sx_buf[0] - 1) < BANK_COUNT &&
+            mode == MODE_RUN)
+        {
+            sx_write();
+        }
+
         // A whole set message: its pairs, in order (parameter in sx_param, value in
         // rx_data1, as param_set takes them); an odd count is not whole.
         if (byte == 0xF7 && sx_pos == SX_SET_DATA && !(sx_n & 1) && mode == MODE_RUN)
@@ -4321,9 +4366,9 @@ void ctl_midi_in(uint8_t byte)
         {
             sx_pos = SX_GET_BANK;
         }
-        else if (sx_pos == SX_CFG + 3 && mode == MODE_RUN && byte == SX_CMD_SET)
+        else if (sx_pos == SX_CFG + 3 && mode == MODE_RUN && (byte == SX_CMD_SET || byte == SX_CMD_WRITE))
         {
-            sx_pos = SX_SET_DATA;
+            sx_pos = (uint8_t)(SX_SET_DATA - SX_CMD_SET + byte);
             sx_n   = 0;
         }
         else if (sx_pos == SX_GET_BANK && byte <= BANK_COUNT)
@@ -4331,7 +4376,7 @@ void ctl_midi_in(uint8_t byte)
             sx_req = byte;
             sx_pos = SX_GET_END;
         }
-        else if (sx_pos == SX_SET_DATA && sx_n < SX_SET_MAX)
+        else if ((sx_pos == SX_SET_DATA || sx_pos == SX_WRITE_DATA) && sx_n < SX_SET_MAX)
         {
             sx_buf[sx_n] = byte;
             sx_n++;
@@ -4521,10 +4566,12 @@ static void sx_tx_head(uint8_t i)
 // major, 1 minor, 2 build).
 static void sx_tx_version(void)
 {
-    hal_midi_tx((uint8_t)(fw_version[0] & 0x7F));
-    hal_midi_tx((uint8_t)(fw_version[1] & 0x7F));
-    hal_midi_tx((uint8_t)(fw_version[2] & 0x7F));
-    hal_midi_tx((uint8_t)((fw_version[0] >> 7) | ((fw_version[1] >> 6) & 2) | ((fw_version[2] >> 5) & 4)));
+    uint8_t k;
+
+    for (k = 0; k < 4; k++)
+    {
+        hal_midi_tx((uint8_t)(fw_version[k] & 0x7F));
+    }
 }
 
 // A SysEx message's end: F7, and as a system message it makes the next channel message
@@ -4603,7 +4650,19 @@ static void sx_dump(void)
         }
     }
 
-    hal_midi_tx((uint8_t)((sx_y[1] >> 7) | ((sx_y[2] >> 6) & 2) | (sx_y[0] ? 4 : 0)));
+    k = (uint8_t)(sx_y[0] ? 4 : 0);
+
+    if (sx_y[1] & 0x80)
+    {
+        k |= 1;
+    }
+
+    if (sx_y[2] & 0x80)
+    {
+        k |= 2;
+    }
+
+    hal_midi_tx(k);
     hal_midi_tx((uint8_t)((uint8_t)(sx_y[0] - 1) & 0x7F));
     hal_midi_tx((uint8_t)(sx_y[1] & 0x7F));
     hal_midi_tx((uint8_t)(sx_y[2] & 0x7F));
@@ -4749,7 +4808,7 @@ void ctl_tick(void)
 
     // Active sensing (user's request): FE every ACTIVE_SENSE_MS while it is on, in any
     // mode; a real-time byte, so running status is untouched, and no LED flash.
-    if (opt_asense && ++as_ticks >= AS_TICKS && hal_midi_space())
+    if ((opt_misc & OPT_ASENSE) && ++as_ticks >= AS_TICKS && hal_midi_space())
     {
         as_ticks = 0;
         hal_midi_tx(0xFE);
@@ -5017,7 +5076,7 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_NUM:           return (uint8_t)(num_typing | (num_lo1 << 1));
     case CTL_INSPECT_SHOWN:         return cyc_elem;
     case CTL_INSPECT_LEVEL:         return led_level;
-    case CTL_INSPECT_MISC:          return (uint8_t)((opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (opt_asense ? 4 : 0) | (met_sign << 3));
+    case CTL_INSPECT_MISC:          return (uint8_t)(opt_misc | (met_sign << 3));
     default:                        return 0;
     }
 }
