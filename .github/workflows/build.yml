@@ -49,5 +49,6 @@ jobs:
           path: |
             build/fcb1010_27c512.bin
             build/fcb1010_27c256.bin
+            build/fcb1010_27c128.bin
             build/fcb1010.mem
           if-no-files-found: error

@@ -573,7 +573,7 @@ if [ "$DEF" = "0" ] || [ "$DEF" = "1" ]; then
 # toggles those five and changes bank (bank mode is the default). Every bank has the
 # default CCs (no EEPROM), so the states carry over: stomp_state and hal_bank are read
 # back from RAM after each step.
-SS_ADDR=$((16#$(awk '/_stomp_state:/ {print $1}' build/ctl.rst | head -1)))
+SS_ADDR=$((16#$(awk '/_stomp_state:/ {print $1}' build/ctl.rst build/ctl_ram.rst | head -1)))
 {
     echo "set hardware port[1] 0x9f"; echo "step 800000"
     for row in 0xbf 0xdf 0xbf 0xdf; do

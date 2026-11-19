@@ -67,8 +67,8 @@ void    hal_aux_led(uint8_t which, uint8_t on);
 #define HAL_REC_CAL     11
 #define HAL_REC_CFG     12
 #define HAL_RECORDS     13
-extern IDATA uint8_t hal_rec[4];
-extern IDATA uint8_t hal_bank;
+extern NEAR uint8_t hal_rec[4];
+extern NEAR uint8_t hal_bank;
 uint8_t hal_rec_load(uint8_t rec);
 uint8_t hal_rec_save(uint8_t rec);
 

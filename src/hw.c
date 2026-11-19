@@ -51,10 +51,10 @@ static volatile IDATA uint8_t led_dim[2];
 // Brightness (hal_led_level): each row is lit at the start of its 2ms slot, and Timer 2
 // (one-shot, high priority, so it can cut into the scan ISR) ends the light in up to
 // two steps: the dim LEDs off (LV_DIM), then everything (LV_OFF). lv_start is how the
-// slot starts (LV_ALL with the dim LEDs, or LV_DIM when their time is 0), lv_kind /
-// lv_rel the steps and their Timer 2 counts (from the step before), lv_n how many;
-// lv_pat the segments of each kind for the row being lit (LV_OFF always 0xFF), t2_stage
-// the next step.
+// slot starts (LV_ALL with the dim LEDs, or LV_DIM when their time is 0), lv_kind the
+// first step's kind (a second is always LV_OFF), lv_rel the steps' Timer 2 counts (from
+// the step before), lv_n how many; lv_pat the segments of each kind for the row being lit
+// (LV_OFF always 0xFF), t2_stage the next step.
 #define LV_ALL  0
 #define LV_DIM  1
 #define LV_OFF  2
@@ -72,15 +72,13 @@ static volatile IDATA uint8_t led_dim[2];
 #endif
 static volatile IDATA uint8_t  lv_start;
 static volatile IDATA uint8_t  lv_n;
-static volatile LV_MEM uint8_t  lv_kind[2];
+static volatile IDATA uint8_t  lv_kind;
 static volatile LV_MEM uint16_t lv_rel[2];
 static volatile IDATA uint8_t  lv_pat[3] = { 0xFF, 0xFF, 0xFF };
 static volatile IDATA uint8_t  t2_stage;
 // Direct RAM, for timer2_isr's mov a, _t2_next.
 volatile uint8_t t2_next;
 // hal_led_level's working values (main line only).
-static LV_MEM uint16_t lv_t[2];
-static LV_MEM uint16_t lv_at;
 
 
 static const CODE uint8_t stomp_led_row[10]  = { 4, 4, 4, 3, 3, 4, 4, 4, 4, 4 };
@@ -427,13 +425,9 @@ void t2_step(void) __interrupt
         return;
     }
 
-    t2_next = lv_pat[lv_kind[t2_stage]];
-
-    if ((uint8_t)(t2_stage + 1) < lv_n)
-    {
-        RCAP2L = (uint8_t)(lv_rel[t2_stage + 1] & 0xFF);
-        RCAP2H = (uint8_t)(lv_rel[t2_stage + 1] >> 8);
-    }
+    // There are at most two steps (hal_led_level), and a second is always everything off:
+    // its count is already in RCAP2 (from timer0_isr), so nothing more to load.
+    t2_next = 0xFF;
 }
 
 // Timer 2: the segments first (t2_next, ready in direct RAM), in as few cycles as
@@ -497,7 +491,7 @@ void timer0_isr(void) __interrupt(1)
     if (lv_n)
     {
         t2_stage = 0;
-        t2_next  = lv_pat[lv_kind[0]];
+        t2_next  = lv_pat[lv_kind];
         TL2 = (uint8_t)(lv_rel[0] & 0xFF);
         TH2 = (uint8_t)(lv_rel[0] >> 8);
         RCAP2L = (uint8_t)(lv_rel[1] & 0xFF);
@@ -560,57 +554,47 @@ void hal_lamp_test(uint8_t how)
 // that at most. Steps that fall together merge.
 void hal_led_level(uint8_t level)
 {
-    uint8_t n = 0;
-    uint8_t k;
-    uint8_t start = LV_ALL;
+    uint16_t t;
+    uint16_t a;
 
-    lv_t[1] = (uint16_t)(LED_MIN_US + ((uint16_t)((uint16_t)(level & 0x7F) * (uint8_t)(level & 0x7F)) >> 3));
+    level &= 0x7F;
+    t = (uint16_t)(LED_MIN_US + ((uint16_t)((uint16_t)level * level) >> 3));
+    EA = 0;
+    lv_n       = 1;
+    lv_start   = LV_ALL;
+    lv_kind = LV_DIM;
+    a = LED_DIM_US;
 
-    if (lv_t[1] >= LV_FULL_US)
+#if LED_DIM_US == 0
+    // No dim time: the dim LEDs are off from the start, then everything at t.
+    lv_start   = LV_DIM;
+    lv_kind = LV_OFF;
+    a = t;
+
+    if (t >= LV_FULL_US)
     {
-        lv_t[1] = LV_NEVER;
+        lv_n = 0;
     }
-
-    lv_t[0] = (LED_DIM_US < lv_t[1]) ? LED_DIM_US : lv_t[1];
-    lv_at   = 0;
-    EA      = 0;
-
-    for (k = 0; k < 2; k++)
+#else
+    if (t <= LED_DIM_US)
     {
-        if (lv_t[k] == LV_NEVER)
-        {
-            break;
-        }
-
-        if (lv_t[k] == 0)
-        {
-            start = (uint8_t)(k + 1);
-        }
-        else if (lv_t[k] == lv_at)
-        {
-            lv_kind[n - 1] = (uint8_t)(k + 1);
-        }
-        else
-        {
-            lv_kind[n] = (uint8_t)(k + 1);
-            lv_rel[n]  = (uint16_t)(lv_t[k] - lv_at);
-
-            // The first step is counted from Timer 2's start, which comes LV_LAT_US after
-            // the row lights would without this (the start-up and interrupt entry).
-            if (n == 0)
-            {
-                lv_rel[0] = (lv_rel[0] > LV_LAT_US) ? (uint16_t)(lv_rel[0] - LV_LAT_US) : 1;
-            }
-
-            lv_rel[n]  = (uint16_t)(0 - lv_rel[n]);
-            lv_at      = lv_t[k];
-            n++;
-        }
+        // Everything off together, at t.
+        lv_kind = LV_OFF;
+        a = t;
     }
+    else if (t < LV_FULL_US)
+    {
+        // The dim LEDs, then the others.
+        lv_rel[1] = (uint16_t)(LED_DIM_US - t);
+        lv_n      = 2;
+    }
+#endif
 
-    lv_start = start;
-    lv_n     = n;
-    EA       = 1;
+    // The first step is counted from Timer 2's start, which comes LV_LAT_US after the row
+    // lights would without this (the start-up and interrupt entry). The counts are
+    // negated: Timer 2 counts up to its overflow.
+    lv_rel[0] = (uint16_t)((a > LV_LAT_US) ? (uint16_t)(LV_LAT_US - a) : 0xFFFF);
+    EA = 1;
 }
 
 void hal_relays(uint8_t mask)

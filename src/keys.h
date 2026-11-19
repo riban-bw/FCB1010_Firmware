@@ -49,8 +49,10 @@
 // delayed, not lost.
 #define KEY_SCAN(hist, hold, idx, pressed, push, full)                         \
     do {                                                                       \
-        /* The state in bit 7, the samples below; e_ the event to queue. */    \
+        /* The state in bit 7, the samples below; c_ the hold count; e_ the   \
+           event to queue. Each array is read and written once. */             \
         uint8_t h_ = (hist)[idx];                                              \
+        uint8_t c_ = (hold)[idx];                                              \
         uint8_t e_ = KEY_EV_NONE;                                              \
         h_ = (uint8_t)((h_ & 0x80) | (((h_ << 1) | (pressed)) & KEY_DEBOUNCE_MASK)); \
         if ((h_ & KEY_DEBOUNCE_MASK) == KEY_DEBOUNCE_MASK)                     \
@@ -59,11 +61,11 @@
             {                                                                  \
                 e_ = KEY_EV_PRESS;                                             \
             }                                                                  \
-            else if ((uint8_t)((hold)[idx] + 1) < KEY_HOLD_SCANS)              \
+            else if ((uint8_t)(c_ + 1) < KEY_HOLD_SCANS)                       \
             {                                                                  \
-                (hold)[idx]++;                                                 \
+                c_++;                                                          \
             }                                                                  \
-            else if ((hold)[idx] < KEY_HOLD_SCANS)                             \
+            else if (c_ < KEY_HOLD_SCANS)                                      \
             {                                                                  \
                 e_ = KEY_EV_HOLD;                                              \
             }                                                                  \
@@ -78,11 +80,11 @@
             if (e_ == KEY_EV_PRESS)                                            \
             {                                                                  \
                 h_ |= 0x80;                                                    \
-                (hold)[idx] = 0;                                               \
+                c_ = 0;                                                        \
             }                                                                  \
             else if (e_ == KEY_EV_HOLD)                                        \
             {                                                                  \
-                (hold)[idx]++;                                                 \
+                c_++;                                                          \
             }                                                                  \
             else                                                               \
             {                                                                  \
@@ -91,6 +93,7 @@
             push((uint8_t)((idx) | e_));                                       \
         }                                                                      \
         (hist)[idx] = h_;                                                      \
+        (hold)[idx] = c_;                                                      \
     } while (0)
 
 // Function form in keys.c, for the host tests and the editor (not linked into the firmware).

@@ -4,6 +4,24 @@
 #include "ctl.h"
 #include "version.h"
 
+// The most used variables are directly addressed on the 8051 (NEAR: a byte less at every
+// use than IDATA). This file's own directly addressed data must fit the gap below the bit
+// area (see CLAUDE.md), so they are defined in a module of their own, build/ctl_ram.c,
+// which tools/ctl_ram.py writes from the CTL_NEAR declarations here. Elsewhere they are
+// ordinary statics.
+#ifdef __SDCC
+#define CTL_NEAR extern NEAR
+#else
+#define CTL_NEAR static
+#endif
+
+// These small leaf helpers save the registers they use themselves (SDCC's callee saves),
+// so their callers need not push and pop every register they hold live around each call
+// (measured: only these, called from many places, come out smaller).
+#ifdef __SDCC
+#pragma callee_saves pedal_mode_get,msg_type,bit16,prog_single,span_of,rests_on
+#endif
+
 // Controller behaviour:
 //   footswitches 1..10  -> stomp switches, each with a mode chosen in configuration mode:
 //                           stomp, stomp with momentary on a long press, or momentary,
@@ -307,24 +325,28 @@ static const CODE uint8_t chase_led[CHASE_PERIOD] = {
 static uint8_t        mode;
 
 // MIDI IN parser state: Current (running) status byte and a pending first data byte.
-static IDATA uint8_t  rx_status;
-static IDATA uint8_t  rx_data1;
+CTL_NEAR uint8_t  rx_status;
+CTL_NEAR uint8_t  rx_data1;
 static BIT_T    rx_have_data1;
 static uint8_t        program;
-static IDATA uint16_t stomp_state;
+CTL_NEAR uint16_t stomp_state;
 
 // Settings that can be changed in configuration mode and are saved in the EEPROM.
 static uint8_t        midi_channel;
-static IDATA uint8_t  pedal_modes[3];
-// Footswitch messages, three bytes per switch: msg[i * 3] is the number (CC or note;
-// unused for a program change) with type bit 0 in bit 7, msg[i * 3 + 1] the on value (CC
-// value, note velocity or program) with type bit 1 in bit 7, msg[i * 3 + 2] the off value. Each switch has its
-// own EEPROM record (type, number, on value, off value).
-#define MSG_BYTES       3
-// Index of switch i's first msg[] byte, i * 3 as 8-bit shift and add: SDCC would compute
-// i * MSG_BYTES with a call to its 16-bit multiply (a call level deeper, and slower).
-#define MSG_AT(i)       ((uint8_t)((uint8_t)((uint8_t)(i) << 1) + (uint8_t)(i)))
-static XDATA uint8_t  msg[STOMP_COUNT * MSG_BYTES];
+// Footswitch messages and pedal modes, MSG_STRIDE bytes per switch (each 0-127): msg[i *
+// MSG_STRIDE] is the number (CC or note; unused for a program change), then the on value
+// (CC value, note velocity or program), the off value and the type (MT_*): the message,
+// MSG_BYTES; then the pedal mode (PM_*). Each switch has its own EEPROM record (type,
+// mode, number, on value, off value). A byte of its own for each (the type once shared bit
+// 7 of the number and the on value, and the modes were packed four to a byte) saves
+// masking and shifting at every use; the external RAM has room.
+#define MSG_BYTES       4
+#define MSG_TYPE        3
+#define MSG_MODE        4
+#define MSG_STRIDE      8
+// Index of switch i's first msg[] byte.
+#define MSG_AT(i)       ((uint8_t)((uint8_t)(i) << 3))
+static XDATA uint8_t  msg[STOMP_COUNT * MSG_STRIDE];
 
 // The last value of every CC and note, wherever it came from (a footswitch sending it,
 // MIDI IN, or the state a switch showed when its bank was left): index the number, plus
@@ -338,7 +360,7 @@ static XDATA uint8_t  key_val[256];
 // The program change sent when the bank in use is chosen with UP / DOWN in bank mode (or
 // over MIDI): 0 none, otherwise the program + 1 (only bits 0-6 of that program are used,
 // so any byte is valid). Saved with the bank (see rec_pack).
-static XDATA uint8_t  bank_pc;
+CTL_NEAR uint8_t      bank_pc;
 #define BANK_PC_PROGRAM ((uint8_t)((bank_pc - 1) & 0x7F))
 // Switch i's key_val index (not for a program change).
 
@@ -374,22 +396,21 @@ static IDATA uint8_t  num_val;
 static IDATA uint8_t  num_old;
 static IDATA uint8_t  num_hi;
 static IDATA uint8_t  num_hi10;
-static IDATA uint8_t  num_d;
+CTL_NEAR uint8_t  num_d;
 // Page 1: the setting shown (EP_*), and its time so far (scan ticks into a 50ms step, steps).
-static IDATA uint8_t  cyc_elem;
-static IDATA uint8_t  cyc_ticks;
-static IDATA uint8_t  cyc_steps;
+CTL_NEAR uint8_t  cyc_elem;
+CTL_NEAR uint8_t  cyc_ticks;
+CTL_NEAR uint8_t  cyc_steps;
 // Page 8: steps left with every LED lit, the chase position (0 to CHASE_PERIOD - 1) and
 // steps left at it.
 static IDATA uint8_t  ver_lamp;
-static IDATA uint8_t  chase_pos;
+CTL_NEAR uint8_t  chase_pos;
 static IDATA uint8_t  chase_steps;
 // SysEx in (ctl_midi_in): the position in a message being matched (0 none, 1 after F0,
 // 2-5 an Identity Request, SX_CFG and up a configuration message, SX_SKIP anything else
 // until it ends), and an Identity Reply waiting for MIDI OUT room.
-static IDATA uint8_t  sx_pos;
+CTL_NEAR uint8_t  sx_pos;
 static BIT_T          sx_reply;
-static IDATA uint8_t  sx_hi;
 #define SX_SKIP       0xFF
 #define SX_REPLY_LEN  15
 #define SX_CFG        0x10      // after F0 7D: 46, 43, the device, the command, its data
@@ -414,7 +435,7 @@ static BIT_T          opt_asense;
 // LED brightness, 0 (the minimum) to 127 (page 9, pedal B, and over MIDI; saved in the channel
 // record's byte 2 with bit 7 set). Run mode and page 9 use it, the other pages full
 // brightness (led_apply).
-static IDATA uint8_t  led_level;
+CTL_NEAR uint8_t  led_level;
 #define LEVEL_VALID   0x80
 // The SWITCH pages show "S.1" / "S.2" until a pedal is moved; the misc page shows the
 // setting's name (sw_named, misc_named, for the dots) and its value in turn.
@@ -434,16 +455,15 @@ static BIT_T          rec_def;
 // (0 the bank in use, else the bank + 1), and the packed pedal bytes and loop count while
 // it is built. In the external SRAM: not time-critical, and internal RAM is the stack's.
 static BIT_T          sx_dump_due;
-static XDATA uint8_t  sx_req;
+static IDATA uint8_t  sx_req;
 // A set message's parameter and value pairs, kept until its F7 so a message cut short or
 // too long changes nothing (user's request), and the count of bytes in it.
 #define SX_SET_MAX    204       // 2 * NP_COUNT (checked below)
 static XDATA uint8_t  sx_buf[SX_SET_MAX];
-static XDATA uint8_t  sx_n;
+static IDATA uint8_t  sx_n;
 static XDATA uint8_t  sx_j;
 static XDATA uint8_t  sx_y[3];
-static XDATA uint8_t  sx_k;
-static XDATA uint8_t  sv_bank;
+CTL_NEAR uint8_t      sv_bank;
 // The editor: the edited setting's panel LED flickers (user's request).
 static BIT_T          par_on;
 static IDATA uint8_t  par_ticks;
@@ -454,14 +474,14 @@ static IDATA uint8_t  as_ticks;
 #error "ACTIVE_SENSE_MS must be 2 to 510"
 #endif
 // The last status byte sent (0 none, or after a system message), for running status.
-static IDATA uint8_t  tx_last;
+CTL_NEAR uint8_t  tx_last;
 // The visual metronome: MIDI clock running (after Start or Continue, until Stop), the
 // beat's phase known (from Start or a Song Position Pointer), the next clock's index in
 // its beat (0-23) and that beat's number in the bar (0-3), and the sign shown.
 static BIT_T          met_run;
 static BIT_T          met_phase;
-static IDATA uint8_t  met_next;
-static IDATA uint8_t  met_beat;
+CTL_NEAR uint8_t  met_next;
+CTL_NEAR uint8_t  met_beat;
 static IDATA uint8_t  met_sign;
 
 // Settings are loaded and saved through the HAL's one record buffer, hal_rec.
@@ -505,10 +525,6 @@ static IDATA uint8_t  met_sign;
 #define INI_SWITCH      8
 #define NC_DEFAULTS     6       // reset every setting of every bank to its default, stored
 
-// Parameter kinds.
-#define NK_NONE         0
-#define NK_SET          1
-#define NK_READ         2
 
 // The parameter of a SysEx set being received (run mode only, so it shares the selected
 // configuration item's byte).
@@ -518,15 +534,15 @@ static IDATA uint8_t  met_sign;
 // release (a long press, or a momentary pedal), revert = an undo is waiting for MIDI room,
 // prev = the state before the press.
 static IDATA uint16_t stomp_down;
-static IDATA uint16_t stomp_held;
-static IDATA uint16_t stomp_revert;
-static IDATA uint16_t stomp_prev;
+CTL_NEAR uint16_t stomp_held;
+CTL_NEAR uint16_t stomp_revert;
+CTL_NEAR uint16_t stomp_prev;
 
 // UP / DOWN: The key being tracked for program change (NAV_NONE if none), scan ticks since
 // it was pressed or since the last repeat step, whether auto-repeat has started, and
 // whether the final program change is still waiting for room in the MIDI OUT queue.
-static IDATA uint8_t  nav_code;
-static IDATA uint16_t nav_ticks;
+CTL_NEAR uint8_t  nav_code;
+CTL_NEAR uint16_t nav_ticks;
 static BIT_T          nav_repeating;
 // Repeat steps so far in this hold (stops counting at REPEAT_FAST_STEPS: fast repeat).
 static IDATA uint8_t  nav_steps;
@@ -536,8 +552,8 @@ static BIT_T          program_pending;
 static BIT_T          program_moved;
 
 // Which of UP / DOWN are down, and the state of an UP + DOWN chord.
-static IDATA uint8_t  keys_down;
-static IDATA uint8_t  chord_state;
+CTL_NEAR uint8_t  keys_down;
+CTL_NEAR uint8_t  chord_state;
 // Program mode, toggled by a short UP + DOWN press in run mode (DIRECT SELECT lit; user's
 // request). Off (the default): UP / DOWN choose a footswitch bank and the footswitches are
 // stomps. On: UP / DOWN step the program and the footswitches choose one by number
@@ -547,7 +563,7 @@ static BIT_T          pc_mode;
 // the number typed so far (PC_ENTRY_NONE before the first digit). Numbers are as shown
 // on the display (the program + DISPLAY_PROGRAM_OFFSET).
 static BIT_T          pc_typing;
-static IDATA uint8_t  pc_entry;
+CTL_NEAR uint8_t  pc_entry;
 // The right-hand dot flashes while a number is being typed (user's request); this is
 // whether it is shown. Its timer is chan_flash_ticks, idle in run mode once power-on ends.
 static BIT_T          pc_dot;
@@ -556,7 +572,7 @@ static BIT_T          bank_none_ready;
 // Config mode: a free-running blink, toggled every CHAN_FLASH_TICKS (blink_ticks), for
 // the right-hand dot while a number is entered (user's request) and a flashing Lo / Hi.
 static BIT_T          blink_on;
-static IDATA uint8_t  blink_ticks;
+CTL_NEAR uint8_t  blink_ticks;
 // EXP pages: calibration waiting for a reading (cal_step CAL_HEEL or CAL_TOE), its Lo /
 // Hi flashing; the heel reading taken, kept until the toe is good; and the blinks left
 // of a shown "Er".
@@ -566,7 +582,7 @@ static XDATA uint8_t  cal_err_left;
 // A long UP asks which bank to save to (user's request): the bank shown (1 to
 // BANK_COUNT), typed on the footswitches; short UP saves there, short DOWN goes back.
 static BIT_T          save_prompt;
-static XDATA uint8_t  save_bank;
+static IDATA uint8_t  save_bank;
 #define PC_ENTRY_NONE 0xFF
 #define PC_SHOWN_MAX  (127 + DISPLAY_PROGRAM_OFFSET)
 // Whether a typed (shown) number is a program: with no offset every number is.
@@ -578,18 +594,18 @@ static XDATA uint8_t  save_bank;
 // Footswitch banks: the bank UP / DOWN have chosen (0-based; the display shows it + 1 in
 // bank mode), which is the loaded one (hal_bank) except while a change waits in bank_run,
 // and whether one is waiting.
-static IDATA uint8_t  bank_next;
+CTL_NEAR uint8_t  bank_next;
 static BIT_T          bank_busy;
 
 // Configuration mode state: Open page, footswitch being edited on the modes page, calibration
 // step, and which pedals had their mode changed.
 static uint8_t        cfg_page;
 static uint8_t        cfg_sel;
-static IDATA uint8_t  cal_step;
-static IDATA uint16_t cfg_dirty;
+CTL_NEAR uint8_t  cal_step;
+CTL_NEAR uint16_t cfg_dirty;
 // Scan ticks into the current flash half-period (program mode's and page 7's dot), or a
 // 50ms step (page 7's label).
-static IDATA uint8_t  chan_flash_ticks;
+CTL_NEAR uint8_t  chan_flash_ticks;
 // Page 8 reuses it and cal_step: ticks into the current step, and the step number.
 #define ver_ticks chan_flash_ticks
 #define ver_step  cal_step
@@ -626,18 +642,18 @@ static IDATA uint8_t  pedal_cc[2];
 // pedal, so a pedal picked up and then overridden starts from where it was), pk_flash the
 // ticks left of the EXP LED's flash half-period, pk_led the LEDs lit (bit per pedal), and
 // pk_show the ticks left until the display goes back from the distance to the program.
-static IDATA uint8_t  pk_mask;
+CTL_NEAR uint8_t  pk_mask;
 static IDATA uint8_t  pk_pos[2];
 static IDATA uint8_t  pk_flash[2];
 static IDATA uint8_t  pk_led;
 static IDATA uint16_t pk_show;
 // ctl_pedal_sample's pickup target and previous position, and pickup_tick's loop count:
 // IDATA statics, so no fixed RAM (the directly addressed gap is full).
-static IDATA uint8_t  pk_t;
-static IDATA uint8_t  pk_p;
-static IDATA uint8_t  pk_act;
+CTL_NEAR uint8_t  pk_t;
+CTL_NEAR uint8_t  pk_p;
+CTL_NEAR uint8_t  pk_act;
 static BIT_T          pk_wait;
-static IDATA uint8_t  pk_i;
+CTL_NEAR uint8_t  pk_i;
 #define PK_MOVED        0
 #define PK_KNOWN        1
 #define PK_SEND         2
@@ -649,13 +665,13 @@ static IDATA uint8_t  pk_i;
 // bank change, which takes relay_lvl afresh, leaves the relays as they were.
 static IDATA uint16_t sw_mask[2];
 static IDATA uint8_t  sw_thr[4];
-static IDATA uint8_t  relay_out;
+CTL_NEAR uint8_t  relay_out;
 static IDATA uint8_t  relay_lvl;
 static BIT_T          relay_resync;
 // Scan ticks left of the MIDI CHAN flash for received MIDI (run mode only).
-static IDATA uint8_t  rx_flash;
+CTL_NEAR uint8_t  rx_flash;
 // Scan ticks left of the MIDI FUNCTION flash for sent MIDI (run mode only).
-static IDATA uint8_t  tx_flash;
+CTL_NEAR uint8_t  tx_flash;
 // Config mode: a setting has been changed since entry (the CONFIG LED flashes), and
 // the LED is in its dark half. The flash timer reuses rx_flash, which is run mode only.
 static BIT_T          cfg_changed;
@@ -682,14 +698,12 @@ static uint16_t bit16(uint8_t n)
 
 static uint8_t pedal_mode_get(uint8_t index)
 {
-    return (uint8_t)((pedal_modes[index >> 2] >> ((index & 3) * 2)) & 3);
+    return msg[(uint8_t)(MSG_AT(index) + MSG_MODE)];
 }
 
 static void pedal_mode_set(uint8_t index, uint8_t value)
 {
-    uint8_t shift = (uint8_t)((index & 3) * 2);
-
-    pedal_modes[index >> 2] = (uint8_t)((pedal_modes[index >> 2] & ~(3 << shift)) | (value << shift));
+    msg[(uint8_t)(MSG_AT(index) + MSG_MODE)] = value;
 }
 
 // ---------------------------------------------------------------
@@ -711,58 +725,80 @@ static void pedal_mode_set(uint8_t index, uint8_t value)
 //   the bank record: the four relay triggers (relay * 2 + pedal, 7 bits), each with one
 //     more bit of the packed pedal settings in bit 7.
 // The packed pedal settings are three bytes: 0 bank_pc, 1 pedal A's CC with its pickup
-// bit in bit 7, 2 pedal B's the same (BANK_Y). Footswitch n holds bits (n & 3) * 2 of byte
+// bit in bit 7, 2 pedal B's the same (rec_y). Footswitch n holds bits (n & 3) * 2 of byte
 // n >> 2 (so byte 0 in records 0-3, byte 1 in 4-7, byte 2's bits 0-3 in 8-9), the bank
 // record's bit 7 of trigger k bit 4 + k of byte 2. msg[] keeps the type in bit 7 of the
 // number and the on value instead.
-static IDATA uint8_t rec_n;
+CTL_NEAR uint8_t rec_n;
 // The packed record while it is compared with the one read back.
 static XDATA uint8_t rec_cmp[4];
 
-#define BANK_Y(j)       ((uint8_t)(((j) == 0) ? bank_pc : \
-                         (uint8_t)(pedal_cc[(uint8_t)((j) - 1)] | ((pk_mask & (j)) ? 0x80 : 0))))
-#define BANK_Y_SET(j, v)                                                              \
-    do {                                                                              \
-        if ((j) == 0)                                                                 \
-        {                                                                             \
-            bank_pc = (v);                                                            \
-        }                                                                             \
-        else                                                                          \
-        {                                                                             \
-            pedal_cc[(uint8_t)((j) - 1)] = (uint8_t)((v) & 0x7F);                     \
-            pk_mask = (uint8_t)(((v) & 0x80) ? (pk_mask | (j)) : (pk_mask & (uint8_t)~(j))); \
-        }                                                                             \
-    } while (0)
+// The packed pedal settings while records are packed or unpacked (rec_pack and rec_unpack
+// stay leaves): y_get fills it from the settings before packing, y_put sets the settings
+// from it after unpacking. Shared with the dump, which gathers another bank's in it.
+#define rec_y sx_y
+
+static void y_get(void)
+{
+    rec_y[0] = bank_pc;
+    rec_y[1] = (uint8_t)(pedal_cc[0] | (uint8_t)(pk_mask << 7));
+    rec_y[2] = (uint8_t)(pedal_cc[1] | (uint8_t)((pk_mask & 2) << 6));
+}
+
+static void y_put(void)
+{
+    bank_pc     = rec_y[0];
+    pedal_cc[0] = (uint8_t)(rec_y[1] & 0x7F);
+    pedal_cc[1] = (uint8_t)(rec_y[2] & 0x7F);
+    pk_mask     = (uint8_t)((rec_y[1] >> 7) | ((rec_y[2] >> 6) & 2));
+}
+
+// 4 to the power n: a 2-bit field's place in a byte (multiplying is one instruction, a
+// variable shift a loop); 2 to the power n: a bit's in a byte.
+static const CODE uint8_t pow4[4] = { 1, 4, 16, 64 };
+static const CODE uint8_t pow2[8] = { 1, 2, 4, 8, 16, 32, 64, 128 };
+// Byte n >> 3 of relay r's follow mask (r 0 or 1), bit pow2[n & 7] footswitch n's (the
+// masks are little-endian on every target).
+#define SW_MASK_BYTE(r, n) (((IDATA uint8_t *)sw_mask)[(uint8_t)(((r) << 1) + ((n) >> 3))])
 
 // The current settings of record rec_n into hal_rec. A leaf.
 static void rec_pack(void)
 {
-    uint8_t  q;
-    uint8_t  v;
-    uint16_t w;
+    uint8_t q;
+    uint8_t v;
+    XDATA uint8_t *m;
+    IDATA uint8_t *b;
 
     if (rec_n < STOMP_COUNT)
     {
-        q = MSG_AT(rec_n);
-        v = (uint8_t)(rec_n >> 2);
-        v = BANK_Y(v);
-        w = (uint16_t)1 << rec_n;
-        hal_rec[0] = (uint8_t)((msg[q] >> 7) | ((msg[q + 1] >> 6) & 2) |
-                               (((pedal_modes[rec_n >> 2] >> ((rec_n & 3) * 2)) & 3) << 2) |
-                               ((sw_mask[0] & w) ? 0x10 : 0) | ((sw_mask[1] & w) ? 0x20 : 0) |
-                               (uint8_t)((uint8_t)(v >> ((rec_n & 3) << 1)) << 6));
-        hal_rec[1] = (uint8_t)(msg[q] & 0x7F);
-        hal_rec[2] = (uint8_t)(msg[q + 1] & 0x7F);
-        hal_rec[3] = msg[q + 2];
+        m = &msg[MSG_AT(rec_n)];
+        v = rec_y[rec_n >> 2];
+        q = pow2[rec_n & 7];
+        b = &SW_MASK_BYTE(0, rec_n);
+        v = (uint8_t)(m[MSG_TYPE] | (uint8_t)(m[MSG_MODE] << 2) | (uint8_t)((uint8_t)(v >> ((rec_n & 3) << 1)) << 6));
+
+        if (b[0] & q)
+        {
+            v |= 0x10;
+        }
+
+        if (b[2] & q)
+        {
+            v |= 0x20;
+        }
+
+        hal_rec[0] = v;
+        hal_rec[1] = m[0];
+        hal_rec[2] = m[1];
+        hal_rec[3] = m[2];
     }
     else if (rec_n == HAL_REC_BANK)
     {
-        v = BANK_Y(2);
-
-        for (q = 0; q < 4; q++)
-        {
-            hal_rec[q] = (uint8_t)(sw_thr[q] | (uint8_t)((uint8_t)(v >> (4 + q)) << 7));
-        }
+        v = rec_y[2];
+        hal_rec[0] = (uint8_t)(sw_thr[0] | ((v << 3) & 0x80));
+        hal_rec[1] = (uint8_t)(sw_thr[1] | ((v << 2) & 0x80));
+        hal_rec[2] = (uint8_t)(sw_thr[2] | ((v << 1) & 0x80));
+        hal_rec[3] = (uint8_t)(sw_thr[3] | (v & 0x80));
     }
     else if (rec_n == HAL_REC_CAL)
     {
@@ -777,6 +813,26 @@ static void rec_pack(void)
         hal_rec[1] = 0;
         hal_rec[2] = (uint8_t)(LEVEL_VALID | led_level);
         hal_rec[3] = (uint8_t)(MISC_VALID | (opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (opt_asense ? 4 : 0));
+    }
+}
+
+// Record rec_n's piece of the packed pedal settings (bits 6-7 of a footswitch record's byte
+// 0, bit 7 of each byte of the bank record), from hal_rec into rec_y. A leaf.
+static void rec_y_in(void)
+{
+    uint8_t q;
+    uint8_t v;
+
+    if (rec_n < STOMP_COUNT)
+    {
+        q = pow4[rec_n & 3];
+        v = (uint8_t)(rec_n >> 2);
+        rec_y[v] = (uint8_t)((rec_y[v] & (uint8_t)~(uint8_t)(3 * q)) | (uint8_t)((hal_rec[0] >> 6) * q));
+    }
+    else if (rec_n == HAL_REC_BANK)
+    {
+        rec_y[2] = (uint8_t)((rec_y[2] & 0x0F) | ((hal_rec[0] >> 3) & 0x10) | ((hal_rec[1] >> 2) & 0x20) |
+                             ((hal_rec[2] >> 1) & 0x40) | (hal_rec[3] & 0x80));
     }
 }
 
@@ -864,41 +920,32 @@ static void rec_read(void)
 // pieces, so records 0-9 and the bank record are always unpacked together. A leaf.
 static void rec_unpack(void)
 {
-    uint8_t  q;
-    uint8_t  j;
-    uint8_t  v;
-    uint16_t w;
+    uint8_t v;
+    uint8_t f;
+    XDATA uint8_t *m;
+    IDATA uint8_t *b;
 
     if (rec_n < STOMP_COUNT)
     {
-        q = MSG_AT(rec_n);
-        msg[q]     = (uint8_t)(hal_rec[1] | ((hal_rec[0] & 1) << 7));
-        msg[q + 1] = (uint8_t)(hal_rec[2] | ((hal_rec[0] & 2) << 6));
-        msg[q + 2] = hal_rec[3];
-        q = (uint8_t)((rec_n & 3) * 2);
-        pedal_modes[rec_n >> 2] = (uint8_t)((pedal_modes[rec_n >> 2] & ~(3 << q)) |
-                                            (((hal_rec[0] >> 2) & 3) << q));
-        w = (uint16_t)1 << rec_n;
-        sw_mask[0] = (uint16_t)((hal_rec[0] & 0x10) ? (sw_mask[0] | w) : (sw_mask[0] & ~w));
-        sw_mask[1] = (uint16_t)((hal_rec[0] & 0x20) ? (sw_mask[1] | w) : (sw_mask[1] & ~w));
-        j = (uint8_t)(rec_n >> 2);
-        v = BANK_Y(j);
-        v = (uint8_t)((v & (uint8_t)~(3 << q)) | (uint8_t)((hal_rec[0] >> 6) << q));
-        BANK_Y_SET(j, v);
+        f = hal_rec[0];
+        m = &msg[MSG_AT(rec_n)];
+        m[0] = hal_rec[1];
+        m[1] = hal_rec[2];
+        m[2] = hal_rec[3];
+        m[MSG_TYPE] = (uint8_t)(f & 3);
+        m[MSG_MODE] = (uint8_t)((f >> 2) & 3);
+        // The relay follows.
+        v = pow2[rec_n & 7];
+        b = &SW_MASK_BYTE(0, rec_n);
+        b[0] = (uint8_t)((b[0] & (uint8_t)~v) | ((f & 0x10) ? v : 0));
+        b[2] = (uint8_t)((b[2] & (uint8_t)~v) | ((f & 0x20) ? v : 0));
     }
     else if (rec_n == HAL_REC_BANK)
     {
-        v = (uint8_t)(BANK_Y(2) & 0x0F);
-
-        for (q = 0; q < 4; q++)
-        {
-            sw_thr[q] = (uint8_t)(hal_rec[q] & 0x7F);
-            v |= (uint8_t)((uint8_t)(hal_rec[q] >> 7) << (4 + q));
-        }
-
-        // Byte 2 is pedal B's: its CC and pickup bit.
-        pedal_cc[1] = (uint8_t)(v & 0x7F);
-        pk_mask     = (uint8_t)((v & 0x80) ? (pk_mask | 2) : (pk_mask & (uint8_t)~2));
+        sw_thr[0] = (uint8_t)(hal_rec[0] & 0x7F);
+        sw_thr[1] = (uint8_t)(hal_rec[1] & 0x7F);
+        sw_thr[2] = (uint8_t)(hal_rec[2] & 0x7F);
+        sw_thr[3] = (uint8_t)(hal_rec[3] & 0x7F);
     }
     else if (rec_n == HAL_REC_CAL)
     {
@@ -920,11 +967,16 @@ static void rec_unpack(void)
 // Records rec_n up to (not including) last from the EEPROM into the settings.
 static void load_records(uint8_t last)
 {
+    y_get();
+
     for (; rec_n < last; rec_n++)
     {
         rec_read();
         rec_unpack();
+        rec_y_in();
     }
+
+    y_put();
 }
 
 // Every setting and the calibration from the EEPROM (the defaults for any record missing
@@ -941,6 +993,8 @@ static uint8_t records_match(uint8_t last);
 // write fails the new settings still apply until power-off.
 static void save_records(uint8_t last)
 {
+    y_get();
+
     for (; rec_n < last; rec_n++)
     {
         rec_pack();
@@ -999,6 +1053,8 @@ static uint8_t settings_match_saved(void)
 // 1 if records rec_n up to (not including) last match the EEPROM, as above.
 static uint8_t records_match(uint8_t last)
 {
+    y_get();
+
     for (; rec_n < last; rec_n++)
     {
         rec_pack();
@@ -1066,37 +1122,32 @@ static void send_program(uint8_t value)
     hal_midi_tx((uint8_t)(value & 0x7F));
 }
 
-// Byte k (0 number, 1 on value, 2 off value) of footswitch i's message, without the type
-// bit. A leaf.
+// Byte k (0 number, 1 on value, 2 off value, MSG_TYPE type) of footswitch i's message. A
+// leaf.
 static uint8_t msg_field(uint8_t i, uint8_t k)
 {
-    return (uint8_t)(msg[(uint8_t)(MSG_AT(i) + k)] & 0x7F);
+    return msg[(uint8_t)(MSG_AT(i) + k)];
 }
 
-// Footswitch i's message type set to t (MT_*): bit 0 in bit 7 of the number, bit 1 in bit
-// 7 of the on value. A leaf.
+// Footswitch i's message type set to t (MT_*). A leaf.
 static void msg_set_type(uint8_t i, uint8_t t)
 {
-    i = MSG_AT(i);
-    msg[i]     = (uint8_t)((msg[i] & 0x7F) | ((t & 1) << 7));
-    msg[i + 1] = (uint8_t)((msg[i + 1] & 0x7F) | ((t & 2) << 6));
+    msg[(uint8_t)(MSG_AT(i) + MSG_TYPE)] = t;
 }
 
 // Type of footswitch index's message (MT_*).
 static uint8_t msg_type(uint8_t index)
 {
-    return (uint8_t)((msg[MSG_AT(index)] >> 7) | ((msg[MSG_AT(index) + 1] >> 6) & 2));
+    return msg[(uint8_t)(MSG_AT(index) + MSG_TYPE)];
 }
 
-// 1 if footswitch index is a single-program switch: a program change (type bits: bit 7
-// clear in its first byte, set in its second) whose two programs, the on and off values,
-// are the same. A leaf function, so it costs no fixed RAM.
+// 1 if footswitch index is a single-program switch: a program change whose two programs,
+// the on and off values, are the same. A leaf function, so it costs no fixed RAM.
 static uint8_t prog_single(uint8_t index)
 {
-    index = MSG_AT(index);
+    XDATA uint8_t *m = &msg[MSG_AT(index)];
 
-    return (uint8_t)((!(msg[index] & 0x80) && (msg[index + 1] & 0x80) &&
-                      (uint8_t)(msg[index + 1] & 0x7F) == msg[index + 2]) ? 1 : 0);
+    return (uint8_t)((m[MSG_TYPE] == MT_PROG && m[1] == m[2]) ? 1 : 0);
 }
 
 // The run-mode number: the bank from 1, or in program mode (DIRECT SELECT lit) the program.
@@ -1108,23 +1159,23 @@ static void show_program(void)
 // The key_val index of footswitch i's CC or note: its number, + 0x80 for a note. A leaf.
 static uint8_t switch_key(uint8_t i)
 {
-    i = MSG_AT(i);
+    XDATA uint8_t *m = &msg[MSG_AT(i)];
 
-    return (uint8_t)((msg[i] & 0x7F) | (((msg[i] & 0x80) && !(msg[i + 1] & 0x80)) ? 0x80 : 0));
+    return (uint8_t)(m[0] | ((m[MSG_TYPE] == MT_NOTE) ? 0x80 : 0));
 }
 
 // What footswitch i's CC or note says in state on, as remote_cc takes it: a CC's on or off
 // value, or for a note 0x80 + on. A leaf.
 static uint8_t switch_value(uint8_t i, uint8_t on)
 {
-    i = MSG_AT(i);
+    XDATA uint8_t *m = &msg[MSG_AT(i)];
 
-    if ((msg[i] & 0x80) && !(msg[i + 1] & 0x80))
+    if (m[MSG_TYPE] == MT_NOTE)
     {
         return (uint8_t)(0x80 | on);
     }
 
-    return (uint8_t)(msg[(uint8_t)(i + (on ? 1 : 2))] & 0x7F);
+    return on ? m[1] : m[2];
 }
 
 // Footswitch i's state set to on (stomp_state only). A leaf.
@@ -1406,11 +1457,11 @@ static void flush_program(void)
 // The loop count and masks are not locals or parameters, so they cost no directly
 // addressed RAM.
 #define LED_BIT(n) ((uint16_t)((uint16_t)1 << (n)))
-static IDATA uint16_t led_aux;
-static IDATA uint16_t led_stomp;
+CTL_NEAR uint16_t led_aux;
+CTL_NEAR uint16_t led_stomp;
 // Footswitch LEDs to light dimly where led_stomp leaves them dark (used up the same way).
-static IDATA uint16_t led_dim;
-static IDATA uint8_t  led_i;
+CTL_NEAR uint16_t led_dim;
+CTL_NEAR uint8_t  led_i;
 
 static void show_stomp_leds(void)
 {
@@ -1494,8 +1545,11 @@ static uint8_t bcd_of(uint8_t v)
 // version part that starts at this step (other steps leave the display as it is).
 static void version_show(void)
 {
-    uint8_t s = ver_step;
-    uint8_t g;
+    // Static (directly addressed): not pushed and popped around every call below.
+    static uint8_t s;
+    static uint8_t g;
+
+    s = ver_step;
 
     // Page 8: every LED lit for VER_LAMP_STEPS from entry, then the panel LEDs light one
     // at a time, along the row and back (user's request), and the footswitch LEDs mark
@@ -1798,7 +1852,7 @@ static uint8_t num_raw(void)
 
     if (edit_open)
     {
-        return (uint8_t)(EDIT_BYTE & 0x7F);
+        return EDIT_BYTE;
     }
 
     // Page 7: the program, 0xFF for none, which num_put turns back into none.
@@ -1819,7 +1873,7 @@ static void num_put(uint8_t v)
     }
     else if (edit_open)
     {
-        EDIT_BYTE = (uint8_t)((EDIT_BYTE & 0x80) | v);
+        EDIT_BYTE = v;
     }
     else if (cfg_page == PAGE_CHANNEL)
     {
@@ -1929,7 +1983,7 @@ static void param_show(void)
     }
     else
     {
-        hal_display((uint8_t)(PARAM_BYTE(SHOWN_PARAM) & 0x7F));
+        hal_display(PARAM_BYTE(SHOWN_PARAM));
     }
 }
 
@@ -3152,12 +3206,10 @@ void ctl_init(void)
     save_prompt   = 0;
     cal_armed     = 0;
     bank_busy     = 0;
-    nav_ticks   = 0;
     cfg_page      = PAGE_MODES;
     cfg_sel       = 0;
     sx_dump_due   = 0;
     cal_step      = CAL_DONE;
-    cfg_dirty     = 0;
     chan_flash_ticks = 0;
     num_typing    = 0;
     ver_lamp      = 0;
@@ -3517,6 +3569,9 @@ void ctl_key_press(uint8_t code)
         return;
     }
 
+    // A footswitch from here on.
+    index = stomp_index(code);
+
     if (mode != MODE_RUN)
     {
         // The save prompt: the digit is typed on release.
@@ -3528,24 +3583,23 @@ void ctl_key_press(uint8_t code)
         // opens the editor on release), or the editor's footswitches.
         else if (cfg_page == PAGE_CHANNEL)
         {
-            NUM_DIGIT(stomp_index(code));
+            NUM_DIGIT(index);
             config_show();
         }
         else if (cfg_page == PAGE_MODES)
         {
             if (edit_open)
             {
-                edit_press(stomp_index(code));
+                edit_press(index);
             }
             else
             {
-                mode_press(stomp_index(code));
+                mode_press(index);
             }
         }
         // SWITCH page: toggles whether the relay follows this footswitch (LED lit).
         else if (IS_SW_PAGE(cfg_page))
         {
-            index = stomp_index(code);
             bit   = bit16(index);
             sw_mask[cfg_page - PAGE_SW1] ^= bit;
             config_changed();
@@ -3555,7 +3609,6 @@ void ctl_key_press(uint8_t code)
         // (ped_press), if UP and DOWN are up at both ends.
         else if (IS_EXP_PAGE(cfg_page))
         {
-            index = stomp_index(code);
 
             if (pcc_open)
             {
@@ -3573,21 +3626,20 @@ void ctl_key_press(uint8_t code)
         {
             if (keys_down == 0)
             {
-                misc_press(stomp_index(code));
+                misc_press(index);
             }
         }
         // Page 9: a footswitch shows its segment and holds it until released (10 lights
         // everything).
         else if (cfg_page == PAGE_VERSION)
         {
-            version_jump(stomp_index(code));
+            version_jump(index);
         }
         // Page 7: types a digit of the bank's program change. Footswitch 10 with no number
         // being typed shows "--" on its release (below); a digit then starts a number (10
         // again is 0).
         else
         {
-            index = stomp_index(code);
             bank_none_ready = 0;
 
             if (index == STOMP_COUNT - 1 && !num_typing && !pc_typing)
@@ -3613,7 +3665,6 @@ void ctl_key_press(uint8_t code)
     // goes back to the current program. index and on are the digit work space.
     if (pc_mode)
     {
-        index = stomp_index(code);
         on    = (uint8_t)((index == STOMP_COUNT - 1) ? 0 : index + 1);
 
         if (!pc_typing)
@@ -3662,7 +3713,6 @@ void ctl_key_press(uint8_t code)
     // waits (one tick), so the press uses the new bank.
     if (!bank_busy && hal_midi_space() >= 3)
     {
-        index = stomp_index(code);
         bit   = bit16(index);
 
         // Remember what the state was, in case this press is undone on release.
@@ -3728,7 +3778,7 @@ static uint8_t remote_on(uint8_t i, uint8_t value)
 
     q = MSG_AT(i);
 
-    if (value == (uint8_t)(msg[q + 1] & 0x7F))
+    if (value == msg[q + 1])
     {
         // A CC whose on and off values are both this value cannot say which it means:
         // the switch keeps its state (so the switch that sent it does too).
@@ -3789,117 +3839,6 @@ static void remote_cc(uint8_t cc, uint8_t value)
 // messages. The pedal never answers a set, so a MIDI loop cannot make it talk to itself.
 // The parameter numbers and commands (NP_*, NC_*) are defined near the top.
 
-static uint8_t np_kind(uint8_t p)
-{
-    if (p == NP_CHANNEL || p == NP_BANK || (p >= NP_MODE && p < NP_MODE + STOMP_COUNT) ||
-        (p >= NP_TYPE && p < NP_OFF + STOMP_COUNT) || (p >= NP_FOLLOW1 && p < NP_FOLLOW1 + STOMP_COUNT) ||
-        (p >= NP_FOLLOW2 && p < NP_FOLLOW2 + STOMP_COUNT) || (p >= NP_TRIGGER && p < NP_TRIGGER + 4) ||
-        p == NP_BANK_PC || p == NP_BANK_PC_ON || (p >= NP_PICKUP && p < NP_ASENSE + 1))
-    {
-        return NK_SET;
-    }
-
-    if ((p >= NP_VERSION && p < NP_VERSION + 3) || p == NP_BANKS)
-    {
-        return NK_READ;
-    }
-
-    return NK_NONE;
-}
-
-// The current value of known parameter p.
-static uint8_t param_get(uint8_t p)
-{
-    if (p == NP_CHANNEL)
-    {
-        return midi_channel;
-    }
-
-    if (p == NP_BANK)
-    {
-        return (uint8_t)(bank_next + 1);
-    }
-
-    if (p == NP_BANKS)
-    {
-        return BANK_COUNT;
-    }
-
-    // The bank's program change (127 while it is off: what turning it on gives) and whether
-    // it is on.
-    if (p == NP_BANK_PC)
-    {
-        return BANK_PC_PROGRAM;
-    }
-
-    if (p == NP_BANK_PC_ON)
-    {
-        return (uint8_t)(bank_pc != 0);
-    }
-
-    // The shared settings.
-    if (p == NP_LEVEL)
-    {
-        return led_level;
-    }
-
-    if (p == NP_METRO)
-    {
-        return opt_metro;
-    }
-
-    if (p == NP_RUNSTAT)
-    {
-        return opt_runstat;
-    }
-
-    if (p == NP_ASENSE)
-    {
-        return opt_asense;
-    }
-
-    if (p >= NP_PEDAL_CC)
-    {
-        return pedal_cc[(uint8_t)(p - NP_PEDAL_CC)];
-    }
-
-    if (p >= NP_PICKUP)
-    {
-        return (uint8_t)((pk_mask >> (p - NP_PICKUP)) & 1);
-    }
-
-    if (p < NP_MODE)
-    {
-        return fw_version[(uint8_t)(p - NP_VERSION)];
-    }
-
-    if (p < NP_TYPE)
-    {
-        return pedal_mode_get((uint8_t)(p - NP_MODE));
-    }
-
-    if (p < NP_NUM)
-    {
-        return msg_type((uint8_t)(p - NP_TYPE));
-    }
-
-    if (p < NP_FOLLOW1)
-    {
-        // Number, on value or off value: msg[] byte 0, 1 or 2 of switch (p - NP_TYPE) % 10.
-        p = (uint8_t)(p - NP_TYPE);
-        return msg_field((uint8_t)(p % (uint8_t)STOMP_COUNT), (uint8_t)(p / (uint8_t)STOMP_COUNT - 1));
-    }
-
-    if (p < NP_TRIGGER)
-    {
-        // A follow flag: relay 0 from NP_FOLLOW1, relay 1 from NP_FOLLOW2.
-        return (uint8_t)((p < NP_FOLLOW2) ? (bit16((uint8_t)(p - NP_FOLLOW1)) & sw_mask[0]) != 0 :
-                                            (bit16((uint8_t)(p - NP_FOLLOW2)) & sw_mask[1]) != 0);
-    }
-
-    return sw_thr[(uint8_t)(p - NP_TRIGGER)];
-}
-
 // A bank change (bank_busy, run mode), once any undo waiting in the revert queue has gone
 // out. Nothing is sent. First the old bank's states go into key_val as the values they
 // stand for (on: the on value, off: the off value; a note 0x80 + state), so a state shown
@@ -3910,11 +3849,13 @@ static uint8_t param_get(uint8_t p)
 // new bank's pedal CCs, responses and relay settings apply from the next reading or tick.
 static uint8_t relays_compute(void);
 
+// bank_run's loop count (directly addressed, see CTL_NEAR).
+CTL_NEAR uint8_t bank_i;
+
 static void bank_run(void)
 {
     // Static and IDATA: kept out of the directly addressed RAM, and not pushed around each
     // EEPROM read (the stack).
-    static IDATA uint8_t i;
     static IDATA uint8_t v;
 
     // Room for the new bank's program change, if it has one.
@@ -3923,11 +3864,11 @@ static void bank_run(void)
         return;
     }
 
-    for (i = 0; i < STOMP_COUNT; i++)
+    for (bank_i = 0; bank_i < STOMP_COUNT; bank_i++)
     {
-        if (msg_type(i) != MT_PROG)
+        if (msg_type(bank_i) != MT_PROG)
         {
-            key_val[switch_key(i)] = switch_value(i, stomp_on(i));
+            key_val[switch_key(bank_i)] = switch_value(bank_i, stomp_on(bank_i));
         }
     }
 
@@ -3940,17 +3881,17 @@ static void bank_run(void)
     stomp_down  = 0;
     stomp_held  = 0;
 
-    for (i = 0; i < STOMP_COUNT; i++)
+    for (bank_i = 0; bank_i < STOMP_COUNT; bank_i++)
     {
-        stomp_put(i, rests_on(i));
+        stomp_put(bank_i, rests_on(bank_i));
 
-        if (msg_type(i) != MT_PROG)
+        if (msg_type(bank_i) != MT_PROG)
         {
-            v = key_val[switch_key(i)];
+            v = key_val[switch_key(bank_i)];
 
             if (v != KEY_UNKNOWN)
             {
-                stomp_put(i, remote_on(i, v));
+                stomp_put(bank_i, remote_on(bank_i, v));
             }
         }
     }
@@ -4005,47 +3946,47 @@ static void param_command(void)
     }
 }
 
-// Write rx_data1 into footswitch i's message field for parameter sx_param (a leaf).
-static void msg_write(uint8_t i)
-{
-    uint8_t q = MSG_AT(i);
+// The footswitch parameters, each a field of the footswitch's record in its saved form
+// (rec_pack): per group, its first parameter, the record byte (bits 4-5) and the field's
+// lowest bit (bits 0-2), and its largest value (also its width: max | max >> 1).
+#define NP_GROUPS       7
+static const CODE uint8_t np_first[NP_GROUPS] = { NP_MODE, NP_TYPE, NP_NUM, NP_ON, NP_OFF, NP_FOLLOW1, NP_FOLLOW2 };
+static const CODE uint8_t np_pos[NP_GROUPS]   = { 0x02, 0x00, 0x10, 0x20, 0x30, 0x04, 0x05 };
+static const CODE uint8_t np_max[NP_GROUPS]   = { PM_COUNT - 1, MT_PROG, 127, 127, 127, 1, 1 };
 
-    if (sx_param < NP_NUM)
+// Footswitch rec_n's field of group g in hal_rec (packed): with put, rx_data1 is written
+// into it; returns the field as it was. A leaf.
+static uint8_t np_field(uint8_t g, uint8_t put)
+{
+    uint8_t q = np_pos[g];
+    uint8_t s = (uint8_t)(q & 7);
+    uint8_t m = (uint8_t)(np_max[g] | (np_max[g] >> 1));
+    uint8_t v;
+
+    q = (uint8_t)(q >> 4);
+    v = (uint8_t)((uint8_t)(hal_rec[q] >> s) & m);
+
+    if (put)
     {
-        msg[q]     = (uint8_t)((msg[q] & 0x7F) | ((rx_data1 & 1) << 7));
-        msg[q + 1] = (uint8_t)((msg[q + 1] & 0x7F) | ((rx_data1 & 2) << 6));
-        return;
+        hal_rec[q] = (uint8_t)((hal_rec[q] & (uint8_t)~(uint8_t)(m << s)) | (uint8_t)(rx_data1 << s));
     }
 
-    q = (uint8_t)(q + (uint8_t)(sx_param - NP_TYPE) / (uint8_t)STOMP_COUNT - 1);
-    msg[q] = (uint8_t)((msg[q] & 0x80) | rx_data1);
+    return v;
 }
 
-// Set parameter sx_param to rx_data1 (from a SysEx set, put there by ctl_midi_in, so this takes
-// no parameter). Values out of range, read-only parameters and unchanged values are
-// ignored. A changed pedal mode or message puts the switch in its resting state on the next
-// tick (cfg_dirty, settle_dirty), as leaving configuration mode does; a message change to
-// a switch that is on first sends the old message's off and turns it off, as the editor does.
+// Set parameter sx_param to rx_data1 (from a SysEx set, put there by ctl_midi_in, so this
+// takes no parameter). Values out of range, read-only and unknown parameters are ignored,
+// and so are unchanged values where setting them again would do something. A changed
+// pedal mode or message puts the switch in its resting state on the next tick (cfg_dirty,
+// settle_dirty), as leaving configuration mode does; a message change to a switch that is
+// on first sends the old message's off and turns it off, as the editor does.
 static void param_set(void)
 {
-    uint8_t i;
+    uint8_t g;
 
     if (sx_param == NP_COMMAND)
     {
         param_command();
-        return;
-    }
-
-    // The bank's program change: setting the program turns it on, even to the program it
-    // already shows while off (so this comes before the unchanged check).
-    if (sx_param == NP_BANK_PC)
-    {
-        bank_pc = (uint8_t)(rx_data1 + 1);
-        return;
-    }
-
-    if (np_kind(sx_param) != NK_SET || param_get(sx_param) == rx_data1)
-    {
         return;
     }
 
@@ -4059,8 +4000,32 @@ static void param_set(void)
         return;
     }
 
-    // On / off (the value differs, so it is 0 or 1 here only if it changes): on keeps the
+    // A bank change, as UP / DOWN make one in bank mode (bank_run). Unsaved changes to
+    // the old bank's footswitches are dropped.
+    if (sx_param == NP_BANK)
+    {
+        if (rx_data1 >= 1 && rx_data1 <= BANK_COUNT && rx_data1 != (uint8_t)(bank_next + 1))
+        {
+            bank_next = (uint8_t)(rx_data1 - 1);
+            bank_busy = 1;
+
+            if (!pc_mode && !boot_anim)
+            {
+                show_program();
+            }
+        }
+
+        return;
+    }
+
+    // The bank's program change: setting the program turns it on. On / off: on keeps the
     // program parameter 92 reads (127 if it was never set).
+    if (sx_param == NP_BANK_PC)
+    {
+        bank_pc = (uint8_t)(rx_data1 + 1);
+        return;
+    }
+
     if (sx_param == NP_BANK_PC_ON)
     {
         if (rx_data1 <= 1)
@@ -4079,130 +4044,134 @@ static void param_set(void)
         return;
     }
 
-    // An option on / off: the value differs, so a 0 or 1 flips it.
+    // An option on / off.
     if (sx_param >= NP_METRO)
     {
         if (rx_data1 <= 1)
         {
             if (sx_param == NP_METRO)
             {
-                opt_metro = !opt_metro;
+                opt_metro = rx_data1;
                 met_show();
             }
             else if (sx_param == NP_RUNSTAT)
             {
-                opt_runstat = !opt_runstat;
-                tx_last     = 0;
+                if (opt_runstat != rx_data1)
+                {
+                    opt_runstat = rx_data1;
+                    tx_last     = 0;
+                }
             }
             else
             {
-                opt_asense = !opt_asense;
+                opt_asense = rx_data1;
             }
         }
 
         return;
     }
 
-    // A pedal's CC (a data byte, so always 0-127), or its pickup mode on / off (the value
-    // differs, so a 0 or 1 flips it). The pedal's value then counts as where it is.
+    // A pedal's CC (a data byte, so always 0-127), or its pickup mode on / off. The
+    // pedal's value then counts as where it is.
     if (sx_param >= NP_PICKUP)
     {
+        g = (uint8_t)(sx_param - NP_PEDAL_CC);
+
         if (sx_param >= NP_PEDAL_CC)
         {
-            pedal_cc[(uint8_t)(sx_param - NP_PEDAL_CC)] = rx_data1;
+            if (pedal_cc[g] == rx_data1)
+            {
+                return;
+            }
+
+            pedal_cc[g] = rx_data1;
         }
-        else if (rx_data1 <= 1)
+        else
         {
-            pk_mask ^= (uint8_t)(1 << (sx_param - NP_PICKUP));
+            g = (uint8_t)(1 << (uint8_t)(g + 2));
+
+            if (rx_data1 > 1 || (rx_data1 ? 1 : 0) == ((pk_mask & g) ? 1 : 0))
+            {
+                return;
+            }
+
+            pk_mask ^= g;
         }
 
         pedals_rebase();
         return;
     }
 
-    // A bank change, as UP / DOWN make one in bank mode (bank_run). Unsaved changes to
-    // the old bank's footswitches are dropped.
-    if (sx_param == NP_BANK)
+    if (sx_param >= NP_TRIGGER)
     {
-        if (rx_data1 >= 1 && rx_data1 <= BANK_COUNT)
+        if (sx_param < NP_TRIGGER + 4)
         {
-            bank_next = (uint8_t)(rx_data1 - 1);
-            bank_busy = 1;
-
-            if (!pc_mode && !boot_anim)
-            {
-                show_program();
-            }
+            sw_thr[(uint8_t)(sx_param - NP_TRIGGER)] = rx_data1;
         }
 
         return;
     }
 
-    if (sx_param < NP_TYPE)
+    // A footswitch's mode, message or relay follow: its record's field (np_field).
+    for (g = 0; g < NP_GROUPS; g++)
     {
-        if (rx_data1 < PM_COUNT)
-        {
-            i = (uint8_t)(sx_param - NP_MODE);
-            pedal_mode_set(i, rx_data1);
-            cfg_dirty |= bit16(i);
-        }
+        rec_n = (uint8_t)(sx_param - np_first[g]);
 
+        if (rec_n < STOMP_COUNT)
+        {
+            break;
+        }
+    }
+
+    if (g == NP_GROUPS || rx_data1 > np_max[g])
+    {
         return;
     }
 
-    if (sx_param < NP_FOLLOW1)
+    y_get();
+    rec_pack();
+
+    if (np_field(g, 0) == rx_data1)
     {
-        if (sx_param < NP_NUM && rx_data1 > MT_PROG)
-        {
-            return;
-        }
-
-        i = (uint8_t)((uint8_t)(sx_param - NP_TYPE) % (uint8_t)STOMP_COUNT);
-
-        if (stomp_on(i))
-        {
-            if (hal_midi_space() >= 3 && msg_type(i) != MT_PROG)
-            {
-                send_switch(i, 0);
-            }
-
-            stomp_state &= (uint16_t)~bit16(i);
-            hal_stomp_led(i, 0);
-        }
-
-        msg_write(i);
-        cfg_dirty |= bit16(i);
         return;
     }
 
-    if (sx_param < NP_TRIGGER)
+    // A message change (type, number, on or off).
+    if (g != 0 && g < 5 && stomp_on(rec_n))
     {
-        // A follow flag: the value differs from the current one, so a 0 or 1 flips it.
-        if (rx_data1 <= 1)
+        if (hal_midi_space() >= 3 && msg_type(rec_n) != MT_PROG)
         {
-            if (sx_param < NP_FOLLOW2)
-            {
-                sw_mask[0] ^= bit16((uint8_t)(sx_param - NP_FOLLOW1));
-            }
-            else
-            {
-                sw_mask[1] ^= bit16((uint8_t)(sx_param - NP_FOLLOW2));
-            }
+            send_switch(rec_n, 0);
         }
 
-        return;
+        stomp_state &= (uint16_t)~bit16(rec_n);
+        hal_stomp_led(rec_n, 0);
     }
 
-    sw_thr[(uint8_t)(sx_param - NP_TRIGGER)] = rx_data1;
+    np_field(g, 1);
+    rec_unpack();
+    rec_y_in();
+    y_put();
+
+    if (g < 5)
+    {
+        cfg_dirty |= bit16(rec_n);
+    }
 }
 
 // The Identity Request after F0, by sx_pos (1-4): 7E, the device (7F all, or the
 // pedal's channel - 1, checked apart), 06, 01.
 static const CODE uint8_t sx_request[5] = { 0, 0x7E, 0x7F, 0x06, 0x01 };
 
-// A configuration message after F0 7D (sx_pos SX_CFG to SX_CFG + 2): 46 43, then the
-// device (7F all, or the channel - 1, checked apart).
-static const CODE uint8_t sx_cfg[3] = { 0x46, 0x43, 0x7F };
+// The heads of the SysEx messages sent, each ended by F7 (not sent; 7F is sent as the
+// channel - 1): a settings dump's from SX_OUT_DUMP, the Identity Reply's from SX_OUT_ID
+// (Universal Non-Realtime, General Information: SYSEX_ID, family "FC" (46 43), member "10"
+// (31 30)). The parser matches a configuration message's 46 43 and device (7F all, or the
+// channel - 1, checked apart) against bytes 2-4 (sx_pos SX_CFG to SX_CFG + 2).
+#define SX_OUT_DUMP     0
+#define SX_OUT_ID       7
+static const CODE uint8_t sx_out[18] = { 0xF0, SYSEX_ID, 0x46, 0x43, 0x7F, SX_CMD_DUMP, 0xF7,
+                                         0xF0, 0x7E, 0x7F, 0x06, 0x02, SYSEX_ID, 0x46, 0x43, 0x31, 0x30, 0xF7 };
 
 // The visual metronome's sign: "-" for the first half of each beat (12 of its 24
 // clocks), "+" instead on beat 1 once the phase is known (user's request); nothing when it
@@ -4330,7 +4299,7 @@ void ctl_midi_in(uint8_t byte)
             return;
         }
 
-        if (sx_pos == 1 && byte == 0x7D)
+        if (sx_pos == 1 && byte == SYSEX_ID)
         {
             sx_pos = SX_CFG;
         }
@@ -4338,7 +4307,7 @@ void ctl_midi_in(uint8_t byte)
         {
             // The identity request's bytes, or 46 43 and the device: the channel - 1
             // matches the device position (2, or SX_CFG + 2) too.
-            if (byte == ((sx_pos < 5) ? sx_request[sx_pos] : sx_cfg[sx_pos & 3]) ||
+            if (byte == ((sx_pos < 5) ? sx_request[sx_pos] : sx_out[(uint8_t)((sx_pos & 3) + 2)]) ||
                 ((sx_pos & 0x0F) == 2 && byte == midi_channel - 1))
             {
                 sx_pos++;
@@ -4397,7 +4366,7 @@ void ctl_midi_in(uint8_t byte)
     // Only control changes and notes on our channel are of interest; everything else,
     // including program changes, SysEx data and other channels, is ignored.
     if ((uint8_t)(rx_status & 0x0F) != (uint8_t)(midi_channel - 1) ||
-        ((rx_status & 0xF0) != 0xB0 && (rx_status & 0xF0) != 0x90 && (rx_status & 0xF0) != 0x80))
+        ((rx_status & 0xE0) != 0x80 && (rx_status & 0xF0) != 0xB0))
     {
         return;
     }
@@ -4538,36 +4507,44 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
 // 7D (non-commercial: this firmware has no manufacturer ID), family "FC" (46 43), member
 // "10" (31 30), then the version: major, minor and build (bits 0-6 each) and a byte with
 // their bit 7s (bit 0 major, 1 minor, 2 build), then F7.
-static const CODE uint8_t sx_head[10] = { 0xF0, 0x7E, 0x00, 0x06, 0x02, 0x7D, 0x46, 0x43, 0x31, 0x30 };
-
-static void sysex_identity(void)
+// sx_out from i up to its F7 (not sent), 7F as the channel - 1.
+static void sx_tx_head(uint8_t i)
 {
-    uint8_t i;
-
-    for (i = 0; i < sizeof sx_head; i++)
+    while (sx_out[i] != 0xF7)
     {
-        hal_midi_tx((uint8_t)((i == 2) ? midi_channel - 1 : sx_head[i]));
+        hal_midi_tx((uint8_t)((sx_out[i] == 0x7F) ? midi_channel - 1 : sx_out[i]));
+        i++;
     }
+}
 
-    // Major, minor, build (bits 0-6), then their bit 7s in bits 0-2, gathered in sx_hi
-    // from the top down.
-    sx_hi = 0;
+// The firmware version: major, minor and build (bits 0-6 each), then their bit 7s (bit 0
+// major, 1 minor, 2 build).
+static void sx_tx_version(void)
+{
+    hal_midi_tx((uint8_t)(fw_version[0] & 0x7F));
+    hal_midi_tx((uint8_t)(fw_version[1] & 0x7F));
+    hal_midi_tx((uint8_t)(fw_version[2] & 0x7F));
+    hal_midi_tx((uint8_t)((fw_version[0] >> 7) | ((fw_version[1] >> 6) & 2) | ((fw_version[2] >> 5) & 4)));
+}
 
-    for (i = 0; i < 3; i++)
-    {
-        sx_hi = (uint8_t)((sx_hi >> 1) | (fw_version[i] & 0x80));
-        hal_midi_tx((uint8_t)(fw_version[i] & 0x7F));
-    }
-
-    hal_midi_tx((uint8_t)(sx_hi >> 5));
+// A SysEx message's end: F7, and as a system message it makes the next channel message
+// send its status again.
+static void sx_tx_end(void)
+{
     hal_midi_tx(0xF7);
-    // A system message: the next channel message sends its status again.
     tx_last = 0;
 
     if (mode == MODE_RUN)
     {
         tx_flash = TX_FLASH_TICKS;
     }
+}
+
+static void sysex_identity(void)
+{
+    sx_tx_head(SX_OUT_ID);
+    sx_tx_version();
+    sx_tx_end();
 }
 
 // The settings dump (SX_DUMP_LEN bytes; docs/midi.md): F0 7D 46 43 <channel - 1> 02, the
@@ -4579,38 +4556,26 @@ static void sysex_identity(void)
 // | pickup B << 1 | program change on << 2, the program, pedal A's CC, pedal B's CC); F7.
 // The bank comes from its records in their saved form: the bank in use packed from the
 // live settings (rec_pack), another read from the EEPROM (rec_read, the defaults if never
-// saved), so the bank in use does not change. The packed pedal bytes (BANK_Y) are gathered
+// saved), so the bank in use does not change. The packed pedal bytes (rec_y) are gathered
 // from the records' spare bits into sx_y.
 static void sx_dump(void)
 {
+    uint8_t k;
+
     sv_bank = hal_bank;
     sx_req  = (uint8_t)(sx_req ? sx_req - 1 : hal_bank);
-
-    for (sx_k = 0; sx_k < 4; sx_k++)
-    {
-        hal_midi_tx((uint8_t)((sx_k == 0) ? 0xF0 : (sx_k == 1) ? 0x7D : sx_cfg[(uint8_t)(sx_k - 2)]));
-    }
-
-    hal_midi_tx((uint8_t)(midi_channel - 1));
-    hal_midi_tx(SX_CMD_DUMP);
+    sx_tx_head(SX_OUT_DUMP);
     hal_midi_tx((uint8_t)(sx_req + 1));
     hal_midi_tx(midi_channel);
-    sx_hi = 0;
-
-    for (sx_k = 0; sx_k < 3; sx_k++)
-    {
-        sx_hi = (uint8_t)((sx_hi >> 1) | (fw_version[sx_k] & 0x80));
-        hal_midi_tx((uint8_t)(fw_version[sx_k] & 0x7F));
-    }
-
-    hal_midi_tx((uint8_t)(sx_hi >> 5));
+    sx_tx_version();
     hal_midi_tx((uint8_t)(bank_next + 1));
     hal_midi_tx(BANK_COUNT);
-    hal_midi_tx(led_level);
-    hal_midi_tx((uint8_t)((opt_metro ? 1 : 0) | (opt_runstat ? 2 : 0) | (opt_asense ? 4 : 0)));
-    sx_y[0] = 0;
-    sx_y[1] = 0;
-    sx_y[2] = 0;
+    // The brightness and the misc bits, from the channel record.
+    rec_n = HAL_REC_CFG;
+    rec_pack();
+    hal_midi_tx((uint8_t)(hal_rec[2] & 0x7F));
+    hal_midi_tx((uint8_t)(hal_rec[3] & 7));
+    y_get();
 
     for (rec_n = 0; rec_n <= HAL_REC_BANK; rec_n++)
     {
@@ -4625,22 +4590,16 @@ static void sx_dump(void)
             hal_bank = sv_bank;
         }
 
+        rec_y_in();
+
         if (rec_n < STOMP_COUNT)
         {
-            sx_y[rec_n >> 2] |= (uint8_t)((uint8_t)(hal_rec[0] >> 6) << ((rec_n & 3) << 1));
             hal_rec[0] &= 0x3F;
         }
-        else
-        {
-            for (sx_k = 0; sx_k < 4; sx_k++)
-            {
-                sx_y[2] |= (uint8_t)((uint8_t)(hal_rec[sx_k] >> 7) << (4 + sx_k));
-            }
-        }
 
-        for (sx_k = 0; sx_k < 4; sx_k++)
+        for (k = 0; k < 4; k++)
         {
-            hal_midi_tx((uint8_t)(hal_rec[sx_k] & 0x7F));
+            hal_midi_tx((uint8_t)(hal_rec[k] & 0x7F));
         }
     }
 
@@ -4648,9 +4607,7 @@ static void sx_dump(void)
     hal_midi_tx((uint8_t)((uint8_t)(sx_y[0] - 1) & 0x7F));
     hal_midi_tx((uint8_t)(sx_y[1] & 0x7F));
     hal_midi_tx((uint8_t)(sx_y[2] & 0x7F));
-    hal_midi_tx(0xF7);
-    tx_last  = 0;
-    tx_flash = TX_FLASH_TICKS;
+    sx_tx_end();
 }
 
 // Run mode, every tick: each relay's triggers give on if any is on (logical OR): a
@@ -4826,10 +4783,7 @@ void ctl_tick(void)
         {
             settle_dirty();
         }
-    }
 
-    if (mode == MODE_RUN)
-    {
         if (rx_flash && --rx_flash == 0)
         {
             hal_aux_led(HAL_LED_MIDI_CHAN, 0);
@@ -5015,9 +4969,16 @@ uint8_t ctl_inspect(uint8_t what)
         return sw_thr[what - CTL_INSPECT_SW_THR];
     }
 
-    if (what >= CTL_INSPECT_MSG && what < CTL_INSPECT_MSG + STOMP_COUNT * MSG_BYTES)
+    // Three bytes per switch, as the page takes them: the number with type bit 0 in bit
+    // 7, the on value with type bit 1 in bit 7, the off value.
+    if (what >= CTL_INSPECT_MSG && what < CTL_INSPECT_MSG + STOMP_COUNT * 3)
     {
-        return msg[what - CTL_INSPECT_MSG];
+        what = (uint8_t)(what - CTL_INSPECT_MSG);
+        {
+            uint8_t sw = (uint8_t)(what / 3), k = (uint8_t)(what % 3), t = msg_type(sw);
+
+            return (uint8_t)(msg_field(sw, k) | ((k == 0) ? (t & 1) << 7 : (k == 1) ? (t & 2) << 6 : 0));
+        }
     }
 
     if (what >= CTL_INSPECT_SW_MASK && what < CTL_INSPECT_SW_MASK + 4)

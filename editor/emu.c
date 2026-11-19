@@ -365,6 +365,7 @@ uint16_t emu_const(uint8_t what)
     case 21: return BANK_COUNT;
     case 22: return ACTIVE_SENSE_MS;
     case 23: return LED_MIN_US;
+    case 24: return SYSEX_ID;
     default: return 0;
     }
 }

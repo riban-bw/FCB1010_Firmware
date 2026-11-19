@@ -23,7 +23,9 @@ ROM_SIZE ?= 32768
 XRAMFLAGS := --xram-loc 0x8000 --xram-size 0x8000
 SDCCFLAGS := -mmcs51 --model-small --std-sdcc99 --iram-size 256 --code-size $(ROM_SIZE) $(XRAMFLAGS) -Isrc
 
-OBJS := $(OUT)/main.rel $(OUT)/hw.rel $(OUT)/ctl.rel
+# ctl_ram.rel (ctl.c's directly addressed variables, tools/ctl_ram.py) last, so its data
+# goes above the bit area and ctl.c's own fills the gap below it.
+OBJS := $(OUT)/main.rel $(OUT)/hw.rel $(OUT)/ctl.rel $(OUT)/ctl_ram.rel
 
 .PHONY: all test editor emulator check clean FORCE
 
@@ -60,6 +62,12 @@ $(OUT):
 
 # main.rel must be linked first so the interrupt vector table lands at address 0.
 $(OUT)/%.rel: src/%.c src/*.h src/eeprom.inc | $(OUT)
+	$(SDCC) $(SDCCFLAGS) -c $< -o $@
+
+$(OUT)/ctl_ram.c: src/ctl.c tools/ctl_ram.py | $(OUT)
+	python3 -I tools/ctl_ram.py src/ctl.c $@
+
+$(OUT)/ctl_ram.rel: $(OUT)/ctl_ram.c src/platform.h
 	$(SDCC) $(SDCCFLAGS) -c $< -o $@
 
 # Each link of the image is a new build: tools/bump_build.py adds one to the build

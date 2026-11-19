@@ -3242,14 +3242,15 @@ static void test_boot_inverted(void)
 // Set footswitch sw's (0-9) message as if it had been saved.
 static void set_msg(uint8_t sw, uint8_t type, uint8_t num, uint8_t on, uint8_t off)
 {
-    msg[sw * 3]     = (uint8_t)((num & 0x7F) | ((type & 1) << 7));
-    msg[sw * 3 + 1] = (uint8_t)((on & 0x7F) | ((type & 2) << 6));
-    msg[sw * 3 + 2] = (uint8_t)(off & 0x7F);
+    msg[sw * MSG_STRIDE]     = (uint8_t)(num & 0x7F);
+    msg[sw * MSG_STRIDE + 1] = (uint8_t)(on & 0x7F);
+    msg[sw * MSG_STRIDE + 2] = (uint8_t)(off & 0x7F);
+    msg[sw * MSG_STRIDE + MSG_TYPE] = (uint8_t)(type & 3);
 }
 
-#define MSG_NUM(sw)  (msg[(sw) * 3] & 0x7F)
-#define MSG_ON(sw)   (msg[(sw) * 3 + 1] & 0x7F)
-#define MSG_OFF(sw)  (msg[(sw) * 3 + 2])
+#define MSG_NUM(sw)  (msg[(sw) * MSG_STRIDE])
+#define MSG_ON(sw)   (msg[(sw) * MSG_STRIDE + 1])
+#define MSG_OFF(sw)  (msg[(sw) * MSG_STRIDE + 2])
 
 #define NOTE_ON   (0x90 | (MIDI_CHANNEL - 1))
 #define NOTE_OFF  (0x80 | (MIDI_CHANNEL - 1))
@@ -3888,6 +3889,15 @@ static void mset_on(uint8_t ch, uint8_t p, uint8_t v)
     d[0] = p;
     d[1] = v;
     sx_send((uint8_t)(ch - 1), SX_CMD_SET, d, 2);
+}
+
+// What a dump would give for parameter p (the few the tests read back).
+static uint8_t param_get(uint8_t p)
+{
+    if (p == NP_BANK_PC) return BANK_PC_PROGRAM;
+    if (p == NP_BANK_PC_ON) return (uint8_t)(bank_pc != 0);
+    if (p >= NP_PEDAL_CC) return pedal_cc[p - NP_PEDAL_CC];
+    return (uint8_t)((pk_mask >> (p - NP_PICKUP)) & 1);
 }
 
 static void mset(uint8_t p, uint8_t v)
@@ -5271,10 +5281,11 @@ static void test_pedal_cc_config(void)
     pedal(1, raw_for(30));
     CHECK(midi_len == 3 && cc_number(0) == cc_b && cc_value(0) == 30);
 
-    // Over MIDI: NRPN 96 / 97, the bank in use; the pedal sends on it from then on.
+    // Over MIDI: parameters 96 / 97, the bank in use; the pedal sends on it from then on.
     reset_world();
     pk_mask = 0;
-    CHECK(np_kind(NP_PEDAL_CC) == NK_SET && np_kind(NP_PEDAL_CC + 1) == NK_SET && np_kind(NP_COUNT) == NK_NONE);
+    mset(NP_COUNT, 20);
+    CHECK(pedal_cc[0] != 20);
     mset(NP_PEDAL_CC, 20);
     CHECK(pedal_cc[0] == 20 && param_get(NP_PEDAL_CC) == 20 && param_get(NP_PEDAL_CC + 1) == cc_b);
     pedal(0, 0);

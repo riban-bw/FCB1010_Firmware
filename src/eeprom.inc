@@ -128,8 +128,8 @@ static const CODE uint8_t rec_salt[HAL_RECORDS] = {
 
 // The one record buffer and the bank the footswitch records belong to, shared with ctl.c
 // (loads and saves never overlap), and the result of the last EEPROM access as a bit.
-IDATA uint8_t hal_rec[4];
-IDATA uint8_t hal_bank;
+NEAR uint8_t hal_rec[4];
+NEAR uint8_t hal_bank;
 static BIT_T  eeprom_ok;
 
 // The record being accessed (rec_locate): byte i of the stored form (0 magic, 1-4 hal_rec,

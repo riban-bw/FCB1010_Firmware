@@ -17,6 +17,19 @@
 #define DEFAULT_ACTIVE_SENSING    0
 #define ACTIVE_SENSE_MS           250
 
+// SysEx manufacturer ID of the identity reply and the settings messages, one byte (1 to
+// 0x7D). 0x7D is the MIDI ID for non-commercial use: this project has no ID of its own
+// (they are sold by the MIDI Association), and 0x7C, the newer non-commercial ID for
+// public products, is only for MIDI 2.0 endpoint discovery, not custom data. With an ID
+// of the project's own, set it here; the editor follows it, the zynthian driver has its
+// own copy. A 3-byte ID (00 xx yy) is not supported.
+#ifndef SYSEX_ID
+#define SYSEX_ID                  0x7D
+#endif
+#if SYSEX_ID < 1 || SYSEX_ID > 0x7D
+#error "SYSEX_ID must be a one-byte manufacturer ID, 0x01 to 0x7D"
+#endif
+
 // Pedal mode every footswitch starts with until it is changed in configuration mode:
 // 0 = stomp (toggle), 1 = stomp with momentary on a long press, 2 = momentary.
 // 3 = inverted momentary (0 while pressed, 127 on release).

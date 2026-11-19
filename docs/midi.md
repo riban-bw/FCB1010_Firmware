@@ -42,13 +42,19 @@ F0 7E <channel - 1> 06 02 7D 46 43 31 30 <major> <minor> <build> <high bits> F7
 
 | Bytes | Meaning |
 |---|---|
-| `7D` | Manufacturer ID: 7D is the ID set aside for non-commercial use |
+| `7D` | Manufacturer ID (`SYSEX_ID` in `config.h`): 7D is the ID set aside for non-commercial use; see [The SysEx ID](#the-sysex-id) |
 | `46 43` | Device family: "FC" in ASCII |
 | `31 30` | Family member: "10" in ASCII |
 | `<major> <minor> <build>` | The firmware version (as page 9 shows it), bits 0 to 6 of each |
 | `<high bits>` | Bit 7 of the major (bit 0), minor (bit 1) and build (bit 2) numbers, for versions and builds of 128 and up |
 
 Any other SysEx message, except the pedal's own settings messages (below), is ignored.
+
+### The SysEx ID
+
+SysEx messages carry a manufacturer ID so that each maker's devices can tell their own messages from everyone else's. IDs are assigned, and sold, by the MIDI Association. This project has none of its own, so it uses 7D, the ID the MIDI specification sets aside for non-commercial use. Strictly, the MIDI Association says 7D should not be used on a product released to the public, and publishing the firmware could count as that; but it is what most hobby and open-source projects do, and the only risk is another 7D device on the same MIDI connection taking the pedal's messages for its own. The bytes after it, `46 43` ("FC") and, in the identity, `31 30` ("10"), make that unlikely. 7C, the newer non-commercial ID that is allowed on public products, does not fit: it may only be used for MIDI 2.0 endpoint discovery, not for a device's own messages such as the settings below.
+
+The ID is `SYSEX_ID` in `config.h` (one byte, 01 to 7D), used by the identity reply and every settings message, so a build with an assigned ID needs only that change. The editor page takes it from the firmware it runs; the zynthian driver has its own copy (`SYSEX_ID_MANUFACTURER`), to change with it. The examples on this page show 7D.
 
 ## Configuration over MIDI
 
