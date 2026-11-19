@@ -8,13 +8,13 @@ The stock presets, banks, direct-select modes and the Behringer SysEx editor do 
 
 ## Flashing to an EPROM or EEPROM
 
-The program memory is a 28-pin chip in a socket. The EPROM used in my FCB1010 is an HT27C512-70, which is 64KB. Some units have the smaller 27C256 (32KB) or 27C128 (16KB). The firmware is the same for each; only the image file and the replacement chip differ. The firmware fits in 16KB for now (see [the size](building.md#building-and-testing)), with little to spare: if a later version outgrows it, `make` stops making the 27C128 image and a 27C128 unit needs a 27C256 in its place (the socket carries address lines A0 to A14, and pin 27 is A14 on a 27C256, enough for 32KB).
+The program memory is a 28-pin chip in a socket. The EPROM used in my FCB1010 is an HT27C512-70, which is 64KB. Some units have the smaller 27C256 (32KB) or 27C128 (16KB). The firmware is the same for each; only the image file and the replacement chip differ. The firmware is now a little over 16KB (see [the size](building.md#building-and-testing)), so `make` does not make the 27C128 image and a 27C128 unit needs a 27C256 in its place (the socket carries address lines A0 to A14, and pin 27 is A14 on a 27C256, enough for 32KB). If a later version fits 16KB again, the 27C128 image comes back.
 
 | Chip in the socket | Size | Image to write | Replacement chips |
 |---|---|---|---|
 | 27C512 (for example HT27C512) | 64KB | `build/fcb1010_27c512.bin` | A 27C512-pinout part: W27C512 (electrically erasable, so it can be reprogrammed in the programmer), or a one-time programmable AT27C512R |
 | 27C256 | 32KB | `build/fcb1010_27c256.bin` | A 27C256-pinout part such as an AT27C256R, or an AT28C256 EEPROM on an adapter (see step 3) |
-| 27C128 | 16KB | `build/fcb1010_27c128.bin` | A 27C128-pinout part, or a 27C256-pinout part such as an AT27C256R with `build/fcb1010_27c256.bin` (which also keeps working if the firmware outgrows 16KB) |
+| 27C128 | 16KB | `build/fcb1010_27c128.bin`, only made while the firmware fits 16KB (it does not at present) | A 27C256-pinout part such as an AT27C256R with `build/fcb1010_27c256.bin`; a 27C128-pinout part only while the 27C128 image is made |
 
 The 27C512 image is the 32KB firmware twice, so it runs whether the socket drives the chip's top address line (pin 1, A15) high or low. The images are built by `make` and offered by the GitHub build.
 

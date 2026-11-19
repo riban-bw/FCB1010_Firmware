@@ -63,9 +63,9 @@ Settings travel as SysEx messages, which other devices and software ignore, so t
 | Message | Meaning |
 |---|---|
 | `F0 7D 46 43 <device> 01 <bank> F7` | Ask for a settings dump of a bank: 0 the bank in use (as it is now, saved or not), or 1 to the number of banks (as stored, without changing bank; a bank never stored gives its defaults) |
-| `F0 7D 46 43 <channel - 1> 02 <62 data bytes> F7` | The dump (sent only), 65 bytes, about 21ms on the cable; below |
-| `F0 7D 46 43 <device> 03 <parameter> <value> ... F7` | Set parameters: up to 102 parameter and value pairs (the table below). The pedal keeps the message until its F7 and then applies the pairs in order, so a message cut short, with an odd count or with more than 102 pairs changes nothing |
-| `F0 7D 46 43 <device> 04 <bank> <48 data bytes> F7` | Write a bank: stores the 48 bytes, laid out as the last 48 data bytes of a dump (from the footswitches to the pedals' controller numbers), into bank 1 to the number of banks, without changing bank. 56 bytes, about 18ms on the cable. If it is the bank in use, its settings are loaded from them at once (unsaved changes to it are dropped). The pedal keeps the message until its F7, so a message cut short, of the wrong length or for a bank there is not changes nothing |
+| `F0 7D 46 43 <channel - 1> 02 <66 data bytes> F7` | The dump (sent only), 69 bytes, about 22ms on the cable; below |
+| `F0 7D 46 43 <device> 03 <parameter> <value> ... F7` | Set parameters: up to 106 parameter and value pairs (the table below). The pedal keeps the message until its F7 and then applies the pairs in order, so a message cut short, with an odd count or with more than 106 pairs changes nothing |
+| `F0 7D 46 43 <device> 04 <bank> <52 data bytes> F7` | Write a bank: stores the 52 bytes, laid out as the last 52 data bytes of a dump (from the footswitches to the pedal ranges), into bank 1 to the number of banks, without changing bank. 60 bytes, about 19ms on the cable. If it is the bank in use, its settings are loaded from them at once (unsaved changes to it are dropped). The pedal keeps the message until its F7, so a message cut short, of the wrong length or for a bank there is not changes nothing |
 
 The dump's data bytes, after the command byte:
 
@@ -83,6 +83,7 @@ The dump's data bytes, after the command byte:
 | 1 | Pedals: bit 0 pedal A pickup, bit 1 pedal B pickup, bit 2 the bank sends its program change |
 | 1 | The bank's program change, 0 to 127 (127 while it is off) |
 | 2 | Pedal A's and pedal B's controller numbers |
+| 4 | Pedal ranges: the value pedal A sends at the heel, pedal B at the heel, pedal A at the toe, pedal B at the toe |
 
 Parameters for a set, with the values each takes (the dump holds the same settings):
 
@@ -93,7 +94,7 @@ Parameters for a set, with the values each takes (the dump holds the same settin
 | 4 | Command | 2 save, 3 discard unsaved changes, 6 reset every setting of every bank to its default and store it (the calibration is kept; about 2 seconds, the pedal does nothing else meanwhile) |
 | 6 | Footswitch bank | 1 to `BANK_COUNT`; setting it changes bank, as UP / DOWN do while DIRECT SELECT is dark |
 | 7 | Number of banks, `BANK_COUNT` (read only) | 1 to 30 |
-| 8 to 17 | Footswitch 1 to 10 mode (of the bank in use, as are parameters 20 to 87 and 92 to 97) | 0 stomp, 1 stomp with momentary, 2 momentary, 3 inverted momentary |
+| 8 to 17 | Footswitch 1 to 10 mode (of the bank in use, as are parameters 20 to 87, 92 to 97 and 102 to 105) | 0 stomp, 1 stomp with momentary, 2 momentary, 3 inverted momentary |
 | 20 to 29 | Footswitch 1 to 10 message type | 0 CC, 1 note, 2 program change |
 | 30 to 39 | Footswitch 1 to 10 number | 0 to 127: controller or note (not used by a program change) |
 | 40 to 49 | Footswitch 1 to 10 ON value | 0 to 127: CC value, note on velocity, or the program sent ON |
@@ -110,6 +111,8 @@ Parameters for a set, with the values each takes (the dump holds the same settin
 | 99 | MIDI clock display, the visual metronome (configuration page 8), shared | 0 off, 1 on |
 | 100 | Running status on MIDI OUT (configuration page 8), shared | 0 off, 1 on |
 | 101 | Active sensing on MIDI OUT (configuration page 8), shared | 0 off, 1 on |
+| 102, 103 | The value expression pedal A, pedal B sends at the heel (VALUE 1 in the CC editor, configuration pages 3 and 4) | 0 to 127; 0 by default |
+| 104, 105 | The value pedal A, pedal B sends at the toe (VALUE 2) | 0 to 127; 127 by default. The pedal's travel is spread evenly from the heel value to the toe value, either way round |
 
 - A set takes effect at once but is not saved; command 2 saves everything, as leaving configuration mode does, and command 3 reloads what is saved. Unknown parameters, read-only ones, out-of-range values and values equal to the current one are ignored.
 - A footswitch whose mode or message changes goes to its resting state on the next 2ms tick (as on a save in configuration mode). If it was ON when its message changed, the old message's OFF is sent first (not for a program change).
@@ -117,6 +120,6 @@ Parameters for a set, with the values each takes (the dump holds the same settin
 - A dump goes out as soon as MIDI OUT has room for all of it (it is sent whole, in one message). Another bank's settings are read from the EEPROM first (about 10ms). The pedal never answers a set or a write, so a MIDI loop cannot make it talk to itself, and a dump fed back to it changes nothing.
 - A bank change (parameter 6) happens on the next tick, once any pending stomp with momentary revert has gone out, and sends only the new bank's program change, if it has one (configuration page 7, or parameters 92 and 93); the new bank's pedal controllers, pedal responses and relay settings apply from then on. A dump asked for meanwhile waits for it and describes the new bank, but sets sent before it finishes apply to the old bank and are lost, so read back (or wait about 50ms) before setting the new bank's footswitches. Unsaved changes to the old bank's settings are dropped; save (command 2) first to keep them. The states passed on to the new bank are worked out from the old bank's saved records, so with unsaved message changes they follow the saved messages.
 - A pedal in pickup mode sends nothing after its controller's value has changed elsewhere (a footswitch sending it, or a CC received on MIDI IN; at power-on it counts as 0) until the pedal reaches that value or passes it. Then it sends as usual. Turning pickup on while the pedal is the last thing that set its controller changes nothing until the value changes elsewhere. After a change of controller (parameters 96 and 97, or a bank whose pedal sends another one) a pickup pedal waits for the new controller's value.
-- A bank write stores the bank's EEPROM records (eleven 5-byte records, 14 or so EEPROM write cycles: about 70ms with a 5ms EEPROM, and up to about 150ms with a slow one), and the pedal does nothing else meanwhile. Its MIDI IN queue holds 128 bytes, so it can take one more write while it stores one, but not more. To restore every bank, either ask for a dump of each bank after writing it (the dump goes out only once the write is done, and shows what was stored), or leave about 200ms between writes. The editor page does the first when it has a MIDI input, the second when it has only an output. Restoring all 30 banks then takes about 5 to 6 seconds.
+- A bank write stores the bank's EEPROM records (twelve 5-byte records, 15 or so EEPROM write cycles: about 70ms with a 5ms EEPROM, and up to about 150ms with a slow one), and the pedal does nothing else meanwhile. Its MIDI IN queue holds 128 bytes, so it can take one more write while it stores one, but not more. To restore every bank, either ask for a dump of each bank after writing it (the dump goes out only once the write is done, and shows what was stored), or leave about 200ms between writes. The editor page does the first when it has a MIDI input, the second when it has only an output. Restoring all 30 banks then takes about 5 to 6 seconds.
 - A single message with every bank in it would not be much quicker: the bytes take about 0.6 seconds on the cable for 30 banks, and the EEPROM writes take the rest either way. It would also need the pedal to hold 1.5KB before writing anything, and one error would lose the lot, so the protocol writes one bank at a time.
 - Settings and dump requests are taken in run mode only; in configuration mode they are ignored, and entering it cancels a dump asked for. A save over MIDI blocks the pedal for the EEPROM writes (tens of ms), so wait for it before sending more.

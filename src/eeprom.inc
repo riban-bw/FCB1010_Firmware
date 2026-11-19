@@ -107,9 +107,16 @@ static uint8_t i2c_read(uint8_t send_nak)
 #define BANK_MAX       36
 #define FS_BOTTOM      (0x7E0 - BANK_MAX * BANK_BYTES)
 #define BANK_REC_TOP   (FS_BOTTOM - FS_LENGTH)
+// The pedal range records (HAL_REC_RANGE), 5 bytes each like the bank records, in the
+// room of banks 31-33's footswitch records (kept spare for later settings): bank 1 at
+// 0x1FF, each further bank 5 bytes lower, bank 30 at 0x16E. So there can be no more than
+// 30 banks.
+#define RANGE_BANKS    30
+#define RANGE_REC_TOP  (0x7E0 - RANGE_BANKS * BANK_BYTES - FS_LENGTH)
 
 #if EEPROM_SHARED + (HAL_RECORDS - HAL_REC_CAL) * 8 != 0x800 || HAL_REC_BANK != STOMP_COUNT || \
-    HAL_REC_CAL != HAL_REC_BANK + 1 || STOMP_COUNT != 10
+    HAL_REC_RANGE != HAL_REC_BANK + 1 || HAL_REC_CAL != HAL_REC_RANGE + 1 || STOMP_COUNT != 10 || \
+    BANK_COUNT > RANGE_BANKS || RANGE_REC_TOP - (RANGE_BANKS - 1) * FS_LENGTH != 0x7E0 - 33 * BANK_BYTES
 #error EEPROM record layout assumptions broken
 #endif
 
@@ -117,13 +124,13 @@ static uint8_t i2c_read(uint8_t send_nak)
 #error BANK_COUNT must be 1 to 36 (eleven 5-byte records per bank below 0x7E0)
 #endif
 
-// Magics of the shared records; salts of the ten footswitch records and the bank record
-// (every bank uses the same, with the bank number added; the bank record's top two bits
-// are 01, so with a bank number below 64 its checksum of an erased record is never 0xFF)
-// and the shared ones.
+// Magics of the shared records; salts of the ten footswitch records, the bank record and
+// the range record (every bank uses the same, with the bank number added; the bank and
+// range records' top two bits are 01, so with a bank number below 64 the checksum of an
+// erased record is never 0xFF) and the shared ones.
 static const CODE uint8_t rec_magic[HAL_RECORDS - HAL_REC_CAL] = { 0xC1, 0xC2 };
 static const CODE uint8_t rec_salt[HAL_RECORDS] = {
-    0x96, 0x69, 0x55, 0xAA, 0x33, 0xCC, 0x0F, 0xF0, 0x5F, 0xF5, 0x4B, 0x5A, 0xA5
+    0x96, 0x69, 0x55, 0xAA, 0x33, 0xCC, 0x0F, 0xF0, 0x5F, 0xF5, 0x4B, 0x63, 0x5A, 0xA5
 };
 
 // The one record buffer and the bank the footswitch records belong to, shared with ctl.c
@@ -141,8 +148,8 @@ static uint16_t rec_addr;
 static uint8_t  rec_first;
 static uint8_t  rec_control;
 
-// Find record rec. Footswitch records move down 50 bytes per bank, the bank record 5 (a
-// loop, not SDCC's multiply call). A leaf, so it costs no fixed RAM.
+// Find record rec. Footswitch records move down 50 bytes per bank, the bank and range
+// records 5 (a loop, not SDCC's multiply call). A leaf, so it costs no fixed RAM.
 static void rec_locate(uint8_t rec)
 {
     uint8_t b;
@@ -157,6 +164,10 @@ static void rec_locate(uint8_t rec)
         {
             rec_addr = (uint16_t)(0x7E0 - BANK_BYTES - 1 + (uint8_t)((uint8_t)(rec << 2) + rec));
             b        = BANK_BYTES;
+        }
+        else if (rec == HAL_REC_RANGE)
+        {
+            rec_addr = (uint16_t)(RANGE_REC_TOP - 1);
         }
 
         for (rec = hal_bank; rec != 0; rec--)
@@ -255,13 +266,13 @@ uint8_t hal_rec_load(uint8_t rec)
             // Acknowledge every byte but the last, which ends the read.
             b = i2c_read((uint8_t)(i == REC_LAST));
 
-            // The data into hal_rec (a footswitch record's 7-bit bytes with bit 7 clear),
+            // The data into hal_rec (a footswitch or range record's 7-bit bytes with bit 7 clear),
             // then the magic and checksum against what was read.
             if (!rec_verify && i != 0 && i != REC_LAST)
             {
                 hal_rec[i - 1] = b;
 
-                if (rec < HAL_REC_BANK && i != 1 && (b & 0x80))
+                if (((rec < HAL_REC_BANK && i != 1) || rec == HAL_REC_RANGE) && (b & 0x80))
                 {
                     eeprom_ok = 0;
                 }

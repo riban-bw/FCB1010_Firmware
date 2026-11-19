@@ -58,15 +58,18 @@ void    hal_aux_led(uint8_t which, uint8_t on);
 //                     settings in bits 4-7, then number, on value, off value (7 bits)
 //   HAL_REC_BANK      bank hal_bank's relay triggers (relay * 2 + pedal, 7 bits) with
 //                     more bank settings in their bit 7
+//   HAL_REC_RANGE     bank hal_bank's pedal ranges: pedal A's CC value at the heel and
+//                     at the toe, then pedal B's (7 bits)
 //   HAL_REC_CAL       calibration: heel A, toe A, heel B, toe B (raw ADC readings)
 //   HAL_REC_CFG       MIDI channel, then three unused bytes (saved as 0)
 // hal_bank (0 to BANK_COUNT - 1, set by ctl.c) picks which bank's records the footswitch
 // and bank record numbers refer to; the other records are shared by every bank.
 #define HAL_REC_MSG0    0
 #define HAL_REC_BANK    10
-#define HAL_REC_CAL     11
-#define HAL_REC_CFG     12
-#define HAL_RECORDS     13
+#define HAL_REC_RANGE   11
+#define HAL_REC_CAL     12
+#define HAL_REC_CFG     13
+#define HAL_RECORDS     14
 extern NEAR uint8_t hal_rec[4];
 extern NEAR uint8_t hal_bank;
 uint8_t hal_rec_load(uint8_t rec);

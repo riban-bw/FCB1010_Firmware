@@ -53,6 +53,8 @@ static uint8_t  stored_msg[MSG_RECS][4], saved_msg[MSG_RECS][4];
 // Relay outputs, and how many bank records were saved.
 static uint8_t  relays;
 static int      bank_saved;
+// Pedal range records saved (HAL_REC_RANGE).
+static int      range_saved;
 static uint8_t  status_led;
 static int      display;
 static uint8_t  blank;
@@ -227,6 +229,10 @@ uint8_t hal_rec_save(uint8_t rec)
         {
             bank_saved++;
         }
+        else if (rec == HAL_REC_RANGE)
+        {
+            range_saved++;
+        }
         else
         {
             msg_saved++;
@@ -307,6 +313,7 @@ static void reset_world(void)
     memset(stored_cfg, 0, sizeof(stored_cfg));
     relays = 0xEE;
     bank_saved = 0;
+    range_saved = 0;
     msg_saved = 0;
     memset(msg_stored_valid, 0, sizeof(msg_stored_valid));
     memset(msg_was_saved, 0, sizeof(msg_was_saved));
@@ -4002,6 +4009,12 @@ static int parse_dump(int from)
     dump_put(NP_BANK_PC, d[1]);
     dump_put(NP_PEDAL_CC, d[2]);
     dump_put(NP_PEDAL_CC + 1, d[3]);
+    d += 4;
+
+    for (k = 0; k < 4; k++)
+    {
+        dump_put(NP_RANGE + k, d[k]);
+    }
 
     for (i = 0; i < NP_COUNT; i++)
     {
@@ -4012,7 +4025,7 @@ static int parse_dump(int from)
 }
 
 // The number of parameters in a dump.
-#define DUMP_PARAMS (1 + 3 + 2 + 1 + 3 + 7 * STOMP_COUNT + 4 + 6)
+#define DUMP_PARAMS (1 + 3 + 2 + 1 + 3 + 7 * STOMP_COUNT + 4 + 6 + 4)
 
 // Ask for a dump of bank b (0 the bank in use) and run it (giving up after n ticks),
 // with room in MIDI OUT for it.
@@ -5200,6 +5213,161 @@ static void midi_cc_in(uint8_t cc, uint8_t v)
 }
 
 // Page 5's pedal CC editor, the CCs per bank, and over MIDI (NRPN 96 / 97).
+// The pedal ranges (user's request): VALUE 1 at the heel, VALUE 2 at the toe, set in the
+// CC editor's second and third steps; the pedal's travel is scaled between them.
+static int range_flickers(uint8_t led)
+{
+    int t, on = 0, off = 0;
+
+    for (t = 0; t < 4 * PAR_TICKS; t++)
+    {
+        ticks(1);
+        on  += aux[led] == 1;
+        off += aux[led] == 0;
+    }
+
+    return on > 0 && off > 0;
+}
+
+static void test_pedal_range(void)
+{
+    uint8_t cc_a = bank_def[1] & 0x7F;
+
+    printf("pedal range: VALUE 1 / VALUE 2, the CC editor's steps, scaling, saved per bank\n");
+    reset_world();
+    pk_mask = 0;
+    CHECK(pedal_rng[0] == 0 && pedal_rng[1] == 0 && pedal_rng[2] == 127 && pedal_rng[3] == 127);
+    // The default range sends the pedal's own value, as before.
+    CHECK(pedal_map(0, 0) == 0 && pedal_map(0, 64) == 64 && pedal_map(0, 127) == 127);
+    pedal_rng[0] = 10;
+    pedal_rng[2] = 100;
+    CHECK(pedal_map(0, 0) == 10 && pedal_map(0, 127) == 100 && pedal_map(0, 64) == 55);
+    // Either way round.
+    pedal_rng[0] = 100;
+    pedal_rng[2] = 10;
+    CHECK(pedal_map(0, 0) == 100 && pedal_map(0, 127) == 10 && pedal_map(0, 64) == 55);
+    // Every value in range, and monotonic.
+    {
+        int v, ok = 1, last = 100;
+
+        for (v = 0; v < 128; v++)
+        {
+            int m = pedal_map(0, (uint8_t)v);
+
+            ok &= m <= 100 && m >= 10 && m <= last;
+            last = m;
+        }
+
+        CHECK(ok);
+    }
+
+    // In run mode the pedal sends the scaled value: 10 at the heel, 100 at the toe.
+    reset_world();
+    pk_mask = 0;
+    pedal_rng[0] = 10;
+    pedal_rng[2] = 100;
+    pedal(0, 128);
+    clear_log();
+    pedal(0, 0);
+    CHECK(midi_len == 3 && cc_number(0) == cc_a && cc_value(0) == 10);
+    clear_log();
+    pedal(0, 255);
+    CHECK(midi_len == 3 && cc_value(0) == 100 && sent[0] == 100);
+
+    // The editor: footswitch 6 twice, the CC (NUMBER flickers), UP to VALUE 1 (VALUE 1
+    // flickers, the heel value shown), typed; UP to VALUE 2, typed; UP accepts.
+    reset_world();
+    chord_long();
+    to_page(PAGE_EXP_A);
+    tap(sw_code(PED_CC + 1));
+    CHECK(pcc_open && pcc_step == 0 && range_flickers(HAL_LED_NUMBER) && aux[HAL_LED_VALUE_1] == 0);
+    tap(CTL_KEY_UP);
+    CHECK(pcc_open && pcc_step == 1 && display == 0 && pedal_cc[0] == cc_a);
+    CHECK(range_flickers(HAL_LED_VALUE_1) && aux[HAL_LED_NUMBER] == 0 && aux[HAL_LED_EXP_1] == 1 &&
+          stomp_leds_are(0, digit_leds("0123456789")));
+    tap(sw_code(1));
+    tap(sw_code(10));
+    CHECK(pedal_rng[0] == 10 && display == 10 && num_typing);
+    tap(CTL_KEY_UP);          // ends the number (it could take a third digit)
+    CHECK(pcc_open && pcc_step == 1 && !num_typing);
+    tap(CTL_KEY_UP);
+    CHECK(pcc_open && pcc_step == 2 && display == 127 && range_flickers(HAL_LED_VALUE_2));
+    tap(sw_code(1));
+    tap(sw_code(10));
+    tap(sw_code(10));
+    CHECK(pedal_rng[2] == 100 && !num_typing);
+    // DOWN steps back without changing anything, UP forward again.
+    tap(CTL_KEY_DOWN);
+    CHECK(pcc_open && pcc_step == 1 && display == 10);
+    tap(CTL_KEY_UP);
+    tap(CTL_KEY_UP);
+    // (The step shares ped_sel's byte: footswitch 6 is selected again.)
+    CHECK(!pcc_open && pedal_rng[0] == 10 && pedal_rng[2] == 100 && pedal_rng[1] == 0 && pedal_rng[3] == 127 &&
+          ped_sel == PED_CC && leds[PED_CC] == 1);
+    ticks(1);
+    CHECK(cfg_changed == 1);
+    // DOWN on the first step puts all three back.
+    // (5 and 2 could each take another digit: the first UP ends the number.)
+    tap(sw_code(PED_CC + 1));
+    tap(sw_code(5));
+    tap(CTL_KEY_UP);
+    tap(CTL_KEY_UP);
+    tap(sw_code(2));
+    tap(CTL_KEY_UP);
+    tap(CTL_KEY_DOWN);
+    CHECK(pcc_open && pcc_step == 0 && pedal_cc[0] == 5 && pedal_rng[0] == 2);
+    tap(CTL_KEY_DOWN);
+    CHECK(!pcc_open && pedal_cc[0] == cc_a && pedal_rng[0] == 10 && pedal_rng[2] == 100);
+    // Saved with the bank (its range record), and loaded from it.
+    chord_short();
+    CHECK(mode == MODE_RUN && range_saved == 1 && saved_msg[HAL_REC_RANGE][0] == 10 &&
+          saved_msg[HAL_REC_RANGE][2] == 100 && saved_msg[HAL_REC_RANGE][3] == 127);
+    memcpy(stored_msg[HAL_REC_RANGE], saved_msg[HAL_REC_RANGE], 4);
+    msg_stored_valid[HAL_REC_RANGE] = 1;
+    pedal_rng[0] = 0;
+    load_settings();
+    CHECK(pedal_rng[0] == 10 && pedal_rng[2] == 100);
+    // Another bank has its own (the defaults).
+    mset(NP_BANK, 2);
+    ticks(5);
+    CHECK(hal_bank == 1 && pedal_rng[0] == 0 && pedal_rng[2] == 127);
+    // An invalid record (a bit 7 set reads as 7 bits; a wrong checksum is the fake's
+    // "not valid") gives the defaults.
+    mset(NP_BANK, 1);
+    ticks(5);
+    CHECK(hal_bank == 0 && pedal_rng[0] == 10);
+    msg_stored_valid[HAL_REC_RANGE] = 0;
+    mset(NP_BANK, 2);
+    ticks(5);
+    mset(NP_BANK, 1);
+    ticks(5);
+    CHECK(pedal_rng[0] == 0 && pedal_rng[2] == 127);
+
+    // Over MIDI: parameters 102-105, and the dump's last four bytes before F7.
+    reset_world();
+    mset(NP_RANGE + 1, 20);
+    mset(NP_RANGE + 3, 90);
+    CHECK(pedal_rng[1] == 20 && pedal_rng[3] == 90);
+    clear_log();
+    dump_run(1000);
+    CHECK(parse_dump(0) == DUMP_PARAMS && dump_values[NP_RANGE] == 0 && dump_values[NP_RANGE + 2] == 127 &&
+          dump_values[NP_RANGE + 1] == 20 && dump_values[NP_RANGE + 3] == 90);
+
+    // The relay trigger set from a pedal on a SWITCH page is the CC value it sends there.
+    reset_world();
+    pedal_rng[0] = 10;
+    pedal_rng[2] = 100;
+    chord_long();
+    to_page(PAGE_SW1);
+    pedal(0, 128);
+    pedal(0, 255);
+    CHECK(sw_thr[0] == 100 && display == 100);
+    pedal(0, 0);
+    CHECK(sw_thr[0] == 0);
+    cancel_exit();
+    reset_world();
+}
+
 static void test_pedal_cc_config(void)
 {
     uint8_t cc_a = bank_def[1] & 0x7F;
@@ -5221,7 +5389,7 @@ static void test_pedal_cc_config(void)
     tap(sw_code(PED_CC + 1));
     CHECK(pcc_open && !pcc_b && pk_mask == pk_def && display == cc_a);
     CHECK(aux[HAL_LED_EXP_1] == 1 && aux[HAL_LED_EXP_2] == 0 && aux[HAL_LED_NUMBER] == 1 &&
-          stomp_leds_are(0, digit_leds("0123456789")));
+          stomp_leds_are(0, digit_leds("0123456789")) && pcc_step == 0);
     // Digits as everywhere: 4, 4 make 44 (complete).
     tap(sw_code(4));
     CHECK(pedal_cc[0] == 4 && display == 4 && heel[0] == 0 && num_typing);
@@ -5250,6 +5418,11 @@ static void test_pedal_cc_config(void)
     tap(sw_code(4));
     CHECK(pedal_cc[1] == 44 && display == 44 && midi_len == 0);
     long_nav(CTL_KEY_UP);
+    // Then VALUE 1 and VALUE 2 (left as they are), and UP on VALUE 2 accepts.
+    CHECK(mode == MODE_CONFIG && pcc_open && pcc_step == 1 && display == 0 && cfg_saved == 0);
+    tap(CTL_KEY_UP);
+    CHECK(pcc_open && pcc_step == 2 && display == 127);
+    tap(CTL_KEY_UP);
     CHECK(mode == MODE_CONFIG && cfg_page == PAGE_EXP_B && !pcc_open && pedal_cc[1] == 44 && cfg_saved == 0);
     // Footswitch 8 shows pedal B's pickup, then toggles it.
     tap(sw_code(PED_PICKUP + 1));
@@ -6659,6 +6832,7 @@ int main(void)
     test_global_settings();
     test_read_bank();
     test_bank_write();
+    test_pedal_range();
     test_factory_reset();
     test_pc_mode();
     test_shared_state();

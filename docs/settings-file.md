@@ -32,7 +32,7 @@ The settings out of the box (footswitches 3 to 9 and banks 2 to 29 left out here
         { "follows": [], "pedalA": 0, "pedalB": 0 }
       ],
       "bankProgram": null,
-      "pedals": [ { "response": "immediate", "cc": 7 }, { "response": "immediate", "cc": 11 } ]
+      "pedals": [ { "response": "immediate", "cc": 7, "heel": 0, "toe": 127 }, { "response": "immediate", "cc": 11, "heel": 0, "toe": 127 } ]
     },
     ...
     { "bank": 30, ... }
@@ -60,7 +60,7 @@ Each bank:
 | `footswitches` | Exactly 10 entries, footswitch 1 first (see below) |
 | `relays` | Exactly 2 entries, SWITCH 1 then SWITCH 2 (see below) |
 | `bankProgram` | The program change (0 to 127) the bank sends when it is chosen with UP / DOWN (configuration page 7), or `null` for none. Optional: a file without it leaves the bank's setting as it is (files saved before it existed, or from firmware without it) |
-| `pedals` | Exactly 2 entries, expression pedal A then pedal B, each with `"response"`, `"immediate"` or `"pickup"` (see [Expression pedals](using.md#expression-pedals)), and `"cc"`, the controller number 0 to 127. Optional: a file without it leaves the pedals as they are; it is left out when the pedal did not report it (older firmware). An entry without `"cc"` leaves that pedal's controller as it is; `"cc"` is left out when the pedal did not report it |
+| `pedals` | Exactly 2 entries, expression pedal A then pedal B, each with `"response"`, `"immediate"` or `"pickup"` (see [Expression pedals](using.md#expression-pedals)), `"cc"`, the controller number 0 to 127, and `"heel"` and `"toe"`, the values it sends at the heel and at the toe, 0 to 127 (see [Expression pedals](using.md#expression-pedals)). Optional: a file without it leaves the pedals as they are; it is left out when the pedal did not report it (older firmware). An entry without `"cc"`, `"heel"` or `"toe"` leaves that setting as it is (files from before the pedal ranges have none, and their banks get the full range, 0 to 127, when the file holds every bank); each is left out when the pedal did not report it |
 
 The global settings, each optional (left out when the pedal did not report it, from older firmware; a missing one is left as it is):
 

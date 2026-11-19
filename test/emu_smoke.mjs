@@ -410,11 +410,27 @@ check("Lo, the heel, the toe: taken (heel 0, toe 255, the default range, so late
 // Footswitch 6: first the CC, then (pressed again) its editor, NUMBER lit, typed; a
 // pedal sets nothing (user's request).
 const ccA0 = fcb.state().pedalCc[0];
+// The CC editor's NUMBER, VALUE 1, VALUE 2 LEDs over two flicker periods: 1 if it flickered
+// (seen lit and dark), 2 if steady lit, 0 if dark.
+const pccLeds = () => {
+  const on = [0, 0, 0], off = [0, 0, 0];
+  for (let t = 0; t <= 2 * cfgMs("PARAM_FLASH_MS"); t += 2) {
+    ms(2);
+    [8, 9, 10].forEach((a, i) => { if (fcb.hw.aux[a]) on[i] = 1; else off[i] = 1; });
+  }
+  return on.map((x, i) => (x && off[i] ? 1 : x ? 2 : 0));
+};
 press(6, 100);
 check("footswitch 6 first shows pedal A's CC", [fcb.state().pcc & 1, fcb.hw.display, fcb.hw.aux[8], ledLevels()[5]], [0, ccA0, 0, 1]);
 press(6, 100);
-check("pressed again it opens pedal A's CC editor, NUMBER and EXP 1 lit, every digit dim",
-      [fcb.state().pcc, fcb.hw.display, fcb.hw.aux[8], fcb.hw.aux[2], ledLevels(), fcb.state().pickup & 3], [1, ccA0, 1, 1, [2, 2, 2, 2, 2, 2, 2, 2, 2, 2], pk0]);
+check("pressed again it opens pedal A's CC editor, NUMBER flickering and EXP 1 lit, every digit dim",
+      [fcb.state().pcc, fcb.hw.display, pccLeds(), fcb.hw.aux[2], ledLevels(), fcb.state().pickup & 3], [1, ccA0, [1, 0, 0], 1, [2, 2, 2, 2, 2, 2, 2, 2, 2, 2], pk0]);
+press(UP, 100);
+check("UP: step 2, VALUE 1 flickering, the heel value shown", [fcb.state().pcc, fcb.hw.display, pccLeds()], [1 | 4, fcb.state().range[0], [0, 1, 0]]);
+press(UP, 100);
+check("UP: step 3, VALUE 2 flickering, the toe value shown", [fcb.state().pcc, fcb.hw.display, pccLeds()], [1 | 8, fcb.state().range[2], [0, 0, 1]]);
+press(DOWN, 100); press(DOWN, 100);
+check("DOWN twice: back on the CC", [fcb.state().pcc, fcb.hw.display], [1, ccA0]);
 check("in the CC editor the labels are digits", [el0("mode0").textContent, el0("mode9").textContent], ["Digit 1", "Digit 0"]);
 fcb.setRaw(0, 0); wait(100); fcb.setRaw(128, 128); wait(100);
 check("moving a pedal leaves the CC alone", fcb.state().pedalCc[0], ccA0);
@@ -437,15 +453,15 @@ check("footswitch 9 shows pedal B's value, EXP 2 lit", [fcb.hw.display, pageLeds
 // Both pedals back at the toe, where the SWITCH page below expects pedal B.
 fcb.setRaw(255, 255); wait(100);
 const ccB0 = fcb.state().pedalCc[1];
-press(6, 100); press(6, 100); press(4, 100); press(4, 100); press(UP, 100);
-check("footswitch 6 (twice), then 5, 5 and a short UP [ENTER]: pedal B on CC 55", [fcb.state().pcc & 1, fcb.state().pedalCc[1], fcb.state().cfgPage, fcb.hw.display], [0, 55, 3, 55]);
+press(6, 100); press(6, 100); press(4, 100); press(4, 100); press(UP, 100); press(UP, 100); press(UP, 100);
+check("footswitch 6 (twice), then 5, 5 and three short UPs [ENTER] (past the heel and toe values): pedal B on CC 55", [fcb.state().pcc & 1, fcb.state().pedalCc[1], fcb.state().cfgPage, fcb.hw.display], [0, 55, 3, 55]);
 check("the panel's pedal B label follows", String(el0("ccB").textContent), "55");
 // Type its CC back (footswitch 10 types 0, 1-5 are codes 0-4, 6-9 codes 6-9); 6 is
 // still selected, so one press opens the editor. UP [ENTER] ends a number that could
 // go on, then closes the editor.
 press(6, 100);
 String(ccB0).split("").map(Number).forEach((d) => press(d === 0 ? 10 : d <= 5 ? d - 1 : d, 100));
-for (let n = 0; n < 2 && (fcb.state().pcc & 1); n++) press(UP, 100);
+for (let n = 0; n < 4 && (fcb.state().pcc & 1); n++) press(UP, 100);
 check("and typed back", [fcb.state().pcc & 1, fcb.state().pedalCc[1]], [0, ccB0]);
 press(UP, 100);
 wait(10);
@@ -803,8 +819,8 @@ check("the dump has footswitch 3 (note 60, 100, 20) and 4 (programs 5 / 6)",
       [1, 60, 100, 20, 2, 5, 6]);
 check("and the channel, a mode and a stomp CC", [conf.v[NP.CHANNEL], conf.v[NP.MODE], conf.v[NP.NUM + 9]], [fcb.state().midiChannel, DEF_MODE, STOMP_CC[9]]);
 const dumpMsgs = sent();
-check("the dump went out as one SysEx message (65 bytes) with the pedal's channel, and nothing else",
-      [dumpMsgs.length, dumpMsgs[0].split(" ").length, dumpMsgs[0].slice(0, 17)], [1, 65, "f0 7d 46 43 " + chHex.padStart(2, "0") + " 02"]);
+check("the dump went out as one SysEx message (69 bytes) with the pedal's channel, and nothing else",
+      [dumpMsgs.length, dumpMsgs[0].split(" ").length, dumpMsgs[0].slice(0, 17)], [1, 69, "f0 7d 46 43 " + chHex.padStart(2, "0") + " 02"]);
 fcb.confChanged(NP.NUM + 9, 99);
 fcb.confChanged(NP.TRIGGER + 2, 70);
 wait(20);
@@ -1007,8 +1023,8 @@ check("a change and Store reach the pedal", [fcb.state().msgs[1].on, rec().fs1, 
   for (let t = 0; t < 30000 && (conf.job || conf.after || conf.waiting); t += 50) waitMidi(50);
   const cfgOut = outSent.filter((m) => m[1] === 0x7D);
   check("a whole-pedal load through the interface: one write of that bank, a read of it, then of the bank in use; no bank change",
-        [cfgOut.length, cfgOut[0].slice(0, 7), cfgOut[0].length, cfgOut[0][55], cfgOut[1], cfgOut[2], fcb.state().bank, outSent.some((m) => m[5] === 3)],
-        [3, [0xF0, 0x7D, 0x46, 0x43, 0x7F, 4, there], 56, 0xF7, [0xF0, 0x7D, 0x46, 0x43, 0x7F, 1, there, 0xF7], [0xF0, 0x7D, 0x46, 0x43, 0x7F, 1, 0, 0xF7], here - 1, false]);
+        [cfgOut.length, cfgOut[0].slice(0, 7), cfgOut[0].length, cfgOut[0][59], cfgOut[1], cfgOut[2], fcb.state().bank, outSent.some((m) => m[5] === 3)],
+        [3, [0xF0, 0x7D, 0x46, 0x43, 0x7F, 4, there], 60, 0xF7, [0xF0, 0x7D, 0x46, 0x43, 0x7F, 1, there, 0xF7], [0xF0, 0x7D, 0x46, 0x43, 0x7F, 1, 0, 0xF7], here - 1, false]);
   check("and the read back confirms it", [conf.banks[there][NP.NUM + 1], /^Stored bank \d+ from the file; the pedal stayed on bank \d+\./.test(el("confStatus").textContent)],
         [conf.v[NP.NUM + 1], true]);
 }
@@ -1089,7 +1105,22 @@ fcb.setRaw(200, 128); wait(100);
 check("then every move is sent", since(m0).slice(-1), [ccA(fcb.state().sent[0])]);
 fcb.confChanged(NP.PICKUP, 0); waitMidi(100);
 check("back to immediate", fcb.state().pickup & 1, 0);
-check("the settings file keeps the pedals' response and CC", fcb.confBankFile(true).pedals, [{ response: "immediate", cc: PCC[0] }, { response: "immediate", cc: PCC[1] }]);
+check("the settings file keeps the pedals' response, CC and range", fcb.confBankFile(true).pedals,
+      [{ response: "immediate", cc: PCC[0], heel: 0, toe: 127 }, { response: "immediate", cc: PCC[1], heel: 0, toe: 127 }]);
+// The pedal range (heel and toe values): set from the panel, then the pedal sends its travel scaled.
+fcb.confChanged(NP.RANGE, 10); waitMidi(100); fcb.confChanged(NP.RANGE + 2, 100); waitMidi(100);
+check("the panel sets pedal A's range (heel A, heel B, toe A, toe B)", fcb.state().range, [10, 0, 100, 127]);
+m0 = mark();
+fcb.setRaw(0, 128); wait(100);
+fcb.setRaw(255, 128); wait(100);
+check("pedal A then sends 10 at the heel and 100 at the toe", [fcb.state().sent[0], since(m0).includes(ccA(10)), since(m0).includes(ccA(100))], [100, true, true]);
+const rgFile = fcb.confBankFile(true); rgFile.pedals[0].heel = 0; rgFile.pedals[0].toe = 127;
+fcb.confLoad(rgFile); waitMidi(600);
+check("a file's heel and toe values load", fcb.state().range, [0, 0, 127, 127]);
+el2("cfRng3").value = "64"; fire("cfRng3", "change"); waitMidi(100);
+el2("cfRng2").value = "200"; fire("cfRng2", "change"); waitMidi(100);
+check("the panel's pedal B heel and toe boxes (a value over 127 taken as 127)", [fcb.state().range, el2("cfRng2").value], [[0, 127, 127, 64], 127]);
+fcb.confChanged(NP.RANGE + 1, 0); waitMidi(100); fcb.confChanged(NP.RANGE + 3, 127); waitMidi(100);
 const pkFile = fcb.confBankFile(true); pkFile.pedals[1] = { response: "pickup" };
 fcb.confLoad(pkFile); waitMidi(600);
 check("and loading it sets it", fcb.state().pickup & 2, 2);

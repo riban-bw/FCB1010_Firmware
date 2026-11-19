@@ -156,7 +156,10 @@ uint8_t hal_rec[4];
 uint8_t hal_bank;
 static unsigned rec_id(uint8_t rec)
 {
-    return (rec < HAL_REC_BANK) ? rec + 16u * hal_bank : (rec == HAL_REC_BANK) ? 14u + 16u * hal_bank : rec + 1u;
+    // Footswitches 0-9, the bank record 14, the range record 15, each + 16 per bank; the
+    // shared records 12 and 13 (the numbers they had before the range record).
+    return (rec < HAL_REC_BANK) ? rec + 16u * hal_bank : (rec == HAL_REC_BANK) ? 14u + 16u * hal_bank :
+           (rec == HAL_REC_RANGE) ? 15u + 16u * hal_bank : rec;
 }
 uint8_t hal_rec_load(uint8_t rec) { return rec < HAL_RECORDS && hal_bank < BANK_COUNT && js_store_load(rec_id(rec), hal_rec); }
 uint8_t hal_rec_save(uint8_t rec) { return rec < HAL_RECORDS && hal_bank < BANK_COUNT && js_store_save(rec_id(rec), hal_rec); }

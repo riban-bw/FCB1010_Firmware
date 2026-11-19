@@ -244,10 +244,10 @@ static void fill(uint8_t rec, uint8_t bank)
     hal_rec[2] = (uint8_t)((rec * 29 + bank * 5 + 1) & 0x7F);
     hal_rec[3] = (uint8_t)((rec * 31 + bank * 11 + 2) & 0x7F);
 
-    if (rec >= HAL_REC_BANK)
+    if (rec >= HAL_REC_BANK && rec != HAL_REC_RANGE)
     {
         // The bank record and the shared ones hold full bytes (the bank record's bit 7s,
-        // the calibration).
+        // the calibration); the range record 7-bit values.
         hal_rec[1] |= 0x80;
         hal_rec[3] |= 0x80;
     }
@@ -265,12 +265,18 @@ static int matches(uint8_t rec, uint8_t bank)
 }
 
 // Address of a per-bank record as the layout describes it: footswitch sw at 0x7AE in bank
-// 1, 50 bytes lower per bank; the bank record (sw 10) at 0x0D3, 5 lower per bank.
+// 1, 50 bytes lower per bank; the bank record (sw 10) at 0x0D3 and the range record at
+// 0x1FF, each 5 lower per bank.
 static unsigned fs_addr(int bank, int sw)
 {
     if (sw == HAL_REC_BANK)
     {
         return (unsigned)(0x0D3 - 5 * bank);
+    }
+
+    if (sw == HAL_REC_RANGE)
+    {
+        return (unsigned)(0x1FF - 5 * bank);
     }
 
     return (unsigned)(0x7E0 - 50 * (bank + 1) + 5 * sw);
@@ -358,6 +364,19 @@ int main(void)
     CHECK(ee[0x7F0] == 0xC1 && ee[0x7F8] == 0xC2);
     fill(HAL_REC_BANK, 0);
     CHECK(ee[0x0D3] == hal_rec[0] && ee[0x0D7] == (hal_rec[0] ^ hal_rec[1] ^ hal_rec[2] ^ hal_rec[3] ^ 0x4B));
+    // The range records in the room of banks 31-33's footswitch records: bank 1 at 0x1FF,
+    // bank 30 at 0x16E, never reaching bank 30's footswitch records (from 0x204).
+    fill(HAL_REC_RANGE, 0);
+    CHECK(ee[0x1FF] == hal_rec[0] && ee[0x203] == (hal_rec[0] ^ hal_rec[1] ^ hal_rec[2] ^ hal_rec[3] ^ 0x63));
+    CHECK(fs_addr(29, HAL_REC_RANGE) == 0x16E && fs_addr(29, 0) == 0x204);
+    // A range byte with bit 7 set is invalid, even with its checksum right.
+    CHECK(matches(HAL_REC_RANGE, 0));
+    ee[0x200] ^= 0x80;
+    ee[0x203] ^= 0x80;
+    CHECK(!hal_rec_load(HAL_REC_RANGE));
+    ee[0x200] ^= 0x80;
+    ee[0x203] ^= 0x80;
+    CHECK(matches(HAL_REC_RANGE, 0));
     ok = 1;
 
     for (i = 0x7E0; i < 0x7F0; i++)
@@ -371,9 +390,6 @@ int main(void)
     }
 
     CHECK(ok);
-#if BANK_COUNT == 36
-    CHECK(fs_addr(35, 0) == 0x0D8 && fs_addr(35, HAL_REC_BANK) == 0x024);
-#endif
 
     // A record crossing a page boundary takes two write cycles; one within a page takes one.
     erase();

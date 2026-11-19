@@ -23,7 +23,7 @@ Everything uses a single MIDI channel (channel 1 by default but can be changed i
 | MIDI FUNCTION | Flickers when MIDI is sent | Marks page 1 (footswitches) and the footswitch editor |
 | MIDI CHAN | Flickers when MIDI arrives | Marks page 2 (MIDI channel) |
 | EXP 1, EXP 2 | Flashing while that pedal waits to pick up (faster the closer it is), otherwise dark | Mark page 3 (EXP 1, pedal A) and page 4 (EXP 2, pedal B). Pages 5 and 6: lit while the relay follows that pedal, dim while it does not |
-| SELECT, NUMBER, VALUE 1, VALUE 2 | Dark | Page 1 and the footswitch editor: the setting shown (type, number, ON value, OFF value), flickering in the editor. NUMBER also lights in the pedal CC editor (pages 3 and 4); SELECT marks page 8 (misc) |
+| SELECT, NUMBER, VALUE 1, VALUE 2 | Dark | Page 1 and the footswitch editor: the setting shown (type, number, ON value, OFF value), flickering in the editor. NUMBER, VALUE 1 and VALUE 2 also flicker in the pedal CC editor (pages 3 and 4: the CC, the heel value and the toe value); SELECT marks page 8 (misc) |
 | SWITCH (between SWITCH 2 and SELECT) | Dark | Page 1 and the footswitch editor: the pedal mode shown, flickering in the editor; and page 9's lamp test |
 | CONFIG | Dark | Lit; flashes while a change is not saved |
 
@@ -75,7 +75,7 @@ Configuration mode edits the bank in use, and saving stores that bank (with the 
 
 ## Expression pedals
 
-Each bank sets the controller (CC) number each expression pedal sends, and how it responds; both are set on configuration pages 3 (pedal A) and 4 (pedal B), with the pedal calibration (see [Configuration](configuration.md#expression-pedal-pages)). Each pedal works in one of two ways:
+Each bank sets the controller (CC) number each expression pedal sends, its range and how it responds; all are set on configuration pages 3 (pedal A) and 4 (pedal B), with the pedal calibration (see [Configuration](configuration.md#expression-pedal-pages)). The range is the value sent at the heel and the value sent at the toe, 0 and 127 unless you change them; the pedal's travel is spread evenly between them, so with 10 and 100 the heel sends 10 and the toe 100, and with the larger value at the heel the pedal works the other way round. Each pedal works in one of two ways:
 
 - **Immediate** (the default): every move is sent at once.
 - **Pickup**: when its controller's value has changed somewhere else, the pedal sends nothing until it reaches that value. This avoids a jump in, say, volume when your DAW or a footswitch has moved it, or when you change to a bank where the pedal sends another controller. The value changes elsewhere when a footswitch sends that controller or your DAW sends it to MIDI IN; at power-on it counts as 0. The pedal picks up when it comes within 2 steps of that value, or passes it, and then sends as usual.

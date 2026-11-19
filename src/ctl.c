@@ -422,9 +422,9 @@ static BIT_T          sx_reply;
 #define SX_CMD_GET    0x01      // <bank: 0 the bank in use, or 1 to BANK_COUNT>: a dump
 #define SX_CMD_DUMP   0x02      // the dump (sent only)
 #define SX_CMD_SET    0x03      // <parameter> <value> pairs
-#define SX_CMD_WRITE  0x04      // <bank 1 to BANK_COUNT> and its 48 bytes as in a dump: stored
-#define SX_WRITE_LEN  49        // the bank and its bytes
-#define SX_DUMP_LEN   65
+#define SX_CMD_WRITE  0x04      // <bank 1 to BANK_COUNT> and its 52 bytes as in a dump: stored
+#define SX_WRITE_LEN  53        // the bank and its bytes
+#define SX_DUMP_LEN   69
 // Misc settings (shared by every bank, in the channel record's byte 3: bit 0 the
 // metronome, bit 1 running status, bit 2 active sensing, bit 7 set).
 #define MISC_VALID    0x80
@@ -467,7 +467,7 @@ static BIT_T          sx_dump_due;
 static IDATA uint8_t  sx_req;
 // A set message's parameter and value pairs, kept until its F7 so a message cut short or
 // too long changes nothing (user's request), and the count of bytes in it.
-#define SX_SET_MAX    204       // 2 * NP_COUNT (checked below)
+#define SX_SET_MAX    212       // 2 * NP_COUNT (checked below)
 static XDATA uint8_t  sx_buf[SX_SET_MAX];
 static IDATA uint8_t  sx_n;
 static XDATA uint8_t  sx_j;
@@ -520,7 +520,8 @@ static IDATA uint8_t  met_sign;
 #define NP_METRO        99      // MIDI clock display (visual metronome) 0 / 1
 #define NP_RUNSTAT      100     // running status on MIDI OUT 0 / 1
 #define NP_ASENSE       101     // active sensing on MIDI OUT 0 / 1
-#define NP_COUNT        102
+#define NP_RANGE        102     // + 0 / 1: pedal A / B's CC value at the heel (VALUE 1); + 2 / 3 at the toe (VALUE 2)
+#define NP_COUNT        106
 #if SX_SET_MAX != 2 * NP_COUNT
 #error "SX_SET_MAX must be 2 * NP_COUNT"
 #endif
@@ -639,8 +640,19 @@ static IDATA uint8_t  ref_raw[2];
 // ref_raw is the run-mode pedal reference (set again from the first reading after
 // configuration mode).
 
-// The expression pedals' CCs (pedal A, B), set per bank (pages 3 / 4, parameters 96 / 97).
-static IDATA uint8_t  pedal_cc[2];
+// The expression pedals' settings, per bank: their CCs (pedal A, B; pages 3 / 4,
+// parameters 96 / 97), then their ranges (user's request): the CC values at the heel
+// (VALUE 1; A, B) and at the toe (VALUE 2; A, B), 0 and 127 by default. The pedal's
+// 0-127 is scaled between them (pedal_map), either way round. Step s of the CC editor is
+// ped_set[s * 2 + pedal]; the ranges are in the range record's (and parameters 102-105's)
+// order.
+static IDATA uint8_t  ped_set[6];
+#define pedal_cc   ped_set
+#define pedal_rng  (ped_set + 2)
+// The CC editor's step (pages 3 / 4): 0 the CC (NUMBER), 1 VALUE 1, 2 VALUE 2. It is
+// edit_param - EP_NUM (edit_param shares ped_sel's byte, set back to PED_CC when the
+// editor closes), so the footswitch editor's flicker and LED code serve both.
+#define pcc_step  ((uint8_t)(edit_param - EP_NUM))
 
 // Expression pedal pickup (user's request). pk_mask: bit 0 pedal A, bit 1 pedal B in
 // pickup mode (per bank); the others send at once. A pickup
@@ -662,6 +674,8 @@ CTL_NEAR uint8_t  pk_t;
 CTL_NEAR uint8_t  pk_p;
 CTL_NEAR uint8_t  pk_act;
 static BIT_T          pk_wait;
+// The reading is at an end of the pedal's travel (ctl_pedal_sample).
+static BIT_T          pk_end;
 CTL_NEAR uint8_t  pk_i;
 #define PK_MOVED        0
 #define PK_KNOWN        1
@@ -809,6 +823,13 @@ static void rec_pack(void)
         hal_rec[2] = (uint8_t)(sw_thr[2] | ((v << 1) & 0x80));
         hal_rec[3] = (uint8_t)(sw_thr[3] | (v & 0x80));
     }
+    else if (rec_n == HAL_REC_RANGE)
+    {
+        for (q = 0; q < 4; q++)
+        {
+            hal_rec[q] = pedal_rng[q];
+        }
+    }
     else if (rec_n == HAL_REC_CAL)
     {
         hal_rec[0] = heel[0];
@@ -890,6 +911,12 @@ static void rec_read(void)
                 hal_rec[q] = (uint8_t)((uint8_t)(bank_def[2] >> (4 + q)) << 7);
             }
         }
+        else if (rec_n == HAL_REC_RANGE)
+        {
+            // The full range: 0 at the heel, 127 at the toe.
+            hal_rec[2] = 127;
+            hal_rec[3] = 127;
+        }
         else if (rec_n == HAL_REC_CAL)
         {
             hal_rec[1] = 255;
@@ -955,6 +982,13 @@ static void rec_unpack(void)
         sw_thr[1] = (uint8_t)(hal_rec[1] & 0x7F);
         sw_thr[2] = (uint8_t)(hal_rec[2] & 0x7F);
         sw_thr[3] = (uint8_t)(hal_rec[3] & 0x7F);
+    }
+    else if (rec_n == HAL_REC_RANGE)
+    {
+        pedal_rng[0] = hal_rec[0];
+        pedal_rng[1] = hal_rec[1];
+        pedal_rng[2] = hal_rec[2];
+        pedal_rng[3] = hal_rec[3];
     }
     else if (rec_n == HAL_REC_CAL)
     {
@@ -1843,6 +1877,13 @@ static uint16_t num_avail(void)
     return (num_typing || !num_lo1) ? (uint16_t)(m | (1u << (STOMP_COUNT - 1))) : m;
 }
 
+// The CC editor's setting at its step: the CC, or VALUE 1 / VALUE 2 of the page's pedal. A
+// leaf.
+static IDATA uint8_t *pcc_at(void)
+{
+    return &ped_set[(uint8_t)((uint8_t)(pcc_step << 1) + pcc_b)];
+}
+
 // The setting the number goes into, and storing a number there (page 7: bank_pc, the
 // program + 1). Leaves.
 static uint8_t num_raw(void)
@@ -1854,7 +1895,7 @@ static uint8_t num_raw(void)
 
     if (pcc_open)
     {
-        return pedal_cc[pcc_b];
+        return *pcc_at();
     }
 
     if (edit_open)
@@ -1876,7 +1917,7 @@ static void num_put(uint8_t v)
 
     if (pcc_open)
     {
-        pedal_cc[pcc_b] = v;
+        *pcc_at() = v;
     }
     else if (edit_open)
     {
@@ -2079,7 +2120,7 @@ static void config_show(void)
         return;
     }
 
-    // Pages 3 and 4, EXP A / EXP B: the page's EXP LED (NUMBER too in the CC editor),
+    // Pages 3 and 4, EXP A / EXP B: the page's EXP LED (its step's in the CC editor),
     // the footswitch last pressed lit and the page's other two dim, and its setting:
     // "P.U." pickup or "Ab" immediate (footswitch 8), the CC (6), or the calibration (9):
     // the pedal's value, a flashing Lo / Hi, or Er. The CC editor: the CC, the digits
@@ -2088,12 +2129,18 @@ static void config_show(void)
     {
         led_aux = bit16((uint8_t)(HAL_LED_EXP_1 + pcc_b));
 
+        // The CC editor: its step's LED (NUMBER, VALUE 1, VALUE 2) flickers (par_on, as in
+        // the footswitch editor; user's request).
         if (pcc_open)
         {
-            led_aux |= LED_BIT(HAL_LED_NUMBER);
+            if (par_on)
+            {
+                led_aux |= bit16(PARAM_LED(edit_param));
+            }
+
             led_dim  = num_avail();
             show_leds();
-            hal_display(pedal_cc[pcc_b]);
+            hal_display(*pcc_at());
             return;
         }
 
@@ -2361,6 +2408,29 @@ static void config_step(uint8_t code)
     }
 }
 
+// The CC value pedal ch sends at position v (0-127): v scaled from the pedal's VALUE 1
+// (heel) to its VALUE 2 (toe), rounded; either may be the larger. A leaf.
+static uint8_t pedal_map(uint8_t ch, uint8_t v)
+{
+    uint8_t  lo = ped_set[(uint8_t)(ch + 2)];
+    uint8_t  hi = ped_set[(uint8_t)(ch + 4)];
+    uint8_t  d  = (uint8_t)(hi - lo);
+    uint16_t x;
+
+    if (hi < lo)
+    {
+        d = (uint8_t)(lo - hi);
+    }
+
+    // d * v / 127, rounded: (x + x / 128 + 1) / 128 is x / 127 for every x it can be (no
+    // division call).
+    x = (uint16_t)(d * v);   // two bytes: SDCC's MUL AB
+    x += 63;
+    d = (uint8_t)((uint16_t)(x + (x >> 7) + 1) >> 7);
+
+    return (uint8_t)((hi < lo) ? lo - d : lo + d);
+}
+
 // A pedal reading in configuration mode: 1 once its CC value has moved SW_PEDAL_STEP from
 // the last one (or reached 0 or 127), and the new value is then in sent[ch]. The first
 // reading after resync_pedals() only records the value, so a pedal sets nothing until it
@@ -2397,12 +2467,15 @@ static void sw_pedal(uint8_t ch)
         return;
     }
 
-    sw_thr[(uint8_t)((cfg_page - PAGE_SW1) * 2 + ch)] = sent[ch];
+    // The trigger is the CC value the pedal sends there (its range), and the heel turns it
+    // off. (pk_t, the run-mode pickup's temporary, holds it.)
+    pk_t = (uint8_t)(sent[ch] ? pedal_map(ch, sent[ch]) : 0);
+    sw_thr[(uint8_t)((cfg_page - PAGE_SW1) * 2 + ch)] = pk_t;
     config_changed();
     sw_named = 0;
     hal_display_dots(0);
-    hal_display(sent[ch]);
-    hal_aux_led((uint8_t)(HAL_LED_EXP_1 + ch), (uint8_t)(sent[ch] ? 1 : HAL_LED_DIM));
+    hal_display(pk_t);
+    hal_aux_led((uint8_t)(HAL_LED_EXP_1 + ch), (uint8_t)(pk_t ? 1 : HAL_LED_DIM));
 }
 
 // Footswitch pressed on the modes page: a switch that is not selected is selected and its
@@ -2574,29 +2647,71 @@ static void edit_press(uint8_t index)
     edit_show();
 }
 
-// An EXP page's pedal CC editor (footswitch 6, pressed twice): footswitches type the CC
-// (0-127), a short UP [ENTER] accepts and a short DOWN [ESCAPE] puts the old CC back,
-// both back to the pedal page (while a number can take more digits, they act on it
-// first: nav_step).
+// An EXP page's pedal CC editor (footswitch 6, pressed twice), in three steps like the
+// footswitch editor (user's request): the CC (NUMBER), then the CC value at the heel
+// (VALUE 1) and at the toe (VALUE 2), each 0-127 typed with the footswitches. A short UP
+// [ENTER] goes to the next step and accepts on the last; a short DOWN [ESCAPE] goes back
+// and, on the first, puts all three back; both then return to the pedal page (while a
+// number can take more digits, they act on it first: nav_step).
+static void pcc_enter(void)
+{
+    num_begin(127, 0);
+    par_on    = 1;
+    par_ticks = 0;
+    config_show();
+}
+
 static void pcc_begin(void)
 {
-    pcc_open    = 1;
-    edit_bak[0] = pedal_cc[pcc_b];
-    num_begin(127, 0);
-    config_show();
+    pcc_open = 1;
+
+    for (edit_param = EP_NUM; edit_param <= EP_OFF; edit_param++)
+    {
+        edit_bak[pcc_step] = *pcc_at();
+    }
+
+    edit_param = EP_NUM;
+    pcc_enter();
 }
 
 static void pcc_end(uint8_t accept)
 {
     if (!accept)
     {
-        pedal_cc[pcc_b] = edit_bak[0];
-        cfg_check_due   = 1;
+        for (edit_param = EP_NUM; edit_param <= EP_OFF; edit_param++)
+        {
+            *pcc_at() = edit_bak[pcc_step];
+        }
+
+        cfg_check_due = 1;
     }
 
     pcc_open   = 0;
+    ped_sel    = PED_CC;
     num_typing = 0;
     config_show();
+}
+
+// UP / DOWN in the CC editor (no number being typed).
+static void pcc_nav(uint8_t code)
+{
+    if (code == CTL_KEY_UP)
+    {
+        if (edit_param < EP_OFF)
+        {
+            edit_param++;
+            pcc_enter();
+            return;
+        }
+    }
+    else if (edit_param > EP_NUM)
+    {
+        edit_param--;
+        pcc_enter();
+        return;
+    }
+
+    pcc_end((uint8_t)(code == CTL_KEY_UP));
 }
 
 // A footswitch let go on an EXP page (the CC editor closed), the same on both pages
@@ -2946,7 +3061,7 @@ static void nav_step(uint8_t code)
     }
     else if (pcc_open)
     {
-        pcc_end((uint8_t)(code == CTL_KEY_UP));
+        pcc_nav(code);
     }
     else if (cal_armed)
     {
@@ -3958,13 +4073,13 @@ static void sx_write(void)
     sv_bank  = hal_bank;
     hal_bank = (uint8_t)(sx_buf[0] - 1);
     // The packed bytes (y_get's form): the program change (0 none, else program + 1), each
-    // pedal's CC with its pickup bit in bit 7.
+    // pedal's CC with its pickup bit in bit 7 (bytes 45-48).
     v = sx_buf[45];
     rec_y[0] = (uint8_t)((v & 4) ? sx_buf[46] + 1 : 0);
     rec_y[1] = (uint8_t)(sx_buf[47] | (uint8_t)(v << 7));
     rec_y[2] = (uint8_t)(sx_buf[48] | (uint8_t)((uint8_t)(v << 6) & 0x80));
 
-    for (rec_n = 0; rec_n <= HAL_REC_BANK; rec_n++)
+    for (rec_n = 0; rec_n <= HAL_REC_RANGE; rec_n++)
     {
         // rec_pack puts the record's piece of the packed bytes (from rec_y, set above) in
         // bit 7 of each byte and bit 6 of a footswitch's type byte; the rest is the bank's
@@ -3974,7 +4089,9 @@ static void sx_write(void)
         for (k = 0; k < 4; k++)
         {
             v = (uint8_t)((k == 0 && rec_n < STOMP_COUNT) ? 0xC0 : 0x80);
-            hal_rec[k] = (uint8_t)((hal_rec[k] & v) | (sx_buf[(uint8_t)((rec_n << 2) + k + 1)] & (uint8_t)~v));
+            // Records 0-10 from byte 1, the range record after the four packed bytes.
+            hal_rec[k] = (uint8_t)((hal_rec[k] & v) |
+                                   (sx_buf[(uint8_t)(((rec_n == HAL_REC_RANGE) ? (rec_n << 2) + 4 : rec_n << 2) + k + 1)] & (uint8_t)~v));
         }
 
         hal_rec_save(rec_n);
@@ -4087,6 +4204,20 @@ static void param_set(void)
     {
         led_level = rx_data1;
         led_apply();
+        return;
+    }
+
+    // A pedal's range (VALUE 1, VALUE 2): the pedal's value then counts as where it is.
+    if (sx_param >= NP_RANGE)
+    {
+        g = (uint8_t)(sx_param - NP_RANGE);
+
+        if (pedal_rng[g] != rx_data1)
+        {
+            pedal_rng[g] = rx_data1;
+            pedals_rebase();
+        }
+
         return;
     }
 
@@ -4481,7 +4612,11 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
         return;
     }
 
-    v = ctl_scale(raw, heel[channel], toe[channel]);
+    // The pedal's position 0-127, then the CC value it stands for (its range). The ends of
+    // the travel are always let through (below), whatever value they stand for.
+    v      = ctl_scale(raw, heel[channel], toe[channel]);
+    pk_end = (v == 0 || v == 127) ? 1 : 0;
+    v      = pedal_map(channel, v);
 
     // A pickup pedal not yet picked up (pk_wait) sends nothing until it reaches its CC's
     // last known value or passes it; its moves are measured from pk_pos. Any other pedal's
@@ -4492,7 +4627,7 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
     // Ignore small wobble, but always let the pedal reach 0 and 127. The first reading
     // (after power-up or configuration mode) only records the position.
     if (pk_p != NO_VALUE &&
-        (v == pk_p || (span_of(raw, ref_raw[channel]) < PEDAL_HYST && v != 0 && v != 127)))
+        (v == pk_p || (span_of(raw, ref_raw[channel]) < PEDAL_HYST && !pk_end)))
     {
         return;
     }
@@ -4624,8 +4759,30 @@ static void sx_dump(void)
     hal_midi_tx((uint8_t)(hal_rec[3] & 7));
     y_get();
 
-    for (rec_n = 0; rec_n <= HAL_REC_BANK; rec_n++)
+    // The eleven records, the packed pedal bytes (complete once they are in), then the
+    // range record.
+    for (rec_n = 0; rec_n <= HAL_REC_RANGE; rec_n++)
     {
+        if (rec_n == HAL_REC_RANGE)
+        {
+            k = (uint8_t)(sx_y[0] ? 4 : 0);
+
+            if (sx_y[1] & 0x80)
+            {
+                k |= 1;
+            }
+
+            if (sx_y[2] & 0x80)
+            {
+                k |= 2;
+            }
+
+            hal_midi_tx(k);
+            hal_midi_tx((uint8_t)((uint8_t)(sx_y[0] - 1) & 0x7F));
+            hal_midi_tx((uint8_t)(sx_y[1] & 0x7F));
+            hal_midi_tx((uint8_t)(sx_y[2] & 0x7F));
+        }
+
         if (sx_req == sv_bank)
         {
             rec_pack();
@@ -4650,22 +4807,6 @@ static void sx_dump(void)
         }
     }
 
-    k = (uint8_t)(sx_y[0] ? 4 : 0);
-
-    if (sx_y[1] & 0x80)
-    {
-        k |= 1;
-    }
-
-    if (sx_y[2] & 0x80)
-    {
-        k |= 2;
-    }
-
-    hal_midi_tx(k);
-    hal_midi_tx((uint8_t)((uint8_t)(sx_y[0] - 1) & 0x7F));
-    hal_midi_tx((uint8_t)(sx_y[1] & 0x7F));
-    hal_midi_tx((uint8_t)(sx_y[2] & 0x7F));
     sx_tx_end();
 }
 
@@ -4905,8 +5046,8 @@ void ctl_tick(void)
             misc_tick();
         }
 
-        // The editor: the edited setting's panel LED flickers (not page 1's cycle).
-        if (edit_open && !save_prompt && ++par_ticks >= PAR_TICKS)
+        // The editors: the edited setting's panel LED flickers (not page 1's cycle).
+        if ((edit_open || pcc_open) && !save_prompt && ++par_ticks >= PAR_TICKS)
         {
             par_ticks = 0;
             par_on    = !par_on;
@@ -5069,13 +5210,17 @@ uint8_t ctl_inspect(uint8_t what)
     case CTL_INSPECT_PICKUP:        return (uint8_t)(pk_mask | (pk_waiting(0) << 2) | (pk_waiting(1) << 3));
     case CTL_INSPECT_PEDAL_CC:      return pedal_cc[0];
     case CTL_INSPECT_PEDAL_CC + 1:  return pedal_cc[1];
-    case CTL_INSPECT_PCC:           return (uint8_t)(pcc_open | (pcc_b << 1));
+    case CTL_INSPECT_PCC:           return (uint8_t)(pcc_b << 1 | (pcc_open ? 1 | (pcc_step << 2) : 0));
     case CTL_INSPECT_PED_SEL:       return ped_sel;
     case CTL_INSPECT_SAVE:          return save_prompt ? save_bank : 0;
     case CTL_INSPECT_CAL_ARMED:     return cal_armed;
     case CTL_INSPECT_NUM:           return (uint8_t)(num_typing | (num_lo1 << 1));
     case CTL_INSPECT_SHOWN:         return cyc_elem;
     case CTL_INSPECT_LEVEL:         return led_level;
+    case CTL_INSPECT_RANGE:         return pedal_rng[0];
+    case CTL_INSPECT_RANGE + 1:     return pedal_rng[1];
+    case CTL_INSPECT_RANGE + 2:     return pedal_rng[2];
+    case CTL_INSPECT_RANGE + 3:     return pedal_rng[3];
     case CTL_INSPECT_MISC:          return (uint8_t)(opt_misc | (met_sign << 3));
     default:                        return 0;
     }

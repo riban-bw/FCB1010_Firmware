@@ -83,7 +83,8 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 // Pedal pickup: bits 0-1 pedals A / B in pickup mode, bits 2-3 waiting (not picked up).
 #define CTL_INSPECT_PICKUP         70
 // Pedal A's and B's CCs (71, 72); the pedal page: bit 0 its CC editor open, bit 1 pedal
-// B shown (73), and the footswitch last pressed there (74, 0-9).
+// B shown, bits 2-3 its step: 0 CC, 1 VALUE 1, 2 VALUE 2 (73), and the footswitch last
+// pressed there (74, 0-9).
 #define CTL_INSPECT_PEDAL_CC       71
 #define CTL_INSPECT_PCC            73
 #define CTL_INSPECT_PED_SEL        74
@@ -101,6 +102,8 @@ uint8_t ctl_scale(uint8_t raw, uint8_t heel, uint8_t toe);
 #define CTL_INSPECT_MISC           79
 // The saved LED brightness, 0-127.
 #define CTL_INSPECT_LEVEL          80
+// The pedal ranges: pedal A's heel and toe values, then pedal B's (81-84).
+#define CTL_INSPECT_RANGE          81
 
 uint8_t ctl_inspect(uint8_t what);
 #endif
