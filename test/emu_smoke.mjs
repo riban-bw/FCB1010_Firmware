@@ -243,8 +243,8 @@ fcb.midiIn([0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7]); wait(20);
   const vn = ["MAJOR", "MINOR"].map((k) => Number(readFileSync(new URL("../src/version.h", import.meta.url), "utf8").match(new RegExp("#define FW_VERSION_" + k + " (\\d+)"))[1]));
   const reply = sent();
   check("an Identity Request (device 7F) gets the identity reply: non-commercial ID 7D, \"FC10\", the version",
-        [reply.length, (reply[0] || "").split(" ").slice(0, 12).join(" ")],
-        [1, "f0 7e 00 06 02 7d 46 43 31 30 " + hex(vn[0] & 127) + " " + hex(vn[1] & 127)]);
+        [reply.length, (reply[0] || "").split(" ").slice(0, 15).join(" ")],
+        [1, "f0 7e 00 06 02 7d 46 43 31 30 00 00 " + hex(vn[0] & 127) + " " + hex(vn[1] & 127) + " f7"]);
   check("the log names it", fcb.hw.logLines.some((l) => /^SysEx identity: FC10, version /.test(l.text)), true);
 }
 fcb.midiIn([0xF0, 0x7E, 0x05, 0x06, 0x01, 0xF7]); wait(20);

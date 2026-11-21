@@ -6063,8 +6063,8 @@ static void midi_in_bytes(const uint8_t *b, int n)
 }
 
 // The reply to an Identity Request at midi_log[at]: F0 7E <channel - 1> 06 02, the
-// non-commercial ID 7D, family "FC", member "10", the version (major, minor, build, bits
-// 0-6) and their bit 7s, F7.
+// non-commercial ID 7D, family "FC", member "10", the version (00 00, then major and
+// minor, bits 0-6), F7.
 static int identity_reply_at(int at, uint8_t ch)
 {
     static const uint8_t head[10] = { 0xF0, 0x7E, 0, 0x06, 0x02, 0x7D, 0x46, 0x43, 0x31, 0x30 };
@@ -6083,15 +6083,8 @@ static int identity_reply_at(int at, uint8_t ch)
         }
     }
 
-    for (i = 0; i < 3; i++)
-    {
-        if (midi_log[at + 10 + i] != (fw_version[i] & 0x7F))
-        {
-            return 0;
-        }
-    }
-
-    return midi_log[at + 13] == ((fw_version[0] >> 7) | ((fw_version[1] >> 7) << 1) | ((fw_version[2] >> 7) << 2)) &&
+    return midi_log[at + 10] == 0 && midi_log[at + 11] == 0 &&
+           midi_log[at + 12] == (fw_version[0] & 0x7F) && midi_log[at + 13] == (fw_version[1] & 0x7F) &&
            midi_log[at + 14] == 0xF7;
 }
 

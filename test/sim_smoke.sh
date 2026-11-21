@@ -183,15 +183,14 @@ quit
 EOF
 run_sim "$TMP/s3.txt" "$TMP/s3.out"
 check "no MIDI output while idle" "$(hex_of "$TMP/s3.out")" ""
-# The identity at power-on: F0 7E <channel - 1> 06 02 7D "FC10", the version (bits 0-6),
-# their bit 7s, F7.
+# The identity at power-on: F0 7E <channel - 1> 06 02 7D "FC10", 00 00, the major and
+# minor (bits 0-6), F7.
 ID_EXPECT=$(python3 -I -c '
 import re
-t = open("src/version.h").read() + open("src/version_build.inc").read()
-v = [int(re.search(r"#define FW_VERSION_" + k + r" (0x[0-9A-Fa-f]+|[0-9]+)", t).group(1), 0) for k in ("MAJOR", "MINOR", "BUILD")]
+t = open("src/version.h").read()
+v = [int(re.search(r"#define FW_VERSION_" + k + r" (0x[0-9A-Fa-f]+|[0-9]+)", t).group(1), 0) for k in ("MAJOR", "MINOR")]
 c = int(re.search(r"#define MIDI_CHANNEL (\d+)", open("src/config.h").read()).group(1))
-b = [0xF0, 0x7E, c - 1, 0x06, 0x02, 0x7D, 0x46, 0x43, 0x31, 0x30] + [x & 0x7F for x in v]
-b += [sum(((x >> 7) & 1) << i for i, x in enumerate(v)), 0xF7]
+b = [0xF0, 0x7E, c - 1, 0x06, 0x02, 0x7D, 0x46, 0x43, 0x31, 0x30, 0, 0] + [x & 0x7F for x in v] + [0xF7]
 print("".join("%02x" % x for x in b))')
 check "the SysEx identity sent once at power-on" "$(hex_of "$TMP/s3.out.id")" "$ID_EXPECT"
 

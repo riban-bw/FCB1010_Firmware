@@ -37,7 +37,7 @@ F0 7E <device> 06 01 F7
 `<device>` is 7F (all devices) or the pedal's MIDI channel minus 1 (00 for channel 1); a request for any other device is ignored. It is answered in run mode and in configuration mode, as soon as MIDI OUT has room for the reply. The pedal also sends the reply once at power-on:
 
 ```
-F0 7E <channel - 1> 06 02 7D 46 43 31 30 <major> <minor> <build> <high bits> F7
+F0 7E <channel - 1> 06 02 7D 46 43 31 30 00 00 <major> <minor> F7
 ```
 
 | Bytes | Meaning |
@@ -45,8 +45,8 @@ F0 7E <channel - 1> 06 02 7D 46 43 31 30 <major> <minor> <build> <high bits> F7
 | `7D` | Manufacturer ID (`SYSEX_ID` in `config.h`): 7D is the ID set aside for non-commercial use; see [The SysEx ID](#the-sysex-id) |
 | `46 43` | Device family: "FC" in ASCII |
 | `31 30` | Family member: "10" in ASCII |
-| `<major> <minor> <build>` | The firmware version (as page 8 shows it), bits 0 to 6 of each |
-| `<high bits>` | Bit 7 of the major (bit 0), minor (bit 1) and build (bit 2) numbers, for versions and builds of 128 and up |
+| `00 00` | The first two of the four version bytes, unused |
+| `<major> <minor>` | The firmware version's major and minor numbers (as page 8 shows them), bits 0 to 6 of each; the build number is not sent (it is in the [settings dump](#configuration-over-midi)) |
 
 Any other SysEx message, except the pedal's own settings messages (below), is ignored.
 
@@ -73,7 +73,7 @@ The dump's data bytes, after the command byte:
 |---|---|
 | 1 | The bank described, 1 to the number of banks |
 | 1 | MIDI channel, 1 to 16 |
-| 3 + 1 | Firmware major, minor and build (bits 0 to 6), then a byte with their bit 7s (bit 0 major, 1 minor, 2 build), as in the identity |
+| 3 + 1 | Firmware major, minor and build (bits 0 to 6), then a byte with their bit 7s (bit 0 major, 1 minor, 2 build) |
 | 1 | The bank in use |
 | 1 | The number of banks |
 | 1 | LED and display brightness, 0 to 127 |

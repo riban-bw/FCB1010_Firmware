@@ -4357,12 +4357,13 @@ static const CODE uint8_t sx_request[5] = { 0, 0x7E, 0x7F, 0x06, 0x01 };
 // The heads of the SysEx messages sent, each ended by F7 (not sent; 7F is sent as the
 // channel - 1): a settings dump's from SX_OUT_DUMP, the Identity Reply's from SX_OUT_ID
 // (Universal Non-Realtime, General Information: SYSEX_ID, family "FC" (46 43), member "10"
-// (31 30)). The parser matches a configuration message's 46 43 and device (7F all, or the
+// (31 30), then the version's first two bytes, unused, 00 00). The parser matches a configuration message's 46 43 and device (7F all, or the
 // channel - 1, checked apart) against bytes 2-4 (sx_pos SX_CFG to SX_CFG + 2).
 #define SX_OUT_DUMP     0
 #define SX_OUT_ID       7
-static const CODE uint8_t sx_out[18] = { 0xF0, SYSEX_ID, 0x46, 0x43, 0x7F, SX_CMD_DUMP, 0xF7,
-                                         0xF0, 0x7E, 0x7F, 0x06, 0x02, SYSEX_ID, 0x46, 0x43, 0x31, 0x30, 0xF7 };
+static const CODE uint8_t sx_out[20] = { 0xF0, SYSEX_ID, 0x46, 0x43, 0x7F, SX_CMD_DUMP, 0xF7,
+                                         0xF0, 0x7E, 0x7F, 0x06, 0x02, SYSEX_ID, 0x46, 0x43, 0x31, 0x30,
+                                         0x00, 0x00, 0xF7 };
 
 // The visual metronome's sign: "-" for the first half of each beat (12 of its 24
 // clocks), "+" instead on beat 1 once the phase is known (user's request); nothing when it
@@ -4707,8 +4708,8 @@ void ctl_pedal_sample(uint8_t channel, uint8_t raw)
 
 // The Identity Reply (user's request): F0 7E <device: channel - 1> 06 02, manufacturer
 // 7D (non-commercial: this firmware has no manufacturer ID), family "FC" (46 43), member
-// "10" (31 30), then the version: major, minor and build (bits 0-6 each) and a byte with
-// their bit 7s (bit 0 major, 1 minor, 2 build), then F7.
+// "10" (31 30), then the version's four bytes (user's request): two unused (00 00), the
+// major and the minor (bits 0-6 each), then F7.
 // sx_out from i up to its F7 (not sent), 7F as the channel - 1.
 static void sx_tx_head(uint8_t i)
 {
@@ -4747,13 +4748,14 @@ static void sx_tx_end(void)
 static void sysex_identity(void)
 {
     sx_tx_head(SX_OUT_ID);
-    sx_tx_version();
+    hal_midi_tx((uint8_t)(fw_version[0] & 0x7F));
+    hal_midi_tx((uint8_t)(fw_version[1] & 0x7F));
     sx_tx_end();
 }
 
 // The settings dump (SX_DUMP_LEN bytes; docs/midi.md): F0 7D 46 43 <channel - 1> 02, the
 // bank it describes (1 to BANK_COUNT), the shared settings (channel, version major, minor
-// and build in bits 0-6 and their bit 7s as in the identity, the bank in use, BANK_COUNT,
+// and build in bits 0-6 and their bit 7s, the bank in use, BANK_COUNT,
 // brightness, misc: clock display | running status << 1 | active sensing << 2), then the
 // bank's: per footswitch its record's flags (type | pedal mode << 2 | SWITCH 1 follows << 4
 // | SWITCH 2 << 5), number, on value and off value; the four triggers; the pedals (pickup A

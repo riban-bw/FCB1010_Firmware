@@ -5,10 +5,10 @@
 
 // Firmware version: major and minor in decimal, 0-199 (the build number is shown in hex).
 #define FW_VERSION_MAJOR 1
-#define FW_VERSION_MINOR 6
+#define FW_VERSION_MINOR 7
 
-#if FW_VERSION_MAJOR > 199 || FW_VERSION_MINOR > 199
-#error FW_VERSION_MAJOR and FW_VERSION_MINOR must be 0-199
+#if FW_VERSION_MAJOR > 127 || FW_VERSION_MINOR > 127
+#error FW_VERSION_MAJOR and FW_VERSION_MINOR must be 0-127
 #endif
 
 // The build number is in src/version_build.inc, which `make` increments each time it

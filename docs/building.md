@@ -20,13 +20,13 @@ There is one ROM image per chip size, made by `tools/rom_image.py`: `build/fcb10
 
 If clang (with the wasm32 target) is installed, `make` also builds the browser editor in `editor/index.html`, so changes to `src/config.h` show up there too; otherwise it prints a note and leaves the page as it was.
 
-The code is about 16.4KB (16805 bytes at the last build), so it needs a 32KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit, and prints a note once less than 2KB is left, so the code can be optimised for size in time).
+The code is about 16.4KB (16832 bytes at the last build), so it needs a 32KB or larger chip. Each build checks the size against the 32KB ROM (the build fails if it does not fit, and prints a note once less than 2KB is left, so the code can be optimised for size in time).
 
 Each build also updates the documentation: the code size above, the firmware version on configuration page 8 (in [Configuration](configuration.md)), and every value taken from `src/config.h` (the option table below and the numbers quoted in the README and these pages). A GitHub Actions workflow (`.github/workflows/build.yml`) builds and tests every push and offers the firmware images as a download; it fails if the documentation was not updated after a change to `src/config.h`.
 
 ## Firmware version
 
-The version shows on configuration page 8 as major, minor and build. Major and minor are set by hand in `src/version.h`, in decimal (0 to 199), and shown in decimal (from 100 with the display's leftmost "1"); the build number is shown in hex. The build number in `src/version_build.inc` goes up by one each time `make` rebuilds the firmware image; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone.
+The version shows on configuration page 8 as major, minor and build. Major and minor are set by hand in `src/version.h`, in decimal (0 to 127), and shown in decimal (from 100 with the display's leftmost "1" - 127 limit is due to MIDI device query being 7-bit); the build number is shown in hex. The build number in `src/version_build.inc` goes up by one each time `make` rebuilds the firmware image; test builds (`make check`, or `make BUILD_BUMP=0`) leave it alone.
 
 ## Compile-time configuration
 
